@@ -34,6 +34,10 @@ interface TrivyVulnerability {
   Title?: string;
   Description?: string;
   PrimaryURL?: string;
+  CweIDs?: string[];
+  References?: string[];
+  PublishedDate?: string;
+  CVSS?: Record<string, { V3Score?: number; V3Vector?: string; V2Score?: number; V2Vector?: string }>;
 }
 
 interface TrivyReport {
@@ -57,6 +61,99 @@ function toSeverity(severity: string | undefined): Severity {
     default:
       return 'info';
   }
+}
+
+const SEVERITY_LABEL_ZH: Record<Severity, string> = {
+  critical: '严重',
+  high: '高危',
+  medium: '中危',
+  low: '低危',
+  info: '提示'
+};
+
+function pickCvss(vuln: TrivyVulnerability): { score?: number; vector?: string } {
+  const entries = Object.entries(vuln.CVSS || {});
+  const v3 = entries
+    .map(([, value]) => ({ score: value.V3Score, vector: value.V3Vector }))
+    .filter((item) => typeof item.score === 'number')
+    .sort((a, b) => (b.score as number) - (a.score as number));
+  if (v3.length > 0) {
+    return { score: v3[0].score, vector: v3[0].vector };
+  }
+  const v2 = entries
+    .map(([, value]) => ({ score: value.V2Score, vector: value.V2Vector }))
+    .filter((item) => typeof item.score === 'number');
+  return v2.length > 0 ? { score: v2[0].score, vector: v2[0].vector } : {};
+}
+
+/** 把 CVSS 向量翻译成中文，避免整段描述都是英文 */
+function describeVector(vector?: string): string {
+  if (!vector) {
+    return '';
+  }
+  const parts = new Map(
+    vector.split('/').map((segment) => {
+      const [key, value] = segment.split(':');
+      return [key, value];
+    })
+  );
+  const attack = { N: '可远程网络攻击', A: '需同一局域网', L: '需本地访问', P: '需物理接触' }[
+    parts.get('AV') || ''
+  ];
+  const privilege = { N: '无需认证', L: '需普通账号权限', H: '需管理员权限' }[parts.get('PR') || ''];
+  const interaction = { N: '无需用户交互', R: '需用户交互' }[parts.get('UI') || ''];
+  const impacts: string[] = [];
+  if ((parts.get('C') || 'N') !== 'N') {
+    impacts.push('机密性');
+  }
+  if ((parts.get('I') || 'N') !== 'N') {
+    impacts.push('完整性');
+  }
+  if ((parts.get('A') || 'N') !== 'N') {
+    impacts.push('可用性');
+  }
+  const impact = impacts.length > 0 ? `影响${impacts.join('/')}` : '';
+  return [attack, privilege, interaction, impact].filter(Boolean).join('，');
+}
+
+function buildZhSummary(
+  vuln: TrivyVulnerability,
+  severity: Severity,
+  score?: number,
+  vector?: string
+): string {
+  const parts: string[] = [];
+  parts.push(
+    `${vuln.PkgName || ''} ${vuln.InstalledVersion || ''} 命中${SEVERITY_LABEL_ZH[severity]}漏洞`
+  );
+  if (typeof score === 'number') {
+    parts.push(`CVSS ${score}`);
+  }
+  const described = describeVector(vector);
+  if (described) {
+    parts.push(described);
+  }
+  return `${parts.join('，')}。`;
+}
+
+function buildAdvice(vuln: TrivyVulnerability): string {
+  const fixed = vuln.FixedVersion || '';
+  if (!fixed) {
+    return (
+      '官方暂未发布修复版本。建议确认项目是否真正使用受影响功能，' +
+      '采取隔离、访问控制或关闭相关端点等缓解措施，并持续关注上游更新。'
+    );
+  }
+  return (
+    `升级到 ${fixed}。若是传递依赖，可在 <dependencyManagement> 中显式声明该版本覆盖；` +
+    '若受框架 BOM 锁定，需整体升级框架版本。无法立即升级时，请确认是否启用受影响功能，' +
+    '必要时关闭相关端点或限制访问来源。'
+  );
+}
+
+function truncate(text: string | undefined, limit: number): string {
+  const value = (text || '').replace(/\s+/g, ' ').trim();
+  return value.length > limit ? `${value.slice(0, limit)}…` : value;
 }
 
 const SEVERITY_RANK: Record<string, number> = {
@@ -219,18 +316,27 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
       const candidate = sectionTarget ? path.resolve(target, sectionTarget) : '';
       const hasFile = candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile();
       const fixed = vuln.FixedVersion || '';
+      const severity = toSeverity(vuln.Severity);
+      const { score, vector } = pickCvss(vuln);
       issues.push({
         source: 'trivy',
-        severity: toSeverity(vuln.Severity),
+        severity,
         file: hasFile ? candidate : undefined,
         rule: vuln.VulnerabilityID || 'CVE',
-        message: `${vuln.PkgName || ''} ${vuln.InstalledVersion || ''} → ${
-          fixed || '暂无修复版本'
-        }：${vuln.Title || vuln.Description || ''}`.trim(),
+        message: truncate(vuln.Title || vuln.Description, 200) || vuln.VulnerabilityID || 'CVE',
         packageName: vuln.PkgName,
         installedVersion: vuln.InstalledVersion,
         fixedVersion: fixed,
-        link: vuln.PrimaryURL
+        link: vuln.PrimaryURL,
+        zhSummary: buildZhSummary(vuln, severity, score, vector),
+        advice: buildAdvice(vuln),
+        title: truncate(vuln.Title, 300),
+        description: truncate(vuln.Description, 800),
+        cvss: score,
+        cvssVector: vector,
+        cwe: (vuln.CweIDs || []).slice(0, 5),
+        references: (vuln.References || []).slice(0, 3),
+        publishedAt: vuln.PublishedDate
       });
     }
   }

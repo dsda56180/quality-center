@@ -50,7 +50,13 @@ export function exportForAgent(root: string, result: ScanResult): AgentExport {
     package: issue.packageName ?? '',
     installedVersion: issue.installedVersion ?? '',
     fixedVersion: issue.fixedVersion ?? '',
-    link: issue.link ?? ''
+    link: issue.link ?? '',
+    zhSummary: issue.zhSummary ?? '',
+    advice: issue.advice ?? '',
+    title: issue.title ?? '',
+    cvss: issue.cvss ?? 0,
+    cwe: issue.cwe ?? [],
+    publishedAt: issue.publishedAt ?? ''
   }));
 
   const payload = {
@@ -88,6 +94,18 @@ export function formatIssueForCopy(issue: Issue, root: string, id: number): stri
   }
   if (issue.link) {
     lines.push(`- 详情：${issue.link}`);
+  }
+  if (issue.zhSummary) {
+    lines.push(`- 中文摘要：${issue.zhSummary}`);
+  }
+  if (issue.cvss) {
+    lines.push(`- CVSS：${issue.cvss}${issue.cvssVector ? `（${issue.cvssVector}）` : ''}`);
+  }
+  if (issue.cwe && issue.cwe.length > 0) {
+    lines.push(`- CWE：${issue.cwe.join(', ')}`);
+  }
+  if (issue.advice) {
+    lines.push(`- 修复建议：${issue.advice}`);
   }
   lines.push(`- 问题：${issue.message}`);
   return lines.join('\n');

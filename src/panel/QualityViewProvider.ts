@@ -242,7 +242,18 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
         rule: issue.rule,
         message: issue.message,
         link: issue.link ?? '',
-        fixable: isFixable(issue)
+        fixable: isFixable(issue),
+        packageName: issue.packageName ?? '',
+        installedVersion: issue.installedVersion ?? '',
+        fixedVersion: issue.fixedVersion ?? '',
+        zhSummary: issue.zhSummary ?? '',
+        advice: issue.advice ?? '',
+        title: issue.title ?? '',
+        description: issue.description ?? '',
+        cvss: issue.cvss ?? 0,
+        cwe: issue.cwe ?? [],
+        references: issue.references ?? [],
+        publishedAt: issue.publishedAt ?? ''
       };
     });
     const snapshot: Snapshot = {

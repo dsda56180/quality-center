@@ -52,7 +52,7 @@ export function toMarkdown(result: ScanResult, root: string): string {
     lines.push('| 严重度 | 组件 | 当前版本 | 修复版本 | 漏洞编号 | 说明 |');
     lines.push('| --- | --- | --- | --- | --- | --- |');
     for (const issue of trivy) {
-      const note = issue.message.replace(/\|/g, '\\|');
+      const note = (issue.zhSummary || issue.message).replace(/\|/g, '\\|');
       lines.push(
         `| ${SEVERITY_LABEL[issue.severity]} | ${issue.packageName || ''} | ${
           issue.installedVersion || ''

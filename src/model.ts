@@ -16,6 +16,19 @@ export interface Issue {
   installedVersion?: string;
   fixedVersion?: string;
   link?: string;
+  /** 中文问题摘要（CVE），由结构化字段生成 */
+  zhSummary?: string;
+  /** 中文修复建议 */
+  advice?: string;
+  /** 英文原标题（CVE） */
+  title?: string;
+  /** 英文原描述（CVE），已截断 */
+  description?: string;
+  cvss?: number;
+  cvssVector?: string;
+  cwe?: string[];
+  references?: string[];
+  publishedAt?: string;
 }
 
 export interface ScanError {

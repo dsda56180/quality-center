@@ -9,6 +9,17 @@ export interface SnapshotIssue {
   message: string;
   link: string;
   fixable: boolean;
+  packageName: string;
+  installedVersion: string;
+  fixedVersion: string;
+  zhSummary: string;
+  advice: string;
+  title: string;
+  description: string;
+  cvss: number;
+  cwe: string[];
+  references: string[];
+  publishedAt: string;
 }
 
 export interface SnapshotSuggestion {
@@ -162,6 +173,31 @@ export function getHtml(nonce: string): string {
     border: 1px solid var(--vscode-panel-border); border-radius: 3px;
   }
   .copy-sug:hover { background: var(--vscode-list-hoverBackground); }
+  .msg.clamp {
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .more { margin-top: 4px; font-size: 10px; color: var(--vscode-textLink-foreground); }
+  .detail {
+    margin-top: 6px; padding-top: 6px; display: none;
+    border-top: 1px dashed var(--vscode-panel-border);
+  }
+  .detail.open { display: block; }
+  .d-row { display: flex; gap: 6px; margin-bottom: 4px; line-height: 1.5; }
+  .d-key {
+    flex: none; width: 62px; font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+  }
+  .d-val { flex: 1 1 auto; word-break: break-word; }
+  .d-sec { margin: 8px 0 3px; font-weight: 600; font-size: 11px; }
+  .d-en { font-size: 11px; color: var(--vscode-descriptionForeground); line-height: 1.5; }
+  .d-actions { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .link-one {
+    padding: 1px 6px; font-size: 10px;
+    background: transparent; color: var(--vscode-textLink-foreground);
+    border: 1px solid var(--vscode-panel-border); border-radius: 3px;
+  }
+  .link-one:hover { background: var(--vscode-list-hoverBackground); }
 </style>
 </head>
 <body>
@@ -220,6 +256,59 @@ export function getHtml(nonce: string): string {
     });
   }
 
+  function detailHtml(issue) {
+    function row(key, val) {
+      return val
+        ? '<div class="d-row"><span class="d-key">' + key + '</span><span class="d-val">' + esc(val) + '</span></div>'
+        : '';
+    }
+    var html = '';
+    html += row('漏洞编号', issue.rule);
+    html += row('影响组件', issue.packageName + ' ' + issue.installedVersion);
+    html += row('修复版本', issue.fixedVersion || '暂无');
+    if (issue.cvss) {
+      html += row('CVSS', String(issue.cvss) + ((issue.cwe || []).length ? '（' + issue.cwe.join(', ') + '）' : ''));
+    } else if ((issue.cwe || []).length) {
+      html += row('CWE', issue.cwe.join(', '));
+    }
+    if (issue.publishedAt) {
+      html += row('披露时间', issue.publishedAt);
+    }
+    if (issue.zhSummary) {
+      html += '<div class="d-sec">问题说明</div><div class="d-en">' + esc(issue.zhSummary) + '</div>';
+    }
+    if (issue.advice) {
+      html += '<div class="d-sec">修复建议</div><div class="d-en">' + esc(issue.advice) + '</div>';
+    }
+    if (issue.title || issue.description) {
+      html += '<div class="d-sec">英文原文</div><div class="d-en">' + esc(issue.title || '')
+        + (issue.description ? '<br/>' + esc(issue.description) : '') + '</div>';
+    }
+    var links = '';
+    if (issue.link) {
+      links += '<button class="link-one" data-url="' + esc(issue.link) + '">打开漏洞库</button>';
+    }
+    (issue.references || []).forEach(function (ref, index) {
+      links += '<button class="link-one" data-url="' + esc(ref) + '">参考 ' + (index + 1) + '</button>';
+    });
+    links += '<button class="copy-one" data-copy="' + issue.id + '">复制详情给 AI</button>';
+    html += '<div class="d-actions">' + links + '</div>';
+    return html;
+  }
+
+  function toggleDetail(node, issue) {
+    var box = node.querySelector('.detail');
+    if (!box) return;
+    if (!box.innerHTML) {
+      box.innerHTML = detailHtml(issue);
+    }
+    var open = box.classList.toggle('open');
+    var more = node.querySelector('.more');
+    if (more) {
+      more.textContent = open ? '收起详情 ▴' : '点击查看详情与修复建议 ▸';
+    }
+  }
+
   function render() {
     updateTabs();
     const sum = document.getElementById('summary');
@@ -263,7 +352,7 @@ export function getHtml(nonce: string): string {
       const filtered = (state.issues || []).filter(function (issue) {
         if (activeTab !== 'all' && issue.source !== activeTab) return false;
         if (!query) return true;
-        const hay = (issue.file + ' ' + issue.rule + ' ' + issue.message).toLowerCase();
+        const hay = (issue.file + ' ' + issue.rule + ' ' + issue.message + ' ' + (issue.zhSummary || '')).toLowerCase();
         return hay.indexOf(query) >= 0;
       });
       if (!filtered.length) {
@@ -273,19 +362,28 @@ export function getHtml(nonce: string): string {
           const group = filtered.filter(function (i) { return i.source === source; });
           if (!group.length) return '';
           const items = group.map(function (issue) {
-            const loc = issue.file
-              ? esc(issue.file) + (issue.line ? ':' + issue.line : '')
-              : (issue.link ? esc(issue.link) : '依赖清单');
+            const isCve = issue.source === 'trivy';
+            const loc = isCve
+              ? esc(issue.packageName) + ' ' + esc(issue.installedVersion)
+                + ' → ' + esc(issue.fixedVersion || '暂无修复版本')
+              : (issue.file
+                  ? esc(issue.file) + (issue.line ? ':' + issue.line : '')
+                  : '依赖清单');
             const linkAttr = issue.link ? ' data-link="' + esc(issue.link) + '"' : '';
-            return '<div class="item" data-abs="' + esc(issue.abs) + '" data-line="' + (issue.line || 0) + '"' + linkAttr + '>'
+            const text = isCve && issue.zhSummary ? issue.zhSummary : issue.message;
+            return '<div class="item" data-id="' + issue.id + '" data-abs="' + esc(issue.abs)
+              + '" data-line="' + (issue.line || 0) + '"' + linkAttr + '>'
               + '<div class="head"><span class="sev c-' + issue.severity + '">' + SEV_LABEL[issue.severity] + '</span>'
               + '<span class="rule">' + esc(issue.rule) + '</span>'
               + '<span class="actions">'
               + (issue.fixable ? '<button class="fix-one" data-fix="' + issue.id + '">修复</button>' : '')
               + '<button class="copy-one" data-copy="' + issue.id + '">复制</button>'
               + '</span></div>'
-              + '<div class="msg">' + esc(issue.message) + '</div>'
-              + '<div class="loc">' + loc + '</div></div>';
+              + '<div class="msg' + (isCve ? ' clamp' : '') + '">' + esc(text) + '</div>'
+              + '<div class="loc">' + loc + '</div>'
+              + (isCve ? '<div class="more">点击查看详情与修复建议 ▸</div>' : '')
+              + '<div class="detail" id="d-' + issue.id + '"></div>'
+              + '</div>';
           }).join('');
           return '<div class="group-title">' + SRC_LABEL[source] + ' (' + group.length + ')</div>' + items;
         }).join('');
@@ -362,8 +460,22 @@ export function getHtml(nonce: string): string {
       e.stopPropagation();
       return;
     }
+    if (e.target.classList && e.target.classList.contains('link-one')) {
+      const url = e.target.getAttribute('data-url');
+      if (url) {
+        vscode.postMessage({ type: 'openLink', url: url });
+      }
+      e.stopPropagation();
+      return;
+    }
     const node = e.target.closest('.item');
     if (!node) return;
+    const id = Number(node.getAttribute('data-id')) || 0;
+    const issue = (state.issues || []).filter(function (i) { return i.id === id; })[0];
+    if (issue && issue.source === 'trivy' && issue.zhSummary) {
+      toggleDetail(node, issue);
+      return;
+    }
     const abs = node.getAttribute('data-abs');
     const line = Number(node.getAttribute('data-line')) || 0;
     const link = node.getAttribute('data-link');
