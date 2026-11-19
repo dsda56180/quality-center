@@ -3,7 +3,7 @@
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露与依赖漏洞(CVE)的统一面板，支持一键导出给 AI 修复",
   "version": "0.2.0",
-  "publisher": "dongxin",
+  "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
     "vscode": "^1.80.0"

@@ -45,7 +45,7 @@ trae-cn --install-extension quality-center-0.1.0.vsix
 ### 从 Open VSX 安装
 
 ```bash
-code --install-extension dongxin.quality-center
+code --install-extension dsda56180.quality-center
 ```
 
 ## 配置项
@@ -80,18 +80,22 @@ code --install-extension dongxin.quality-center
 
 ## 发布
 
+推 tag 并创建 GitHub Release 后，CI 会自动构建并发布到 Open VSX：
+
 ```bash
-# 打包
-npm run package
-
-# 发布到 Open VSX（需先在 open-vsx.org 创建命名空间并获取 token）
-npx ovsx publish quality-center-0.1.0.vsix -p <YOUR_TOKEN>
-
-# 发布到 VS Code 市场
-npx vsce publish -p <YOUR_PAT>
+git tag v0.2.1 && git push origin v0.2.1
+# 在 GitHub 上创建 Release，Actions 会自动执行 npm run package + ovsx publish
 ```
 
-发布前请修改 `package.json` 中的 `publisher` 与 `repository` 字段。
+前提：在仓库 Settings → Secrets and variables → Actions 中配置 `OVSX_TOKEN`
+（Token 在 open-vsx.org → Settings → Access Tokens 生成，命名空间需已在 open-vsx.org 创建）。
+
+也可以手动发布：
+
+```bash
+npm run package
+npx ovsx publish quality-center-<version>.vsix -p <YOUR_TOKEN>
+```
 
 ## 许可证
 
