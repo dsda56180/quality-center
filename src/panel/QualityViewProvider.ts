@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { exportForAgent, formatIssueForCopy } from '../agentExport';
+import { run } from '../exec';
 import { applyAutoFixes, isFixable } from '../fixer';
 import { Issue, SOURCE_LABEL } from '../model';
 import { toMarkdown } from '../report';
@@ -66,6 +67,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
       case 'copySuggestion':
         await this.copySuggestion(message.id ?? 0);
         break;
+      case 'buildAndScan':
+        await this.buildAndScan();
+        break;
       case 'save':
         await this.exportReport();
         break;
@@ -124,6 +128,40 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
     }
     await vscode.env.clipboard.writeText(formatIssueForCopy(issue, root, id));
     void vscode.window.showInformationMessage(`已复制第 ${id} 条问题，可直接粘贴给 AI。`);
+  }
+
+  /** 构建项目后再扫描，用于补齐依赖漏洞所需的构建产物 */
+  async buildAndScan(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      return;
+    }
+    const answer = await vscode.window.showWarningMessage(
+      '将执行 mvn -DskipTests package 构建项目（可能需要几分钟），完成后自动重新扫描。是否继续？',
+      { modal: true },
+      '构建并扫描'
+    );
+    if (answer !== '构建并扫描') {
+      return;
+    }
+    const outcome = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: '质量中心：正在构建项目…',
+        cancellable: false
+      },
+      () => run('mvn', ['-B', '-q', '-DskipTests', 'package'], root, 20 * 60_000)
+    );
+    if (outcome.code !== 0) {
+      const tail = (outcome.stderr || outcome.stdout)
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .slice(-6)
+        .join('\n');
+      void vscode.window.showErrorMessage(`构建失败，未执行扫描：\n${tail}`);
+      return;
+    }
+    await this.scanAndPush();
   }
 
   private async copySuggestion(id: number): Promise<void> {
@@ -226,7 +264,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
         source: SOURCE_LABEL[item.source],
         reason: item.reason
       })),
-      agentFile: this.agentFile
+      agentFile: this.agentFile,
+      buildHint: result?.buildHint
     };
     void this.view.webview.postMessage(snapshot);
   }

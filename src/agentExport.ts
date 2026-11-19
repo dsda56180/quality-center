@@ -58,6 +58,7 @@ export function exportForAgent(root: string, result: ScanResult): AgentExport {
     projectRoot: root,
     summary: summarize(result.issues),
     suggestions: result.suggestions,
+    buildHint: result.buildHint ?? '',
     errors: result.errors,
     skipped: result.skipped,
     issues

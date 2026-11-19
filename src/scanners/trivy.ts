@@ -21,6 +21,8 @@ export interface TrivyResult {
   missing?: boolean;
   /** 实际使用的扫描模式，便于界面展示 */
   mode?: string;
+  /** 扫描的是否为真实构建产物；false 表示退回源码解析，依赖清单可能不完整 */
+  usedBuildArtifacts?: boolean;
 }
 
 interface TrivyVulnerability {
@@ -163,6 +165,7 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
       return {
         issues: [],
         mode,
+        usedBuildArtifacts: mode === 'rootfs',
         error:
           '依赖仓库限流（HTTP 429），已停止联网解析。请先在项目根目录执行 mvn package 生成 target 目录后重新扫描，' +
           '或等待约 30 分钟解除封禁；期间代码质量与密钥检查不受影响。'
@@ -171,14 +174,24 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
     const detail = result.stderr.split(/\r?\n/).filter(Boolean).slice(-4).join('\n');
     const hint =
       mode === 'fs' ? '\n提示：先在项目里执行 mvn package 生成 target 目录，可避免联网解析依赖。' : '';
-    return { issues: [], error: (detail || `trivy 退出码 ${result.code}`) + hint, mode };
+    return {
+      issues: [],
+      error: (detail || `trivy 退出码 ${result.code}`) + hint,
+      mode,
+      usedBuildArtifacts: mode === 'rootfs'
+    };
   }
 
   let report: TrivyReport;
   try {
     report = JSON.parse(result.stdout) as TrivyReport;
   } catch (err) {
-    return { issues: [], error: `解析 trivy 输出失败：${(err as Error).message}`, mode };
+    return {
+      issues: [],
+      error: `解析 trivy 输出失败：${(err as Error).message}`,
+      mode,
+      usedBuildArtifacts: mode === 'rootfs'
+    };
   }
 
   const issues: Issue[] = [];
@@ -222,5 +235,9 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
     }
   }
 
-  return { issues, mode: mode === 'rootfs' ? `target 目录（已构建产物）` : `项目根目录（源码解析）` };
+  return {
+    issues,
+    mode: mode === 'rootfs' ? `target 目录（已构建产物）` : `项目根目录（源码解析）`,
+    usedBuildArtifacts: mode === 'rootfs'
+  };
 }

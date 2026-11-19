@@ -27,6 +27,7 @@ export interface Snapshot {
   errors: { source: string; message: string }[];
   skipped: { source: string; reason: string }[];
   agentFile?: string;
+  buildHint?: string;
 }
 
 export function getHtml(nonce: string): string {
@@ -131,6 +132,13 @@ export function getHtml(nonce: string): string {
     background: rgba(58,141,219,.14); font-size: 11px;
   }
   .fixbar button { flex: none; padding: 2px 10px; font-size: 11px; }
+  .buildbar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 6px 8px; margin-bottom: 8px; border-radius: 4px;
+    background: rgba(217,161,11,.14); font-size: 11px; line-height: 1.5;
+  }
+  .buildbar span { flex: 1 1 160px; }
+  .buildbar button { flex: none; padding: 2px 10px; font-size: 11px; }
   .loc { margin-top: 3px; font-size: 11px; color: var(--vscode-descriptionForeground); word-break: break-all; }
   .msg { margin-top: 2px; line-height: 1.45; word-break: break-word; }
   .empty, .hint { color: var(--vscode-descriptionForeground); padding: 8px 0; line-height: 1.6; }
@@ -176,6 +184,10 @@ export function getHtml(nonce: string): string {
     <span id="fixtip"></span>
     <button id="fixall">一键修复</button>
   </div>
+  <div id="buildbar" class="buildbar" style="display:none">
+    <span id="buildtip"></span>
+    <button id="build">构建并扫描</button>
+  </div>
   <div id="list"><div class="empty">点击「重新扫描」开始</div></div>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
@@ -211,10 +223,8 @@ export function getHtml(nonce: string): string {
   function render() {
     updateTabs();
     const sum = document.getElementById('summary');
-    if (state.scanning) {
-      sum.innerHTML = '<span class="hint">扫描中…</span>';
-    } else if (!state.finishedAt) {
-      sum.innerHTML = '<span class="hint">尚未扫描</span>';
+    if (!state.finishedAt) {
+      sum.innerHTML = '<span class="hint">' + (state.scanning ? '扫描中…' : '尚未扫描') + '</span>';
     } else {
       const issues = state.issues || [];
       const chips = SEV_ORDER.map(function (sev) {
@@ -225,13 +235,15 @@ export function getHtml(nonce: string): string {
       const aiButton = state.agentFile
         ? '<button class="ai-link" title="AI agent 可直接读取 ' + esc(state.agentFile) + '">AI 数据</button>'
         : '';
-      sum.innerHTML = (issues.length ? chips : '<span class="chip c-info">未发现问题</span>')
+      const scanningChip = state.scanning ? '<span class="chip c-info">扫描中…</span>' : '';
+      sum.innerHTML = scanningChip
+        + (issues.length ? chips : '<span class="chip c-info">未发现问题</span>')
         + '<span class="chip">共 ' + issues.length + ' 项 · ' + time + '</span>'
         + aiButton;
     }
 
     const list = document.getElementById('list');
-    if (state.scanning) {
+    if (state.scanning && !state.finishedAt) {
       list.innerHTML = '<div class="empty">正在运行 Checkstyle / Gitleaks / Trivy…</div>';
     } else if (!state.finishedAt) {
       list.innerHTML = '<div class="empty">点击「重新扫描」开始</div>';
@@ -294,6 +306,14 @@ export function getHtml(nonce: string): string {
     } else {
       bar.style.display = 'none';
     }
+
+    const buildbar = document.getElementById('buildbar');
+    if (!state.scanning && state.finishedAt && state.buildHint) {
+      buildbar.style.display = 'flex';
+      document.getElementById('buildtip').textContent = state.buildHint;
+    } else {
+      buildbar.style.display = 'none';
+    }
   }
 
   document.getElementById('summary').addEventListener('click', function (e) {
@@ -322,6 +342,9 @@ export function getHtml(nonce: string): string {
   });
   document.getElementById('fixall').addEventListener('click', function () {
     vscode.postMessage({ type: 'fixAll' });
+  });
+  document.getElementById('build').addEventListener('click', function () {
+    vscode.postMessage({ type: 'buildAndScan' });
   });
   document.getElementById('list').addEventListener('click', function (e) {
     if (e.target.classList && e.target.classList.contains('copy-sug')) {

@@ -41,6 +41,8 @@ export interface ScanResult {
   errors: ScanError[];
   skipped: { source: IssueSource; reason: string }[];
   suggestions: Suggestion[];
+  /** 未使用构建产物扫描时给出的提示，UI 据此展示「构建并扫描」按钮 */
+  buildHint?: string;
 }
 
 export const SOURCE_LABEL: Record<IssueSource, string> = {

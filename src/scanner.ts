@@ -47,6 +47,7 @@ export class ScanRunner {
     const skipped: ScanResult['skipped'] = [];
     const config = vscode.workspace.getConfiguration('qualityCenter');
     const outDir = this.outputDir(root);
+    let buildHint: string | undefined;
 
     try {
       const jobs: Promise<void>[] = [];
@@ -115,6 +116,10 @@ export class ScanRunner {
             issues.push(...res.issues);
             if (res.error) {
               errors.push({ source: 'trivy', message: res.error });
+            } else if (res.usedBuildArtifacts === false) {
+              buildHint =
+                '未找到可用的构建产物（target 下没有 jar/pom），当前基于源码离线解析，依赖版本可能不完整。' +
+                '点击「构建并扫描」执行 mvn package 后可获得准确的依赖漏洞清单。';
             }
           })
         );
@@ -137,7 +142,8 @@ export class ScanRunner {
       issues,
       errors,
       skipped,
-      suggestions: []
+      suggestions: [],
+      buildHint
     };
     this.lastResult.suggestions = buildSuggestions(root, this.lastResult);
     return this.lastResult;
