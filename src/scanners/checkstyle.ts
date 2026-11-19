@@ -51,6 +51,27 @@ function ruleName(source: string): string {
   return last.replace(/Check$/, '');
 }
 
+/**
+ * 按规则类型映射真实风险等级。
+ * checkstyle 配置里的 error/warning 只代表规则严格程度，不代表风险高低，
+ * 因此对常见规则给出语义化等级，未收录的规则回退到配置映射。
+ */
+const RULE_SEVERITY: Record<string, Severity> = {
+  // 卫生类
+  UnusedImports: 'low',
+  RedundantImport: 'low',
+  ModifierOrder: 'low',
+  EmptyStatement: 'low',
+  OneTopLevelClass: 'low',
+  // 可读性/健壮性
+  SimplifyBooleanExpression: 'medium',
+  DefaultComesLast: 'medium',
+  // 真实缺陷
+  StringLiteralEquality: 'medium',
+  EqualsHashCode: 'high',
+  IllegalImport: 'high'
+};
+
 export function resolveConfig(root: string, configured: string): string | undefined {
   const candidates = configured
     ? [path.isAbsolute(configured) ? configured : path.join(root, configured)]
@@ -110,13 +131,14 @@ export async function scanCheckstyle(
     let errorMatch: RegExpExecArray | null;
     while ((errorMatch = errorRe.exec(body)) !== null) {
       const attrs = parseAttributes(errorMatch[1]);
+      const rule = ruleName(attrs.source);
       issues.push({
         source: 'checkstyle',
-        severity: toSeverity(attrs.severity),
+        severity: RULE_SEVERITY[rule] ?? toSeverity(attrs.severity),
         file: path.isAbsolute(fileName) ? fileName : path.join(root, fileName),
         line: Number(attrs.line) || 1,
         column: Number(attrs.column) || 1,
-        rule: ruleName(attrs.source),
+        rule,
         message: (attrs.message || '').trim()
       });
     }

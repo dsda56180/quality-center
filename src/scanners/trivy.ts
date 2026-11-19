@@ -9,6 +9,10 @@ export interface TrivyOptions {
   scanTarget?: string;
   dbRepository?: string;
   javaDbRepository?: string;
+  /** 低于该等级的漏洞不显示，默认 low（全部显示） */
+  minSeverity?: Severity;
+  /** 只显示有修复版本的漏洞，默认 true */
+  onlyFixed?: boolean;
 }
 
 export interface TrivyResult {
@@ -53,6 +57,22 @@ function toSeverity(severity: string | undefined): Severity {
   }
 }
 
+const SEVERITY_RANK: Record<string, number> = {
+  info: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+  critical: 4
+};
+
+const SEVERITY_RANK_RAW: Record<string, number> = {
+  UNKNOWN: 0,
+  LOW: 1,
+  MEDIUM: 2,
+  HIGH: 3,
+  CRITICAL: 4
+};
+
 function pickTarget(root: string, configured?: string): { target: string; mode: 'rootfs' | 'fs' } {
   if (configured) {
     const target = path.isAbsolute(configured) ? configured : path.join(root, configured);
@@ -69,6 +89,7 @@ async function invoke(
   exe: string,
   mode: 'rootfs' | 'fs',
   target: string,
+  root: string,
   dbRepository?: string,
   javaDbRepository?: string
 ) {
@@ -83,7 +104,8 @@ async function invoke(
     args.push('--skip-dirs', '.git', '--skip-dirs', 'node_modules');
   }
   args.push(target);
-  return run(exe, args, path.dirname(target), 900_000);
+  // cwd 设为项目根目录：trivy 自动加载根目录的 .trivyignore 忽略清单
+  return run(exe, args, root, 900_000);
 }
 
 export async function scanTrivy(root: string, options: TrivyOptions): Promise<TrivyResult> {
@@ -99,12 +121,12 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
 
   const { target, mode } = pickTarget(root, options.scanTarget);
 
-  let result = await invoke(exe, mode, target, options.dbRepository, options.javaDbRepository);
+  let result = await invoke(exe, mode, target, root, options.dbRepository, options.javaDbRepository);
 
   // 未显式配置仓库且首次失败时，自动回退到国内镜像
   const dbDownloadFailed = result.code !== 0 && !options.dbRepository;
   if (dbDownloadFailed) {
-    const retry = await invoke(exe, mode, target, FALLBACK_DB, FALLBACK_JAVA_DB);
+    const retry = await invoke(exe, mode, target, root, FALLBACK_DB, FALLBACK_JAVA_DB);
     if (retry.code === 0) {
       result = retry;
     }
@@ -125,8 +147,26 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
   }
 
   const issues: Issue[] = [];
+  const seen = new Set<string>();
+  const minRank = SEVERITY_RANK[(options.minSeverity || 'low').toLowerCase()] ?? 1;
+  const onlyFixed = options.onlyFixed !== false;
+
   for (const section of report.Results || []) {
     for (const vuln of section.Vulnerabilities || []) {
+      const rawRank = SEVERITY_RANK_RAW[(vuln.Severity || '').toUpperCase()] ?? 0;
+      if (rawRank < minRank) {
+        continue;
+      }
+      if (onlyFixed && !vuln.FixedVersion) {
+        continue;
+      }
+      // 按 CVE + 组件去重（同一组件可能出现在多个路径）
+      const key = `${vuln.VulnerabilityID}|${vuln.PkgName}|${vuln.InstalledVersion}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+
       const sectionTarget = section.Target || '';
       const candidate = sectionTarget ? path.resolve(target, sectionTarget) : '';
       const hasFile = candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile();

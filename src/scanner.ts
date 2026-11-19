@@ -102,7 +102,9 @@ export class ScanRunner {
             executable: config.get<string>('trivy.path', ''),
             scanTarget: config.get<string>('trivy.scanTarget', ''),
             dbRepository: config.get<string>('trivy.dbRepository', ''),
-            javaDbRepository: config.get<string>('trivy.javaDbRepository', '')
+            javaDbRepository: config.get<string>('trivy.javaDbRepository', ''),
+            minSeverity: config.get<string>('trivy.minSeverity', 'low') as never,
+            onlyFixed: config.get<boolean>('trivy.onlyFixed', true)
           }).then((res) => {
             if (res.missing) {
               skipped.push({ source: 'trivy', reason: '未找到 trivy 可执行文件' });

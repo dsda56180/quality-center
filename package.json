@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露与依赖漏洞(CVE)的统一面板，支持一键导出给 AI 修复",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -136,6 +136,17 @@
           "type": "string",
           "default": "",
           "description": "Java 依赖索引库 OCI 仓库地址，留空使用官方源，失败时自动回退国内镜像"
+        },
+        "qualityCenter.trivy.minSeverity": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"],
+          "default": "low",
+          "description": "低于该等级的 CVE 不显示，可选 low/medium/high/critical"
+        },
+        "qualityCenter.trivy.onlyFixed": {
+          "type": "boolean",
+          "default": true,
+          "description": "只显示有修复版本的 CVE（无修复版本的通常只能等待上游，默认隐藏）"
         }
       }
     }
