@@ -87,8 +87,8 @@ export function getHtml(nonce: string): string {
   }
   .ai-link:hover { background: var(--vscode-list-hoverBackground); }
   .chip { padding: 2px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
-  .chip[data-sev] { cursor: pointer; user-select: none; }
-  .chip[data-sev]:hover { filter: brightness(1.15); }
+  .chip[data-sev], .chip[data-clear] { cursor: pointer; user-select: none; }
+  .chip[data-sev]:hover, .chip[data-clear]:hover { filter: brightness(1.15); }
   .chip.active { outline: 1px solid currentColor; outline-offset: 1px; font-weight: 600; }
   .c-critical { background: rgba(209,52,56,.18); color: #e05c5c; }
   .c-high     { background: rgba(224,123,57,.18); color: #e08a4f; }
@@ -236,7 +236,7 @@ export function getHtml(nonce: string): string {
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
   let state = { scanning: false, finishedAt: null, issues: [], suggestions: [], errors: [], skipped: [] };
   let activeTab = 'all';
-  let activeSeverity = 'all';
+  let severityFilter = [];
   let query = '';
 
   function esc(value) {
@@ -332,26 +332,30 @@ export function getHtml(nonce: string): string {
       const issues = state.issues || [];
       const chips = SEV_ORDER.map(function (sev) {
         const total = issues.filter(function (i) { return i.severity === sev; }).length;
-        const active = activeSeverity === sev;
+        const active = severityFilter.indexOf(sev) >= 0;
         if (!total && !active) return '';
         return '<span class="chip c-' + sev + (active ? ' active' : '') + '" data-sev="' + sev
-          + '" title="' + (active ? '再次点击取消等级筛选' : '只看该等级') + '">'
+          + '" title="' + (active ? '取消该等级' : '加入筛选（可多选）') + '">'
           + SEV_LABEL[sev] + ' ' + total + '</span>';
       }).join('');
       const time = new Date(state.finishedAt).toLocaleTimeString();
-      const visible = activeSeverity === 'all'
+      const visible = severityFilter.length === 0
         ? issues.length
-        : issues.filter(function (i) { return i.severity === activeSeverity; }).length;
-      const totalText = activeSeverity === 'all'
+        : issues.filter(function (i) { return severityFilter.indexOf(i.severity) >= 0; }).length;
+      const totalText = severityFilter.length === 0
         ? '共 ' + issues.length + ' 项'
         : '共 ' + visible + ' / ' + issues.length + ' 项';
       const aiButton = state.agentFile
         ? '<button class="ai-link" title="AI agent 可直接读取 ' + esc(state.agentFile) + '">AI 数据</button>'
         : '';
       const scanningChip = state.scanning ? '<span class="chip c-info">扫描中…</span>' : '';
+      const clearChip = severityFilter.length > 0
+        ? '<span class="chip c-info" data-clear="1" title="清除等级筛选">✕ 清除等级</span>'
+        : '';
       sum.innerHTML = scanningChip
         + (issues.length ? chips : '<span class="chip c-info">未发现问题</span>')
         + '<span class="chip">' + totalText + ' · ' + time + '</span>'
+        + clearChip
         + aiButton;
     }
 
@@ -375,14 +379,16 @@ export function getHtml(nonce: string): string {
     } else {
       const filtered = (state.issues || []).filter(function (issue) {
         if (activeTab !== 'all' && issue.source !== activeTab) return false;
-        if (activeSeverity !== 'all' && issue.severity !== activeSeverity) return false;
+        if (severityFilter.length > 0 && severityFilter.indexOf(issue.severity) < 0) return false;
         if (!query) return true;
         const hay = (issue.file + ' ' + issue.rule + ' ' + issue.message + ' ' + (issue.zhSummary || '')).toLowerCase();
         return hay.indexOf(query) >= 0;
       });
       if (!filtered.length) {
         list.innerHTML = '<div class="empty">没有匹配的问题'
-          + (activeSeverity !== 'all' ? '（当前只看' + SEV_LABEL[activeSeverity] + '，再次点击该等级可取消）' : '')
+          + (severityFilter.length > 0
+              ? '（当前只看' + severityFilter.map(function (s) { return SEV_LABEL[s]; }).join('、') + '，再次点击标签可取消）'
+              : '')
           + '</div>';
       } else {
         list.innerHTML = ['checkstyle', 'gitleaks', 'trivy'].map(function (source) {
@@ -443,10 +449,20 @@ export function getHtml(nonce: string): string {
   }
 
   document.getElementById('summary').addEventListener('click', function (e) {
+    if (e.target.getAttribute && e.target.getAttribute('data-clear')) {
+      severityFilter = [];
+      render();
+      return;
+    }
     const sevChip = e.target.closest ? e.target.closest('[data-sev]') : null;
     if (sevChip) {
       const sev = sevChip.getAttribute('data-sev');
-      activeSeverity = activeSeverity === sev ? 'all' : sev;
+      const index = severityFilter.indexOf(sev);
+      if (index >= 0) {
+        severityFilter.splice(index, 1);
+      } else {
+        severityFilter.push(sev);
+      }
       render();
       return;
     }
