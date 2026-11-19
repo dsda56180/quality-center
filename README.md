@@ -183,6 +183,13 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 默认配方为清理无用导入、`Objects.isNull` 改写、缩短全限定类名，可在设置中增删。
 
+执行前会解析项目根 `pom.xml`（parent、`dependencyManagement`、compiler 配置），识别 Java 与 Spring Boot 版本，并在确认弹窗中展示：
+
+- 项目画像，例如 `Java 8 · Spring Boot 2.4.2`；
+- 推荐但**未启用**的配方，例如 static-analysis 配方包，或 Spring Boot 2.7 升级评估，并标注风险等级。
+
+推荐只做展示，不会自动写入配置，也不会自动执行升级迁移配方。
+
 需要 `org.openrewrite.staticanalysis.*` 等进阶配方时，不必改项目 pom：把配方包坐标填进 `openRewrite.recipeArtifacts` 即可，插件会通过 `-Drewrite.recipeArtifactCoordinates` 临时加入类路径。例如：
 
 ```json

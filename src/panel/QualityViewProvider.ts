@@ -6,6 +6,7 @@ import { exportForAgent, formatIssueForCopy } from '../agentExport';
 import { run } from '../exec';
 import { applyAutoFixes, isFixable } from '../fixer';
 import { Issue, SOURCE_LABEL } from '../model';
+import { detectProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
 import { getHtml, Snapshot, SnapshotIssue } from './html';
@@ -237,11 +238,19 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       .map((item) => item.trim())
       .filter(Boolean);
 
+    const profile = detectProjectProfile(root);
+    const profileParts = [
+      profile.javaVersion ? `Java ${profile.javaVersion}` : '',
+      profile.springBootVersion ? `Spring Boot ${profile.springBootVersion}` : ''
+    ].filter(Boolean);
+    const advice = recipeAdvice(profile);
     const recipeLines = recipes
       .map((recipe) => `· ${RECIPE_LABELS[recipe] ?? recipe}`)
       .join('\n');
     const answer = await vscode.window.showWarningMessage(
-      `将执行 ${recipes.length} 个 OpenRewrite 配方：\n${recipeLines}\n\n` +
+      (profileParts.length ? `项目画像：${profileParts.join(' · ')}\n\n` : '') +
+        `将执行 ${recipes.length} 个 OpenRewrite 配方：\n${recipeLines}\n\n` +
+        (advice.length ? `推荐（未启用）：\n${advice.map((item) => `· ${item}`).join('\n')}\n\n` : '') +
         (dirtyCount > 0
           ? `检测到 ${dirtyCount} 处未提交改动，会在临时目录做完整备份；修复失败或编译不通过时可恢复到修复前。\n`
           : '') +
@@ -352,6 +361,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     this.deepFixState = { stage: '准备执行', startedAt: Date.now() };
     this.push();
+    this.log(`项目画像：${profileParts.join(' · ') || '未识别'}`);
+    if (advice.length > 0) {
+      this.log(`配方推荐（未启用）：\n${advice.join('\n')}`);
+    }
     this.log(`开始深度修复：${recipes.join(', ')}`);
     try {
       if (!(await createBackup())) {
