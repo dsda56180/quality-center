@@ -32,6 +32,7 @@ export interface SnapshotSuggestion {
 export interface Snapshot {
   type: 'state';
   scanning: boolean;
+  deepFix?: { stage: string; startedAt: number } | null;
   finishedAt: number | null;
   issues: SnapshotIssue[];
   suggestions: SnapshotSuggestion[];
@@ -267,7 +268,7 @@ export function getHtml(nonce: string): string {
       <div class="cat-track"><div class="cat-fill"></div></div>
       <div class="cat-runner"><span class="cat">🐈</span></div>
     </div>
-    <span class="cat-tip">猫咪正在奔跑检查代码</span>
+    <span class="cat-tip" id="cattip">猫咪正在奔跑检查代码</span>
   </div>
   <div id="summary" class="summary"><span class="hint">尚未扫描</span></div>
   <div class="tabs" id="tabs">
@@ -294,7 +295,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, finishedAt: null, issues: [], suggestions: [], errors: [], skipped: [] };
+  let state = { scanning: false, deepFix: null, finishedAt: null, issues: [], suggestions: [], errors: [], skipped: [] };
   let activeTab = 'all';
   let severityFilter = [];
   let query = '';
@@ -383,12 +384,27 @@ export function getHtml(nonce: string): string {
     }
   }
 
+  function catTipText() {
+    if (state.deepFix) {
+      var sec = Math.max(0, Math.floor((Date.now() - state.deepFix.startedAt) / 1000));
+      return '猫咪正在深度修复：' + state.deepFix.stage + ' · 已用 ' + sec + ' 秒';
+    }
+    if (state.scanning) {
+      return '猫咪正在奔跑检查代码';
+    }
+    return '';
+  }
+
   function render() {
     updateTabs();
-    document.getElementById('catbar').classList.toggle('on', !!state.scanning);
+    var deep = state.deepFix;
+    document.getElementById('catbar').classList.toggle('on', !!state.scanning || !!deep);
+    document.getElementById('cattip').textContent = catTipText();
     const sum = document.getElementById('summary');
     if (!state.finishedAt) {
-      sum.innerHTML = '<span class="hint">' + (state.scanning ? '扫描中…' : '尚未扫描') + '</span>';
+      sum.innerHTML = '<span class="hint">'
+        + (deep ? '深度修复中：' + esc(deep.stage) : (state.scanning ? '扫描中…' : '尚未扫描'))
+        + '</span>';
     } else {
       const issues = state.issues || [];
       const chips = SEV_ORDER.map(function (sev) {
@@ -409,7 +425,9 @@ export function getHtml(nonce: string): string {
       const aiButton = state.agentFile
         ? '<button class="ai-link" title="AI agent 可直接读取 ' + esc(state.agentFile) + '">AI 数据</button>'
         : '';
-      const scanningChip = state.scanning ? '<span class="chip c-info">扫描中…</span>' : '';
+      const scanningChip = state.scanning
+        ? '<span class="chip c-info">扫描中…</span>'
+        : (deep ? '<span class="chip c-info">深度修复中…</span>' : '');
       const clearChip = severityFilter.length > 0
         ? '<span class="chip c-info" data-clear="1" title="清除等级筛选">✕ 清除等级</span>'
         : '';
@@ -421,7 +439,9 @@ export function getHtml(nonce: string): string {
     }
 
     const list = document.getElementById('list');
-    if (state.scanning && !state.finishedAt) {
+    if (deep && !state.finishedAt) {
+      list.innerHTML = '<div class="empty">深度修复进行中：' + esc(deep.stage) + '</div>';
+    } else if (state.scanning && !state.finishedAt) {
       list.innerHTML = '<div class="empty">正在运行 Checkstyle / Gitleaks / Trivy…</div>';
     } else if (!state.finishedAt) {
       list.innerHTML = '<div class="empty">点击「重新扫描」开始</div>';
@@ -618,6 +638,12 @@ export function getHtml(nonce: string): string {
       render();
     }
   });
+  setInterval(function () {
+    if (state.scanning || state.deepFix) {
+      var tip = document.getElementById('cattip');
+      if (tip) tip.textContent = catTipText();
+    }
+  }, 1000);
   render();
 </script>
 </body>

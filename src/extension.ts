@@ -6,6 +6,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const runner = new ScanRunner(context);
   const provider = new QualityViewProvider(runner);
 
+  context.subscriptions.push(provider);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(QualityViewProvider.viewId, provider, {
       webviewOptions: { retainContextWhenHidden: true }

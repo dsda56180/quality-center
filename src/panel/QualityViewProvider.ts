@@ -17,13 +17,34 @@ function createNonce(): string {
   return text;
 }
 
-export class QualityViewProvider implements vscode.WebviewViewProvider {
+export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewId = 'qualityCenter.main';
 
   private view?: vscode.WebviewView;
   private agentFile?: string;
+  private deepFixState: { stage: string; startedAt: number } | null = null;
+  private output?: vscode.OutputChannel;
 
   constructor(private readonly runner: ScanRunner) {}
+
+  dispose(): void {
+    this.output?.dispose();
+  }
+
+  private log(message: string): void {
+    if (!this.output) {
+      this.output = vscode.window.createOutputChannel('质量中心');
+    }
+    this.output.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
+  }
+
+  private setDeepFixStage(stage: string): void {
+    if (this.deepFixState) {
+      this.deepFixState.stage = stage;
+    }
+    this.log(stage);
+    this.push();
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
@@ -92,7 +113,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
   }
 
   async scanAndPush(): Promise<void> {
-    if (this.runner.isRunning) {
+    if (this.runner.isRunning || this.deepFixState) {
       return;
     }
     this.push({ scanning: true });
@@ -181,6 +202,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
       void vscode.window.showInformationMessage('深度修复已在设置中关闭。');
       return;
     }
+    if (this.deepFixState) {
+      void vscode.window.showInformationMessage('深度修复正在进行中，请等待当前任务完成。');
+      return;
+    }
     if (this.runner.isRunning) {
       void vscode.window.showInformationMessage('扫描进行中，请稍后再执行深度修复。');
       return;
@@ -223,103 +248,219 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
       if (!stashed) {
         return true;
       }
+      this.setDeepFixStage('恢复未提交改动');
       const pop = await run('git', ['stash', 'pop', '--index'], root, 120_000);
-      if (pop.code !== 0) {
-        void vscode.window.showErrorMessage(
-          '恢复未提交改动时发生冲突。你的改动仍保存在 git stash 中（可用 git stash list 查看），请手动处理。'
-        );
-        return false;
+      if (pop.code === 0) {
+        stashed = false;
+        return true;
       }
-      stashed = false;
-      return true;
+
+      const popOutput = `${pop.stdout}\n${pop.stderr}`;
+      const conflicts = await this.listConflicts(root, popOutput);
+      const detail = conflicts.length
+        ? `\n\n冲突文件（${conflicts.length} 个）：\n${conflicts.map((file) => `· ${file}`).join('\n')}`
+        : '\n\n未能自动识别冲突文件，可用 git status 查看。';
+      this.log(`恢复 stash 冲突：${conflicts.join(', ') || '未知'}`);
+      const buttons = ['放弃本次修复并恢复我的改动'];
+      if (conflicts.length > 0) {
+        buttons.push('打开第一个冲突文件');
+      }
+      buttons.push('打开源代码管理', '查看日志');
+      const pick = await vscode.window.showErrorMessage(
+        `恢复未提交改动时发生冲突：本次修复与你的改动修改了同一批文件。` +
+          `你的改动仍完整保存在 git stash 中（可用 git stash list 查看）。${detail}`,
+        { modal: true },
+        ...buttons
+      );
+      if (pick === '放弃本次修复并恢复我的改动') {
+        this.setDeepFixStage('撤销修复并恢复未提交改动');
+        await run('git', ['checkout', '--', '.'], root, 60_000);
+        const retry = await run('git', ['stash', 'pop', '--index'], root, 120_000);
+        if (retry.code === 0) {
+          stashed = false;
+          this.log('已放弃本次修复并恢复未提交改动');
+          void vscode.window.showInformationMessage('已放弃本次修复，你的未提交改动已恢复。');
+        } else {
+          const retryFiles = await this.listConflicts(root, `${retry.stdout}\n${retry.stderr}`);
+          this.log(`恢复未提交改动仍然失败：${retryFiles.join(', ') || '未知'}`);
+          void vscode.window.showErrorMessage(
+            '恢复未提交改动仍然失败，改动仍保存在 git stash 中，请手动处理（可用 git stash list 查看）。',
+            '查看日志'
+          );
+          this.output?.show(true);
+        }
+      } else if (pick === '打开第一个冲突文件' && conflicts.length > 0) {
+        await vscode.window.showTextDocument(vscode.Uri.file(path.join(root, conflicts[0])), {
+          preview: false
+        });
+      } else if (pick === '打开源代码管理') {
+        await vscode.commands.executeCommand('workbench.view.scm');
+      } else if (pick === '查看日志') {
+        this.output?.show(true);
+      }
+      return false;
     };
 
-    if (dirtyCount > 0) {
-      const stash = await run(
-        'git',
-        ['stash', 'push', '--include-untracked', '-m', `quality-center-backup-${Date.now()}`],
-        root,
-        120_000
-      );
-      if (stash.code !== 0) {
-        const tail = (stash.stderr || stash.stdout).split(/\r?\n/).filter(Boolean).slice(-6).join('\n');
-        void vscode.window.showErrorMessage(`自动备份未提交改动失败，已取消深度修复：\n${tail}`);
-        return;
-      }
-      stashed = true;
-    }
-
-    const outcome = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: '质量中心：OpenRewrite 深度修复中…',
-        cancellable: false
-      },
-      () => {
-        const args = ['-B', '-q', `-Drewrite.activeRecipes=${recipes.join(',')}`];
-        if (recipeArtifacts.length > 0) {
-          args.push(`-Drewrite.recipeArtifactCoordinates=${recipeArtifacts.join(',')}`);
+    this.deepFixState = { stage: '准备执行', startedAt: Date.now() };
+    this.push();
+    this.log(`开始深度修复：${recipes.join(', ')}`);
+    try {
+      if (dirtyCount > 0) {
+        this.setDeepFixStage(`备份 ${dirtyCount} 处未提交改动`);
+        const stash = await run(
+          'git',
+          ['stash', 'push', '--include-untracked', '-m', `quality-center-backup-${Date.now()}`],
+          root,
+          120_000
+        );
+        if (stash.code !== 0) {
+          const tail = (stash.stderr || stash.stdout).split(/\r?\n/).filter(Boolean).slice(-6).join('\n');
+          const pick = await vscode.window.showErrorMessage(
+            `自动备份未提交改动失败，已取消深度修复：\n${tail}`,
+            '查看日志'
+          );
+          if (pick === '查看日志') {
+            this.output?.show(true);
+          }
+          return;
         }
-        args.push(`org.openrewrite.maven:rewrite-maven-plugin:${version}:run`);
-        return run('mvn', args, root, 20 * 60_000);
+        stashed = true;
       }
-    );
-    if (outcome.code !== 0) {
-      const tail = (outcome.stderr || outcome.stdout)
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .slice(-6)
-        .join('\n');
-      await run('git', ['checkout', '--', '.'], root, 60_000);
-      await restoreStash();
-      void vscode.window.showErrorMessage(`深度修复失败，已撤销本次改动：\n${tail}`);
-      return;
-    }
 
-    const changed = await run('git', ['status', '--porcelain'], root, 30_000);
-    const changedCount = changed.stdout.split(/\r?\n/).filter(Boolean).length;
-    if (changedCount === 0) {
-      await restoreStash();
-      void vscode.window.showInformationMessage('深度修复完成，没有需要改动的代码。');
-      return;
-    }
-
-    if (config.get<boolean>('openRewrite.compileGate', true)) {
-      const build = await vscode.window.withProgress(
+      this.setDeepFixStage('运行 OpenRewrite 配方');
+      const outcome = await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title: '质量中心：校验编译…',
+          title: '质量中心：OpenRewrite 深度修复中…',
           cancellable: false
         },
-        () => run('mvn', ['-B', '-q', '-DskipTests', 'compile'], root, 20 * 60_000)
+        () => {
+          const args = ['-B', '-q', `-Drewrite.activeRecipes=${recipes.join(',')}`];
+          if (recipeArtifacts.length > 0) {
+            args.push(`-Drewrite.recipeArtifactCoordinates=${recipeArtifacts.join(',')}`);
+          }
+          args.push(`org.openrewrite.maven:rewrite-maven-plugin:${version}:run`);
+          return run('mvn', args, root, 20 * 60_000);
+        }
       );
-      if (build.code !== 0) {
-        const tail = (build.stderr || build.stdout)
+      if (outcome.code !== 0) {
+        const tail = (outcome.stderr || outcome.stdout)
           .split(/\r?\n/)
           .filter(Boolean)
           .slice(-6)
           .join('\n');
-        const revert = await vscode.window.showErrorMessage(
-          `深度修复后编译失败，需要回滚已改动的 ${changedCount} 个文件。\n${tail}`,
-          { modal: true },
-          '立即回滚'
+        this.log(`OpenRewrite 失败：\n${tail}`);
+        this.setDeepFixStage('撤销本次改动');
+        await run('git', ['checkout', '--', '.'], root, 60_000);
+        await restoreStash();
+        const pick = await vscode.window.showErrorMessage(
+          `深度修复失败，已撤销本次改动：\n${tail}`,
+          '查看日志'
         );
-        if (revert === '立即回滚') {
-          await run('git', ['checkout', '--', '.'], root, 60_000);
-          await restoreStash();
-          void vscode.window.showInformationMessage('已回滚到修复前的状态，并恢复未提交的改动。');
-        } else {
-          await restoreStash();
+        if (pick === '查看日志') {
+          this.output?.show(true);
         }
         return;
       }
-    }
 
-    if (!(await restoreStash())) {
-      return;
+      const changed = await run('git', ['status', '--porcelain'], root, 30_000);
+      const changedCount = changed.stdout.split(/\r?\n/).filter(Boolean).length;
+      if (changedCount === 0) {
+        await restoreStash();
+        void vscode.window.showInformationMessage('深度修复完成，没有需要改动的代码。');
+        return;
+      }
+      this.log(`OpenRewrite 共改动 ${changedCount} 个文件`);
+
+      if (config.get<boolean>('openRewrite.compileGate', true)) {
+        this.setDeepFixStage('校验编译');
+        const build = await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: '质量中心：校验编译…',
+            cancellable: false
+          },
+          () => run('mvn', ['-B', '-q', '-DskipTests', 'compile'], root, 20 * 60_000)
+        );
+        if (build.code !== 0) {
+          const tail = (build.stderr || build.stdout)
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .slice(-6)
+            .join('\n');
+          this.log(`编译校验失败：\n${tail}`);
+          this.setDeepFixStage('编译失败，等待回滚确认');
+          const revert = await vscode.window.showErrorMessage(
+            `深度修复后编译失败，需要回滚已改动的 ${changedCount} 个文件。\n${tail}`,
+            { modal: true },
+            '立即回滚',
+            '查看日志'
+          );
+          if (revert === '立即回滚') {
+            this.setDeepFixStage('回滚本次改动');
+            await run('git', ['checkout', '--', '.'], root, 60_000);
+            await restoreStash();
+            void vscode.window.showInformationMessage('已回滚到修复前的状态，并恢复未提交的改动。');
+          } else {
+            if (revert === '查看日志') {
+              this.output?.show(true);
+            }
+            await restoreStash();
+          }
+          return;
+        }
+      }
+
+      if (!(await restoreStash())) {
+        return;
+      }
+      this.deepFixState = null;
+      this.push();
+      await this.scanAndPush();
+      void vscode.window.showInformationMessage(`深度修复完成，共改动 ${changedCount} 个文件。`);
+    } finally {
+      this.deepFixState = null;
+      this.push();
     }
-    await this.scanAndPush();
-    void vscode.window.showInformationMessage(`深度修复完成，共改动 ${changedCount} 个文件。`);
+  }
+
+  /** 列出 git 冲突文件，供报错时直接定位 */
+  private async listConflicts(root: string, popOutput: string): Promise<string[]> {
+    const files = new Set<string>();
+    const status = await run('git', ['status', '--porcelain'], root, 30_000);
+    status.stdout.split(/\r?\n/).forEach((line) => {
+      if (/^(UU|AA|DD|AU|UA|DU|UD)\s/.test(line)) {
+        files.add(line.slice(3).trim());
+      }
+    });
+    if (files.size === 0) {
+      const diff = await run('git', ['diff', '--name-only', '--diff-filter=U'], root, 30_000);
+      diff.stdout
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .forEach((file) => files.add(file.trim()));
+    }
+    // stash pop 被拒绝时不会产生 unmerged 状态，需要从输出里解析文件列表
+    let capture = false;
+    popOutput.split(/\r?\n/).forEach((line) => {
+      if (/would be overwritten by (merge|checkout)/i.test(line)) {
+        capture = true;
+        return;
+      }
+      const merged = line.match(/CONFLICT \([^)]*\): (?:Merge conflict in )?(.+)$/i);
+      if (merged) {
+        files.add(merged[1].trim());
+        return;
+      }
+      if (capture) {
+        if (/^\s+\S/.test(line)) {
+          files.add(line.trim());
+        } else {
+          capture = false;
+        }
+      }
+    });
+    return Array.from(files);
   }
 
   private async copySuggestion(id: number): Promise<void> {
@@ -417,6 +558,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
     const snapshot: Snapshot = {
       type: 'state',
       scanning: override ? override.scanning : this.runner.isRunning,
+      deepFix: this.deepFixState,
       finishedAt: result?.finishedAt ?? null,
       issues,
       suggestions: (result?.suggestions ?? []).map((item) => ({
