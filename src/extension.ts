@@ -15,6 +15,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('qualityCenter.scan', () => provider.scanAndPush()),
     vscode.commands.registerCommand('qualityCenter.autoFix', () => provider.fixAll()),
+    vscode.commands.registerCommand('qualityCenter.deepFix', () => provider.deepFix()),
     vscode.commands.registerCommand('qualityCenter.copyMarkdown', () => provider.copyMarkdown()),
     vscode.commands.registerCommand('qualityCenter.writeReport', () => provider.exportReport()),
     vscode.commands.registerCommand('qualityCenter.openIssue', (file?: string, line?: number) => {

@@ -206,6 +206,7 @@ export function getHtml(nonce: string): string {
 <body>
   <div class="toolbar">
     <button id="scan">重新扫描</button>
+    <button id="deepfix" class="secondary">深度修复</button>
     <button id="copy" class="secondary">复制给 AI</button>
     <button id="save" class="secondary">导出报告</button>
   </div>
@@ -472,6 +473,9 @@ export function getHtml(nonce: string): string {
   });
   document.getElementById('scan').addEventListener('click', function () {
     vscode.postMessage({ type: 'scan' });
+  });
+  document.getElementById('deepfix').addEventListener('click', function () {
+    vscode.postMessage({ type: 'deepFix' });
   });
   document.getElementById('copy').addEventListener('click', function () {
     vscode.postMessage({ type: 'copy' });

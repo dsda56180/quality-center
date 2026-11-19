@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- 新增「深度修复」：调用 OpenRewrite 社区配方做编译级重构，默认执行 `org.openrewrite.java.RemoveUnusedImports`
+- 零 pom 侵入：以全限定坐标临时调用 `rewrite-maven-plugin`，不修改项目构建文件；默认只允许插件类路径自带的配方
+- 安全护栏：要求工作区无未提交改动；修复后自动执行 `mvn compile` 门禁，失败可一键回滚
+- 新增配置：`openRewrite.enabled`、`openRewrite.recipes`、`openRewrite.pluginVersion`、`openRewrite.compileGate`
+
 ## 0.4.5
 
 - 一键修复支持布尔表达式简化：`false == x`、`x != true` 等改为等价写法（含 `!` 取反与双否定合并）

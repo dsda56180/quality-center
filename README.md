@@ -68,6 +68,10 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.trivy.javaDbRepository` | `""` | Java 依赖索引库 OCI 仓库，同上 |
 | `qualityCenter.trivy.minSeverity` | `low` | 低于该等级的 CVE 不显示（low/medium/high/critical） |
 | `qualityCenter.trivy.onlyFixed` | `true` | 只显示有修复版本的 CVE |
+| `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
+| `qualityCenter.openRewrite.recipes` | `["org.openrewrite.java.RemoveUnusedImports"]` | 允许执行的 OpenRewrite 配方白名单 |
+| `qualityCenter.openRewrite.pluginVersion` | `5.44.0` | `rewrite-maven-plugin` 版本 |
+| `qualityCenter.openRewrite.compileGate` | `true` | 修复后自动编译校验，失败提示回滚 |
 
 另外支持在项目根目录放置 `.trivyignore` 文件忽略指定 CVE（Trivy 原生格式，每行一个 CVE 编号）。
 
@@ -78,6 +82,7 @@ code --install-extension dsda56180.quality-center
 | `质量中心：重新扫描` | 立即执行全部扫描 |
 | `质量中心：复制报告为 Markdown` | 把当前结果复制到剪贴板 |
 | `质量中心：导出报告文件` | 保存为 `.md` 并打开 |
+| `质量中心：深度修复` | 用 OpenRewrite 执行白名单配方，编译失败可回滚 |
 
 ## 隐私与安全
 
@@ -161,6 +166,20 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 | `SimplifyBooleanExpression` | `false == x` → `!x`、`x != true` → `!x` 等等价改写 |
 
 含字符串字面量或注释的行会保守跳过；修完自动重新扫描。
+
+## 深度修复（OpenRewrite）
+
+「一键修复」只处理插件内置的确定性改写。更复杂的结构性问题（无用导入、等价写法、冗余修饰等）交给 OpenRewrite——它的配方库是开源社区长期维护、被大量项目验证过的，按编译单元（AST）改写，不做文本替换。
+
+面板工具栏点「深度修复」后：
+
+1. 校验工作区无未提交改动（避免回滚时丢失你的代码）；
+2. 用全限定坐标调用 `rewrite-maven-plugin`，**不修改项目 pom**；
+3. 执行配置中的配方白名单；
+4. 自动运行 `mvn -DskipTests compile` 门禁，失败时弹窗询问是否执行 `git checkout -- .` 回滚；
+5. 成功后自动复扫。
+
+默认白名单仅含 `org.openrewrite.java.RemoveUnusedImports`，可在设置中追加。出于安全考虑，插件不会自动加载任意外部配方：默认类路径只带 `rewrite-java` 自带配方；`org.openrewrite.staticanalysis.*` 等进阶配方需要先在你的 pom 里为插件声明对应依赖，才会被识别。
 
 ## 发布
 

@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露与依赖漏洞(CVE)的统一面板，支持一键导出给 AI 修复",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -56,6 +56,10 @@
       {
         "command": "qualityCenter.autoFix",
         "title": "质量中心：自动修复可确定性问题"
+      },
+      {
+        "command": "qualityCenter.deepFix",
+        "title": "质量中心：深度修复（OpenRewrite）"
       },
       {
         "command": "qualityCenter.copyMarkdown",
@@ -147,6 +151,27 @@
           "type": "boolean",
           "default": true,
           "description": "只显示有修复版本的 CVE（无修复版本的通常只能等待上游，默认隐藏）"
+        },
+        "qualityCenter.openRewrite.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用深度修复（通过 OpenRewrite 执行编译级重构）"
+        },
+        "qualityCenter.openRewrite.recipes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["org.openrewrite.java.RemoveUnusedImports"],
+          "description": "允许运行的 OpenRewrite 配方白名单，仅支持 rewrite-maven-plugin 默认类路径自带的配方"
+        },
+        "qualityCenter.openRewrite.pluginVersion": {
+          "type": "string",
+          "default": "5.44.0",
+          "description": "rewrite-maven-plugin 版本"
+        },
+        "qualityCenter.openRewrite.compileGate": {
+          "type": "boolean",
+          "default": true,
+          "description": "深度修复后自动执行 mvn compile 校验，失败时提示回滚"
         }
       }
     }

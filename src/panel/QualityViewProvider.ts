@@ -70,6 +70,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
       case 'buildAndScan':
         await this.buildAndScan();
         break;
+      case 'deepFix':
+        await this.deepFix();
+        break;
       case 'save':
         await this.exportReport();
         break;
@@ -162,6 +165,122 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     await this.scanAndPush();
+  }
+
+  /**
+   * 深度修复：调用 OpenRewrite 跑白名单配方。
+   * 不改项目 pom，用全限定插件坐标临时加载；因此只支持插件内置类路径自带的配方。
+   */
+  async deepFix(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      return;
+    }
+    const config = vscode.workspace.getConfiguration('qualityCenter');
+    if (!config.get<boolean>('openRewrite.enabled', true)) {
+      void vscode.window.showInformationMessage('深度修复已在设置中关闭。');
+      return;
+    }
+    if (this.runner.isRunning) {
+      void vscode.window.showInformationMessage('扫描进行中，请稍后再执行深度修复。');
+      return;
+    }
+
+    const status = await run('git', ['status', '--porcelain'], root, 30_000);
+    if (status.code !== 0) {
+      void vscode.window.showErrorMessage('深度修复需要在 Git 仓库中运行，便于失败时回滚。');
+      return;
+    }
+    if (status.stdout.trim()) {
+      void vscode.window.showWarningMessage(
+        '工作区有未提交改动。请先提交或暂存，再执行深度修复——失败回滚会丢弃这些改动。'
+      );
+      return;
+    }
+
+    const recipes = config.get<string[]>('openRewrite.recipes', []);
+    if (recipes.length === 0) {
+      void vscode.window.showWarningMessage('未配置 OpenRewrite 配方，请先在设置中填写白名单。');
+      return;
+    }
+    const version = config.get<string>('openRewrite.pluginVersion', '5.44.0');
+
+    const answer = await vscode.window.showWarningMessage(
+      `将用 OpenRewrite 执行 ${recipes.length} 个配方：\n${recipes.join('\n')}\n\n` +
+        '仅改写源码结构，不改变业务行为。完成后自动校验编译，失败可回滚。是否继续？',
+      { modal: true },
+      '执行深度修复'
+    );
+    if (answer !== '执行深度修复') {
+      return;
+    }
+
+    const outcome = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: '质量中心：OpenRewrite 深度修复中…',
+        cancellable: false
+      },
+      () =>
+        run(
+          'mvn',
+          [
+            '-B',
+            '-q',
+            `-Drewrite.activeRecipes=${recipes.join(',')}`,
+            `org.openrewrite.maven:rewrite-maven-plugin:${version}:run`
+          ],
+          root,
+          20 * 60_000
+        )
+    );
+    if (outcome.code !== 0) {
+      const tail = (outcome.stderr || outcome.stdout)
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .slice(-6)
+        .join('\n');
+      void vscode.window.showErrorMessage(`深度修复失败：\n${tail}`);
+      return;
+    }
+
+    const changed = await run('git', ['status', '--porcelain'], root, 30_000);
+    const changedCount = changed.stdout.split(/\r?\n/).filter(Boolean).length;
+    if (changedCount === 0) {
+      void vscode.window.showInformationMessage('深度修复完成，没有需要改动的代码。');
+      return;
+    }
+
+    if (config.get<boolean>('openRewrite.compileGate', true)) {
+      const build = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: '质量中心：校验编译…',
+          cancellable: false
+        },
+        () => run('mvn', ['-B', '-q', '-DskipTests', 'compile'], root, 20 * 60_000)
+      );
+      if (build.code !== 0) {
+        const tail = (build.stderr || build.stdout)
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .slice(-6)
+          .join('\n');
+        const revert = await vscode.window.showErrorMessage(
+          `深度修复后编译失败，需要回滚已改动的 ${changedCount} 个文件。\n${tail}`,
+          { modal: true },
+          '立即回滚'
+        );
+        if (revert === '立即回滚') {
+          await run('git', ['checkout', '--', '.'], root, 60_000);
+          void vscode.window.showInformationMessage('已回滚到修复前的状态。');
+        }
+        return;
+      }
+    }
+
+    await this.scanAndPush();
+    void vscode.window.showInformationMessage(`深度修复完成，共改动 ${changedCount} 个文件。`);
   }
 
   private async copySuggestion(id: number): Promise<void> {
