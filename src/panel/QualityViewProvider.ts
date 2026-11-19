@@ -17,6 +17,34 @@ const RECIPE_LABELS: Record<string, string> = {
   'org.openrewrite.java.ShortenFullyQualifiedTypeReferences': '缩短全限定类名'
 };
 
+interface RuleRecipe {
+  recipe: string;
+  artifact?: string;
+  label: string;
+}
+
+/** Checkstyle 规则 → OpenRewrite 配方，用于问题级深度修复 */
+const RULE_RECIPE: Record<string, RuleRecipe> = {
+  UnusedImports: {
+    recipe: 'org.openrewrite.java.RemoveUnusedImports',
+    label: '清理无用导入'
+  },
+  RedundantImport: {
+    recipe: 'org.openrewrite.java.RemoveUnusedImports',
+    label: '清理无用导入'
+  },
+  SimplifyBooleanExpression: {
+    recipe: 'org.openrewrite.staticanalysis.SimplifyBooleanExpression',
+    artifact: 'org.openrewrite.recipe:rewrite-static-analysis:2.10.0',
+    label: '简化布尔表达式'
+  },
+  UnnecessaryParentheses: {
+    recipe: 'org.openrewrite.staticanalysis.UnnecessaryParentheses',
+    artifact: 'org.openrewrite.recipe:rewrite-static-analysis:2.10.0',
+    label: '去除多余括号'
+  }
+};
+
 function createNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let text = '';
@@ -102,6 +130,21 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'deepFix':
         await this.deepFix();
+        break;
+      case 'deepFixRule':
+        await this.deepFixRule(message.id ?? 0);
+        break;
+      case 'ignore':
+        if (message.id && this.runner.ignoreIssue(message.id)) {
+          this.writeAgentFiles();
+          this.push();
+        }
+        break;
+      case 'unignore':
+        if (message.id && this.runner.unignoreIssue(message.id)) {
+          this.writeAgentFiles();
+          this.push();
+        }
         break;
       case 'save':
         await this.exportReport();
@@ -201,7 +244,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
    * 深度修复：调用 OpenRewrite 跑白名单配方。
    * 不改项目 pom，用全限定插件坐标临时加载；因此只支持插件内置类路径自带的配方。
    */
-  async deepFix(): Promise<void> {
+  async deepFix(override?: { recipes: string[]; artifacts?: string[]; label?: string }): Promise<void> {
     const root = this.runner.root();
     if (!root) {
       return;
@@ -227,14 +270,13 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     const dirtyCount = status.stdout.split(/\r?\n/).filter(Boolean).length;
 
-    const recipes = config.get<string[]>('openRewrite.recipes', []);
+    const recipes = override?.recipes ?? config.get<string[]>('openRewrite.recipes', []);
     if (recipes.length === 0) {
       void vscode.window.showWarningMessage('未配置 OpenRewrite 配方，请先在设置中填写白名单。');
       return;
     }
     const version = config.get<string>('openRewrite.pluginVersion', '5.44.0');
-    const recipeArtifacts = config
-      .get<string[]>('openRewrite.recipeArtifacts', [])
+    const recipeArtifacts = (override?.artifacts ?? config.get<string[]>('openRewrite.recipeArtifacts', []))
       .map((item) => item.trim())
       .filter(Boolean);
 
@@ -247,17 +289,60 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const recipeLines = recipes
       .map((recipe) => `· ${RECIPE_LABELS[recipe] ?? recipe}`)
       .join('\n');
-    const answer = await vscode.window.showWarningMessage(
-      (profileParts.length ? `项目画像：${profileParts.join(' · ')}\n\n` : '') +
-        `将执行 ${recipes.length} 个 OpenRewrite 配方：\n${recipeLines}\n\n` +
-        (advice.length ? `推荐（未启用）：\n${advice.map((item) => `· ${item}`).join('\n')}\n\n` : '') +
-        (dirtyCount > 0
-          ? `检测到 ${dirtyCount} 处未提交改动，会在临时目录做完整备份；修复失败或编译不通过时可恢复到修复前。\n`
-          : '') +
-        '直接在现有代码上做编译级改写，不会再产生 stash 冲突。完成后自动校验编译。是否继续？',
-      { modal: true },
-      '执行深度修复'
-    );
+
+    let previewPatch: string | undefined;
+    let previewSummary = '';
+    if (config.get<boolean>('openRewrite.dryRunPreview', true)) {
+      this.deepFixState = { stage: '预演修复（不会改动代码）', startedAt: Date.now() };
+      this.push();
+      this.log('开始 dry-run 预演');
+      try {
+        const preview = await this.previewDeepFix(root, recipes, recipeArtifacts, version);
+        if (!preview) {
+          previewSummary = '预演失败（详见输出日志），可直接执行。\n\n';
+        } else if (preview.files.length === 0) {
+          void vscode.window.showInformationMessage('预演未发现需要改动的代码，已跳过深度修复。');
+          return;
+        } else {
+          previewPatch = preview.patchFile;
+          const shown = preview.files.slice(0, 8);
+          previewSummary =
+            `预演结果：将改动 ${preview.files.length} 个文件：\n` +
+            shown.map((file) => `· ${file}`).join('\n') +
+            (preview.files.length > shown.length ? `\n· 等 ${preview.files.length} 个文件` : '') +
+            '\n\n';
+        }
+      } finally {
+        this.deepFixState = null;
+        this.push();
+      }
+    }
+
+    let answer: string | undefined;
+    while (true) {
+      const buttons = ['执行深度修复'];
+      if (previewPatch) {
+        buttons.push('查看修复预览');
+      }
+      answer = await vscode.window.showWarningMessage(
+        (override?.label ? `本次修复：${override.label}\n\n` : '') +
+          previewSummary +
+          (profileParts.length ? `项目画像：${profileParts.join(' · ')}\n\n` : '') +
+          `将执行 ${recipes.length} 个 OpenRewrite 配方：\n${recipeLines}\n\n` +
+          (advice.length ? `推荐（未启用）：\n${advice.map((item) => `· ${item}`).join('\n')}\n\n` : '') +
+          (dirtyCount > 0
+            ? `检测到 ${dirtyCount} 处未提交改动，会在临时目录做完整备份；修复失败或编译不通过时可恢复到修复前。\n`
+            : '') +
+          '直接在现有代码上做编译级改写，不会再产生 stash 冲突。完成后自动校验编译。是否继续？',
+        { modal: true },
+        ...buttons
+      );
+      if (answer === '查看修复预览' && previewPatch) {
+        await vscode.window.showTextDocument(vscode.Uri.file(previewPatch), { preview: false });
+        continue;
+      }
+      break;
+    }
     if (answer !== '执行深度修复') {
       return;
     }
@@ -483,6 +568,92 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
+  /** 针对单条问题所属规则执行深度修复 */
+  private async deepFixRule(id: number): Promise<void> {
+    const issue = this.runner.result?.issues[id - 1];
+    if (!issue) {
+      return;
+    }
+    const mapping = RULE_RECIPE[issue.rule];
+    if (!mapping) {
+      void vscode.window.showInformationMessage(`规则 ${issue.rule} 暂未配置深度修复配方。`);
+      return;
+    }
+    await this.deepFix({
+      recipes: [mapping.recipe],
+      artifacts: mapping.artifact ? [mapping.artifact] : [],
+      label: mapping.label
+    });
+  }
+
+  /** dry-run 预演，返回将改动的文件与补丁路径，不改动代码 */
+  private async previewDeepFix(
+    root: string,
+    recipes: string[],
+    artifacts: string[],
+    version: string
+  ): Promise<{ files: string[]; patchFile?: string } | null> {
+    const startedAt = Date.now();
+    const args = ['-B', `-Drewrite.activeRecipes=${recipes.join(',')}`];
+    if (artifacts.length > 0) {
+      args.push(`-Drewrite.recipeArtifactCoordinates=${artifacts.join(',')}`);
+    }
+    args.push(`org.openrewrite.maven:rewrite-maven-plugin:${version}:dryRun`);
+
+    const result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: '质量中心：预演深度修复（不会改动代码）…',
+        cancellable: false
+      },
+      () => run('mvn', args, root, 20 * 60_000)
+    );
+    if (result.code !== 0) {
+      const tail = (result.stderr || result.stdout)
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .slice(-6)
+        .join('\n');
+      this.log(`预演失败：\n${tail}`);
+      return null;
+    }
+
+    const output = `${result.stdout}\n${result.stderr}`;
+    const files = new Set<string>();
+    output.split(/\r?\n/).forEach((line) => {
+      const match = line.match(/These recipes would make changes to (.+):\s*$/i);
+      if (match) {
+        files.add(match[1].trim().split(path.sep).join('/'));
+      }
+    });
+
+    const candidates: string[] = [];
+    const patchLine = output.match(/Patch file available:\s*\r?\n\s*([^\r\n]+)/i);
+    if (patchLine) {
+      candidates.push(patchLine[1].replace(/^\[[A-Z]+\]\s*/, '').trim());
+    }
+    candidates.push(path.join(root, 'target', 'rewrite', 'rewrite.patch'));
+    const patchFile = candidates.find((file) => {
+      try {
+        return fs.statSync(file).mtimeMs >= startedAt;
+      } catch {
+        return false;
+      }
+    });
+
+    if (files.size === 0 && patchFile) {
+      const patch = fs.readFileSync(patchFile, 'utf8');
+      patch.split(/\r?\n/).forEach((line) => {
+        const match = line.match(/^\+\+\+ b\/(.+)$/);
+        if (match) {
+          files.add(match[1]);
+        }
+      });
+    }
+    this.log(`预演结果：${files.size} 个文件，补丁 ${patchFile ?? '未生成'}`);
+    return { files: Array.from(files).sort(), patchFile };
+  }
+
   private async copySuggestion(id: number): Promise<void> {
     const suggestion = this.runner.result?.suggestions[id - 1];
     if (!suggestion) {
@@ -549,7 +720,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     const result = this.runner.result;
     const root = this.runner.root() ?? '';
-    const issues: SnapshotIssue[] = (result?.issues ?? []).map((issue, index) => {
+    const toSnapshot = (issue: Issue, index: number): SnapshotIssue => {
       const relative = issue.file ? path.relative(root, issue.file) : '';
       return {
         id: index + 1,
@@ -562,6 +733,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         message: issue.message,
         link: issue.link ?? '',
         fixable: isFixable(issue),
+        deepFixable: issue.source === 'checkstyle' && !!RULE_RECIPE[issue.rule],
         packageName: issue.packageName ?? '',
         installedVersion: issue.installedVersion ?? '',
         fixedVersion: issue.fixedVersion ?? '',
@@ -574,13 +746,16 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         references: issue.references ?? [],
         publishedAt: issue.publishedAt ?? ''
       };
-    });
+    };
+    const issues: SnapshotIssue[] = (result?.issues ?? []).map(toSnapshot);
+    const ignored: SnapshotIssue[] = (result?.ignored ?? []).map(toSnapshot);
     const snapshot: Snapshot = {
       type: 'state',
       scanning: override ? override.scanning : this.runner.isRunning,
       deepFix: this.deepFixState,
       finishedAt: result?.finishedAt ?? null,
       issues,
+      ignored,
       suggestions: (result?.suggestions ?? []).map((item) => ({
         category: item.category,
         title: item.title,

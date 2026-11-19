@@ -51,6 +51,8 @@ export interface ScanResult {
   startedAt: number;
   finishedAt: number;
   issues: Issue[];
+  /** 命中本地基线、当前不展示的问题 */
+  ignored: Issue[];
   errors: ScanError[];
   skipped: { source: IssueSource; reason: string }[];
   suggestions: Suggestion[];

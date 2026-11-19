@@ -9,6 +9,7 @@ export interface SnapshotIssue {
   message: string;
   link: string;
   fixable: boolean;
+  deepFixable: boolean;
   packageName: string;
   installedVersion: string;
   fixedVersion: string;
@@ -35,6 +36,7 @@ export interface Snapshot {
   deepFix?: { stage: string; startedAt: number } | null;
   finishedAt: number | null;
   issues: SnapshotIssue[];
+  ignored: SnapshotIssue[];
   suggestions: SnapshotSuggestion[];
   errors: { source: string; message: string }[];
   skipped: { source: string; reason: string }[];
@@ -277,6 +279,7 @@ export function getHtml(nonce: string): string {
     <button class="tab" data-tab="checkstyle">代码质量</button>
     <button class="tab" data-tab="gitleaks">密钥泄露</button>
     <button class="tab" data-tab="trivy">依赖漏洞</button>
+    <button class="tab" data-tab="ignored">已忽略</button>
     <button class="tab" data-tab="suggest">建议</button>
   </div>
   <input type="search" id="q" placeholder="搜索文件、规则或描述">
@@ -296,7 +299,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, deepFix: null, finishedAt: null, issues: [], suggestions: [], errors: [], skipped: [] };
+  let state = { scanning: false, deepFix: null, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [] };
   let activeTab = 'all';
   let severityFilter = [];
   let query = '';
@@ -308,15 +311,20 @@ export function getHtml(nonce: string): string {
 
   function updateTabs() {
     const issues = state.issues || [];
+    const ignored = state.ignored || [];
     const suggestions = state.suggestions || [];
     document.querySelectorAll('.tab').forEach(function (tab) {
       const key = tab.getAttribute('data-tab');
       const count = key === 'all'
         ? issues.length
-        : (key === 'suggest'
-            ? suggestions.length
-            : issues.filter(function (i) { return i.source === key; }).length);
-      const label = key === 'all' ? '全部' : (key === 'suggest' ? '修复建议' : SRC_LABEL[key]);
+        : (key === 'ignored'
+            ? ignored.length
+            : (key === 'suggest'
+                ? suggestions.length
+                : issues.filter(function (i) { return i.source === key; }).length));
+      const label = key === 'all'
+        ? '全部'
+        : (key === 'ignored' ? '已忽略' : (key === 'suggest' ? '修复建议' : SRC_LABEL[key]));
       tab.textContent = label + ' ' + count;
       tab.classList.toggle('active', activeTab === key);
     });
@@ -367,7 +375,17 @@ export function getHtml(nonce: string): string {
     (issue.references || []).forEach(function (ref, index) {
       links += '<button class="link-one" data-url="' + esc(ref) + '">参考 ' + (index + 1) + '</button>';
     });
-    links += '<button class="copy-one" data-copy="' + issue.id + '">复制详情给 AI</button>';
+    if (activeTab === 'ignored') {
+      links += '<button class="link-one unignore-one" data-unignore="' + issue.id + '">恢复此问题</button>';
+    } else {
+      if (issue.deepFixable) {
+        links += '<button class="link-one rule-fix" data-rulefix="' + issue.id + '">深度修复此规则</button>';
+      }
+      links += '<button class="link-one ignore-one" data-ignore="' + issue.id + '">忽略此问题</button>';
+    }
+    if (activeTab !== 'ignored') {
+      links += '<button class="copy-one" data-copy="' + issue.id + '">复制详情给 AI</button>';
+    }
     html += '<div class="d-actions">' + links + '</div>';
     return html;
   }
@@ -459,15 +477,16 @@ export function getHtml(nonce: string): string {
           }).join('')
         : '<div class="empty">暂无可推导的修复建议</div>';
     } else {
-      const filtered = (state.issues || []).filter(function (issue) {
-        if (activeTab !== 'all' && issue.source !== activeTab) return false;
+      const sourceIssues = activeTab === 'ignored' ? (state.ignored || []) : (state.issues || []);
+      const filtered = sourceIssues.filter(function (issue) {
+        if (activeTab !== 'all' && activeTab !== 'ignored' && issue.source !== activeTab) return false;
         if (severityFilter.length > 0 && severityFilter.indexOf(issue.severity) < 0) return false;
         if (!query) return true;
         const hay = (issue.file + ' ' + issue.rule + ' ' + issue.message + ' ' + (issue.zhSummary || '')).toLowerCase();
         return hay.indexOf(query) >= 0;
       });
       if (!filtered.length) {
-        list.innerHTML = '<div class="empty">没有匹配的问题'
+        list.innerHTML = '<div class="empty">' + (activeTab === 'ignored' ? '还没有忽略的问题' : '没有匹配的问题')
           + (severityFilter.length > 0
               ? '（当前只看' + severityFilter.map(function (s) { return SEV_LABEL[s]; }).join('、') + '，再次点击标签可取消）'
               : '')
@@ -491,9 +510,11 @@ export function getHtml(nonce: string): string {
               + '<div class="head"><span class="sev c-' + issue.severity + '">' + SEV_LABEL[issue.severity] + '</span>'
               + '<span class="rule">' + esc(issue.rule) + '</span>'
               + '<span class="actions">'
-              + (issue.fixable ? '<button class="fix-one" data-fix="' + issue.id + '">修复</button>' : '')
+              + (activeTab === 'ignored'
+                  ? '<button class="unignore-one" data-unignore="' + issue.id + '">恢复</button>'
+                  : (issue.fixable ? '<button class="fix-one" data-fix="' + issue.id + '">修复</button>' : ''))
               + (issue.zhSummary ? '<button class="detail-toggle" data-detail="' + issue.id + '">详情</button>' : '')
-              + '<button class="copy-one" data-copy="' + issue.id + '">复制</button>'
+              + (activeTab === 'ignored' ? '' : '<button class="copy-one" data-copy="' + issue.id + '">复制</button>')
               + '</span></div>'
               + '<div class="msg' + (issue.zhSummary ? ' clamp' : '') + '">' + esc(text) + '</div>'
               + '<div class="loc">' + loc + '</div>'
@@ -596,10 +617,26 @@ export function getHtml(nonce: string): string {
       e.stopPropagation();
       return;
     }
+    if (e.target.classList && e.target.classList.contains('unignore-one')) {
+      vscode.postMessage({ type: 'unignore', id: Number(e.target.getAttribute('data-unignore')) });
+      e.stopPropagation();
+      return;
+    }
+    if (e.target.classList && e.target.classList.contains('ignore-one')) {
+      vscode.postMessage({ type: 'ignore', id: Number(e.target.getAttribute('data-ignore')) });
+      e.stopPropagation();
+      return;
+    }
+    if (e.target.classList && e.target.classList.contains('rule-fix')) {
+      vscode.postMessage({ type: 'deepFixRule', id: Number(e.target.getAttribute('data-rulefix')) });
+      e.stopPropagation();
+      return;
+    }
     if (e.target.classList && e.target.classList.contains('detail-toggle')) {
       const target = e.target.closest('.item');
       const detailId = Number(e.target.getAttribute('data-detail')) || 0;
-      const detailIssue = (state.issues || []).filter(function (i) { return i.id === detailId; })[0];
+      const detailPool = activeTab === 'ignored' ? (state.ignored || []) : (state.issues || []);
+      const detailIssue = detailPool.filter(function (i) { return i.id === detailId; })[0];
       if (target && detailIssue) {
         toggleDetail(target, detailIssue);
       }
@@ -617,7 +654,8 @@ export function getHtml(nonce: string): string {
     const node = e.target.closest('.item');
     if (!node) return;
     const id = Number(node.getAttribute('data-id')) || 0;
-    const issue = (state.issues || []).filter(function (i) { return i.id === id; })[0];
+    const pool = activeTab === 'ignored' ? (state.ignored || []) : (state.issues || []);
+    const issue = pool.filter(function (i) { return i.id === id; })[0];
     const abs = node.getAttribute('data-abs');
     const line = Number(node.getAttribute('data-line')) || 0;
     const link = node.getAttribute('data-link');

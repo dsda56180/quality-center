@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { addToBaseline, removeFromBaseline, splitByBaseline } from './baseline';
 import { Issue, ScanResult, SEVERITY_ORDER } from './model';
 import { resolveConfig, scanCheckstyle } from './scanners/checkstyle';
 import { scanGitleaks } from './scanners/gitleaks';
@@ -136,10 +137,12 @@ export class ScanRunner {
       (a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
     );
 
+    const split = splitByBaseline(root, issues);
     this.lastResult = {
       startedAt,
       finishedAt: Date.now(),
-      issues,
+      issues: split.active,
+      ignored: split.ignored,
       errors,
       skipped,
       suggestions: [],
@@ -147,5 +150,44 @@ export class ScanRunner {
     };
     this.lastResult.suggestions = buildSuggestions(root, this.lastResult);
     return this.lastResult;
+  }
+
+  /** 忽略某条问题并写入本地基线 */
+  ignoreIssue(id: number): boolean {
+    const root = this.root();
+    const result = this.lastResult;
+    if (!root || !result) {
+      return false;
+    }
+    const issue = result.issues[id - 1];
+    if (!issue) {
+      return false;
+    }
+    addToBaseline(root, issue);
+    result.issues.splice(id - 1, 1);
+    result.ignored.push(issue);
+    result.suggestions = buildSuggestions(root, result);
+    return true;
+  }
+
+  /** 从基线恢复某条已忽略问题 */
+  unignoreIssue(id: number): boolean {
+    const root = this.root();
+    const result = this.lastResult;
+    if (!root || !result) {
+      return false;
+    }
+    const issue = result.ignored[id - 1];
+    if (!issue) {
+      return false;
+    }
+    removeFromBaseline(root, issue);
+    result.ignored.splice(id - 1, 1);
+    result.issues.push(issue);
+    result.issues.sort(
+      (a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
+    );
+    result.suggestions = buildSuggestions(root, result);
+    return true;
   }
 }

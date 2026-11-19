@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露与依赖漏洞(CVE)的统一面板，支持一键导出给 AI 修复",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -182,6 +182,11 @@
           "type": "boolean",
           "default": true,
           "description": "深度修复后自动执行 mvn compile 校验，失败时提示回滚"
+        },
+        "qualityCenter.openRewrite.dryRunPreview": {
+          "type": "boolean",
+          "default": true,
+          "description": "深度修复前先 dry-run 预演，展示将改动的文件（会增加一次配方运行时间）"
         }
       }
     }

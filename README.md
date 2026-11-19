@@ -73,6 +73,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标，如 `org.openrewrite.recipe:rewrite-static-analysis:2.10.0` |
 | `qualityCenter.openRewrite.pluginVersion` | `5.44.0` | `rewrite-maven-plugin` 版本 |
 | `qualityCenter.openRewrite.compileGate` | `true` | 修复后自动编译校验，失败提示回滚 |
+| `qualityCenter.openRewrite.dryRunPreview` | `true` | 执行前先 dry-run 预演，展示将改动的文件并支持查看补丁 |
 
 另外支持在项目根目录放置 `.trivyignore` 文件忽略指定 CVE（Trivy 原生格式，每行一个 CVE 编号）。
 
@@ -174,10 +175,11 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 面板工具栏点「深度修复」后：
 
-1. 若有未提交改动，先把 `git diff HEAD` 与未跟踪文件备份到系统临时目录，**不执行 stash、不移动你的工作区代码**；
-2. 直接在现有代码上运行 OpenRewrite（全限定坐标调用 `rewrite-maven-plugin`，不修改项目 pom），因此不会产生 stash 恢复冲突；
-3. 自动运行 `mvn -DskipTests compile` 门禁；失败或配方执行出错时，可一键恢复到修复前（包含你的未提交改动）；
-4. 成功后自动复扫。
+1. 先执行 dry-run 预演，列出将改动的文件；可打开补丁预览后再确认执行（`qualityCenter.openRewrite.dryRunPreview`，默认开启）；
+2. 若有未提交改动，先把 `git diff HEAD` 与未跟踪文件备份到系统临时目录，**不执行 stash、不移动你的工作区代码**；
+3. 直接在现有代码上运行 OpenRewrite（全限定坐标调用 `rewrite-maven-plugin`，不修改项目 pom），因此不会产生 stash 恢复冲突；
+4. 自动运行 `mvn -DskipTests compile` 门禁；失败或配方执行出错时，可一键恢复到修复前（包含你的未提交改动）；
+5. 成功后自动复扫。
 
 执行过程中，面板顶部的猫咪进度条会显示当前阶段（备份改动 / 运行配方 / 校验编译 / 恢复改动）和已用秒数；详细日志写入「质量中心」输出面板。
 
@@ -189,6 +191,14 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 - 推荐但**未启用**的配方，例如 static-analysis 配方包，或 Spring Boot 2.7 升级评估，并标注风险等级。
 
 推荐只做展示，不会自动写入配置，也不会自动执行升级迁移配方。
+
+问题详情里还有「深度修复此规则」：只运行该条问题对应的配方（如 `UnusedImports` → 清理无用导入、`SimplifyBooleanExpression` → 简化布尔表达式），适合逐类处理，不必全量执行。
+
+## 基线 / 忽略
+
+问题详情里点「忽略此问题」会把该条写入项目根 `.quality-center/baseline.json`，之后扫描仍会检测但不再计入统计、修复建议和 AI 导出。面板新增「已忽略」Tab，可逐条「恢复」。
+
+忽略记录使用稳定指纹（来源 + 规则 + 文件 + 消息；CVE 用包名 + 版本），不包含行号，代码移动后仍能匹配。该文件默认位于已被 `.gitignore` 忽略的目录中，仅本机生效；如需团队共享，可自行取消忽略并提交。
 
 需要 `org.openrewrite.staticanalysis.*` 等进阶配方时，不必改项目 pom：把配方包坐标填进 `openRewrite.recipeArtifacts` 即可，插件会通过 `-Drewrite.recipeArtifactCoordinates` 临时加入类路径。例如：
 
