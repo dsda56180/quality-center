@@ -545,6 +545,24 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
             changedFiles.add(file);
           }
         });
+      // git diff 看不到未跟踪文件的变化，用备份副本比对补上
+      if (backup) {
+        for (const file of untrackedBefore) {
+          const original = path.join(backup.dir, 'untracked', file);
+          const current = path.join(root, file);
+          try {
+            if (!fs.existsSync(original)) {
+              continue;
+            }
+            if (!fs.existsSync(current) || !fs.readFileSync(current).equals(fs.readFileSync(original))) {
+              changedFiles.add(file);
+            }
+          } catch {
+            // 读取失败时不纳入统计，避免影响主流程
+          }
+        }
+      }
+
       // 把未勾选的文件恢复到修复前快照，只保留用户选择的改动
       if (selectedFiles) {
         const trackedList = await run('git', ['ls-files'], root, 60_000);
