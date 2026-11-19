@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { exportForAgent, formatIssueForCopy } from '../agentExport';
@@ -7,6 +9,12 @@ import { Issue, SOURCE_LABEL } from '../model';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
 import { getHtml, Snapshot, SnapshotIssue } from './html';
+
+const RECIPE_LABELS: Record<string, string> = {
+  'org.openrewrite.java.RemoveUnusedImports': '清理无用导入',
+  'org.openrewrite.java.RemoveObjectsIsNull': 'Objects.isNull 改为 == null',
+  'org.openrewrite.java.ShortenFullyQualifiedTypeReferences': '缩短全限定类名'
+};
 
 function createNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -229,12 +237,15 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       .map((item) => item.trim())
       .filter(Boolean);
 
+    const recipeLines = recipes
+      .map((recipe) => `· ${RECIPE_LABELS[recipe] ?? recipe}`)
+      .join('\n');
     const answer = await vscode.window.showWarningMessage(
-      `将用 OpenRewrite 执行 ${recipes.length} 个配方：\n${recipes.join('\n')}\n\n` +
+      `将执行 ${recipes.length} 个 OpenRewrite 配方：\n${recipeLines}\n\n` +
         (dirtyCount > 0
-          ? `检测到 ${dirtyCount} 处未提交改动，执行前会自动 stash 备份，结束后恢复。\n`
+          ? `检测到 ${dirtyCount} 处未提交改动，会在临时目录做完整备份；修复失败或编译不通过时可恢复到修复前。\n`
           : '') +
-        '仅改写源码结构，不改变业务行为。完成后自动校验编译，失败可回滚。是否继续？',
+        '直接在现有代码上做编译级改写，不会再产生 stash 冲突。完成后自动校验编译。是否继续？',
       { modal: true },
       '执行深度修复'
     );
@@ -242,89 +253,119 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
 
-    // 有未提交改动时先自动备份，回滚时只撤销本次修复，不影响用户代码
-    let stashed = false;
-    const restoreStash = async (): Promise<boolean> => {
-      if (!stashed) {
+    // 不 stash：先备份改动，再直接在现有代码上跑配方，从根本上避免 stash 恢复冲突
+    interface Backup {
+      dir: string;
+      patchFile: string;
+      untracked: string[];
+    }
+    let backup: Backup | undefined;
+    const untrackedBefore = new Set<string>();
+
+    const createBackup = async (): Promise<boolean> => {
+      if (dirtyCount === 0) {
+        return true;
+      }
+      this.setDeepFixStage('备份未提交改动');
+      try {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-center-backup-'));
+        const diff = await run('git', ['diff', 'HEAD', '--binary'], root, 120_000);
+        if (diff.code !== 0) {
+          throw new Error((diff.stderr || diff.stdout).trim() || 'git diff 失败');
+        }
+        const patchFile = path.join(dir, 'changes.patch');
+        fs.writeFileSync(patchFile, diff.stdout, 'utf8');
+
+        const others = await run('git', ['ls-files', '--others', '--exclude-standard'], root, 60_000);
+        const untracked = others.stdout.split(/\r?\n/).filter(Boolean);
+        for (const relative of untracked) {
+          untrackedBefore.add(relative);
+          const source = path.join(root, relative);
+          const target = path.join(dir, 'untracked', relative);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.copyFileSync(source, target);
+        }
+        backup = { dir, patchFile, untracked };
+        this.log(`已备份未提交改动到 ${dir}`);
+        return true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log(`备份失败：${message}`);
+        void vscode.window.showErrorMessage(`备份未提交改动失败，已取消深度修复：${message}`, '查看日志');
+        this.output?.show(true);
+        return false;
+      }
+    };
+
+    const discardBackup = (): void => {
+      if (!backup) {
+        return;
+      }
+      fs.rmSync(backup.dir, { recursive: true, force: true });
+      backup = undefined;
+    };
+
+    const restoreBackup = async (): Promise<boolean> => {
+      if (!backup) {
         return true;
       }
       this.setDeepFixStage('恢复未提交改动');
-      const pop = await run('git', ['stash', 'pop', '--index'], root, 120_000);
-      if (pop.code === 0) {
-        stashed = false;
-        return true;
-      }
-
-      const popOutput = `${pop.stdout}\n${pop.stderr}`;
-      const conflicts = await this.listConflicts(root, popOutput);
-      const detail = conflicts.length
-        ? `\n\n冲突文件（${conflicts.length} 个）：\n${conflicts.map((file) => `· ${file}`).join('\n')}`
-        : '\n\n未能自动识别冲突文件，可用 git status 查看。';
-      this.log(`恢复 stash 冲突：${conflicts.join(', ') || '未知'}`);
-      const buttons = ['放弃本次修复并恢复我的改动'];
-      if (conflicts.length > 0) {
-        buttons.push('打开第一个冲突文件');
-      }
-      buttons.push('打开源代码管理', '查看日志');
-      const pick = await vscode.window.showErrorMessage(
-        `恢复未提交改动时发生冲突：本次修复与你的改动修改了同一批文件。` +
-          `你的改动仍完整保存在 git stash 中（可用 git stash list 查看）。${detail}`,
-        { modal: true },
-        ...buttons
-      );
-      if (pick === '放弃本次修复并恢复我的改动') {
-        this.setDeepFixStage('撤销修复并恢复未提交改动');
-        await run('git', ['checkout', '--', '.'], root, 60_000);
-        const retry = await run('git', ['stash', 'pop', '--index'], root, 120_000);
-        if (retry.code === 0) {
-          stashed = false;
-          this.log('已放弃本次修复并恢复未提交改动');
-          void vscode.window.showInformationMessage('已放弃本次修复，你的未提交改动已恢复。');
-        } else {
-          const retryFiles = await this.listConflicts(root, `${retry.stdout}\n${retry.stderr}`);
-          this.log(`恢复未提交改动仍然失败：${retryFiles.join(', ') || '未知'}`);
-          void vscode.window.showErrorMessage(
-            '恢复未提交改动仍然失败，改动仍保存在 git stash 中，请手动处理（可用 git stash list 查看）。',
-            '查看日志'
+      await run('git', ['checkout', 'HEAD', '--', '.'], root, 120_000);
+      let ok = true;
+      try {
+        if (fs.existsSync(backup.patchFile) && fs.statSync(backup.patchFile).size > 0) {
+          const applied = await run(
+            'git',
+            ['apply', '--binary', '--whitespace=nowarn', backup.patchFile],
+            root,
+            120_000
           );
-          this.output?.show(true);
+          if (applied.code !== 0) {
+            ok = false;
+            this.log(`恢复未提交改动失败：${(applied.stderr || applied.stdout).trim()}`);
+          }
         }
-      } else if (pick === '打开第一个冲突文件' && conflicts.length > 0) {
-        await vscode.window.showTextDocument(vscode.Uri.file(path.join(root, conflicts[0])), {
-          preview: false
-        });
-      } else if (pick === '打开源代码管理') {
-        await vscode.commands.executeCommand('workbench.view.scm');
-      } else if (pick === '查看日志') {
-        this.output?.show(true);
+        for (const relative of backup.untracked) {
+          const source = path.join(backup.dir, 'untracked', relative);
+          const target = path.join(root, relative);
+          if (fs.existsSync(source)) {
+            fs.mkdirSync(path.dirname(target), { recursive: true });
+            fs.copyFileSync(source, target);
+          }
+        }
+      } catch (error) {
+        ok = false;
+        this.log(`恢复未提交改动失败：${error instanceof Error ? error.message : String(error)}`);
       }
-      return false;
+      if (ok) {
+        discardBackup();
+      } else {
+        const dir = backup.dir;
+        void vscode.window.showErrorMessage(
+          `恢复未提交改动时出现异常，备份完整保留在：${dir}\n` +
+            '可手动用 git apply 恢复 changes.patch，并复制 untracked 目录中的文件。',
+          '查看日志'
+        );
+      }
+      return ok;
     };
 
     this.deepFixState = { stage: '准备执行', startedAt: Date.now() };
     this.push();
     this.log(`开始深度修复：${recipes.join(', ')}`);
     try {
+      if (!(await createBackup())) {
+        return;
+      }
+
+      // 记录修复前的代码快照，用于精确统计本次配方改动了哪些文件
+      let baseRef = 'HEAD';
       if (dirtyCount > 0) {
-        this.setDeepFixStage(`备份 ${dirtyCount} 处未提交改动`);
-        const stash = await run(
-          'git',
-          ['stash', 'push', '--include-untracked', '-m', `quality-center-backup-${Date.now()}`],
-          root,
-          120_000
-        );
-        if (stash.code !== 0) {
-          const tail = (stash.stderr || stash.stdout).split(/\r?\n/).filter(Boolean).slice(-6).join('\n');
-          const pick = await vscode.window.showErrorMessage(
-            `自动备份未提交改动失败，已取消深度修复：\n${tail}`,
-            '查看日志'
-          );
-          if (pick === '查看日志') {
-            this.output?.show(true);
-          }
-          return;
+        const snapshot = await run('git', ['stash', 'create'], root, 60_000);
+        if (snapshot.code === 0 && snapshot.stdout.trim()) {
+          baseRef = snapshot.stdout.trim();
+          this.log(`已创建修复前快照 ${baseRef}`);
         }
-        stashed = true;
       }
 
       this.setDeepFixStage('运行 OpenRewrite 配方');
@@ -350,9 +391,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           .slice(-6)
           .join('\n');
         this.log(`OpenRewrite 失败：\n${tail}`);
-        this.setDeepFixStage('撤销本次改动');
-        await run('git', ['checkout', '--', '.'], root, 60_000);
-        await restoreStash();
+        await restoreBackup();
         const pick = await vscode.window.showErrorMessage(
           `深度修复失败，已撤销本次改动：\n${tail}`,
           '查看日志'
@@ -363,10 +402,20 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         return;
       }
 
-      const changed = await run('git', ['status', '--porcelain'], root, 30_000);
-      const changedCount = changed.stdout.split(/\r?\n/).filter(Boolean).length;
+      const changed = await run('git', ['diff', '--name-only', baseRef], root, 30_000);
+      const changedFiles = new Set(changed.stdout.split(/\r?\n/).filter(Boolean));
+      const othersAfter = await run('git', ['ls-files', '--others', '--exclude-standard'], root, 60_000);
+      othersAfter.stdout
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .forEach((file) => {
+          if (!untrackedBefore.has(file)) {
+            changedFiles.add(file);
+          }
+        });
+      const changedCount = changedFiles.size;
       if (changedCount === 0) {
-        await restoreStash();
+        discardBackup();
         void vscode.window.showInformationMessage('深度修复完成，没有需要改动的代码。');
         return;
       }
@@ -398,22 +447,19 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           );
           if (revert === '立即回滚') {
             this.setDeepFixStage('回滚本次改动');
-            await run('git', ['checkout', '--', '.'], root, 60_000);
-            await restoreStash();
+            await restoreBackup();
             void vscode.window.showInformationMessage('已回滚到修复前的状态，并恢复未提交的改动。');
           } else {
             if (revert === '查看日志') {
               this.output?.show(true);
             }
-            await restoreStash();
+            discardBackup();
           }
           return;
         }
       }
 
-      if (!(await restoreStash())) {
-        return;
-      }
+      discardBackup();
       this.deepFixState = null;
       this.push();
       await this.scanAndPush();
@@ -422,45 +468,6 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       this.deepFixState = null;
       this.push();
     }
-  }
-
-  /** 列出 git 冲突文件，供报错时直接定位 */
-  private async listConflicts(root: string, popOutput: string): Promise<string[]> {
-    const files = new Set<string>();
-    const status = await run('git', ['status', '--porcelain'], root, 30_000);
-    status.stdout.split(/\r?\n/).forEach((line) => {
-      if (/^(UU|AA|DD|AU|UA|DU|UD)\s/.test(line)) {
-        files.add(line.slice(3).trim());
-      }
-    });
-    if (files.size === 0) {
-      const diff = await run('git', ['diff', '--name-only', '--diff-filter=U'], root, 30_000);
-      diff.stdout
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .forEach((file) => files.add(file.trim()));
-    }
-    // stash pop 被拒绝时不会产生 unmerged 状态，需要从输出里解析文件列表
-    let capture = false;
-    popOutput.split(/\r?\n/).forEach((line) => {
-      if (/would be overwritten by (merge|checkout)/i.test(line)) {
-        capture = true;
-        return;
-      }
-      const merged = line.match(/CONFLICT \([^)]*\): (?:Merge conflict in )?(.+)$/i);
-      if (merged) {
-        files.add(merged[1].trim());
-        return;
-      }
-      if (capture) {
-        if (/^\s+\S/.test(line)) {
-          files.add(line.trim());
-        } else {
-          capture = false;
-        }
-      }
-    });
-    return Array.from(files);
   }
 
   private async copySuggestion(id: number): Promise<void> {

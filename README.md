@@ -69,7 +69,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.trivy.minSeverity` | `low` | 低于该等级的 CVE 不显示（low/medium/high/critical） |
 | `qualityCenter.trivy.onlyFixed` | `true` | 只显示有修复版本的 CVE |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
-| `qualityCenter.openRewrite.recipes` | `["org.openrewrite.java.RemoveUnusedImports"]` | 允许执行的 OpenRewrite 配方白名单 |
+| `qualityCenter.openRewrite.recipes` | 清理无用导入 / `Objects.isNull` / 缩短全限定类名 | 允许执行的 OpenRewrite 配方白名单 |
 | `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标，如 `org.openrewrite.recipe:rewrite-static-analysis:2.10.0` |
 | `qualityCenter.openRewrite.pluginVersion` | `5.44.0` | `rewrite-maven-plugin` 版本 |
 | `qualityCenter.openRewrite.compileGate` | `true` | 修复后自动编译校验，失败提示回滚 |
@@ -174,17 +174,14 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 面板工具栏点「深度修复」后：
 
-1. 检测未提交改动；若有，自动执行 `git stash push --include-untracked` 备份，结束后自动恢复，不需要你先提交代码；
-2. 用全限定坐标调用 `rewrite-maven-plugin`，**不修改项目 pom**；
-3. 执行配置中的配方白名单；
-4. 自动运行 `mvn -DskipTests compile` 门禁，失败时弹窗询问是否执行 `git checkout -- .` 回滚（只撤销本次修复，不会碰你已备份的改动）；
-5. 恢复未提交改动后自动复扫。
+1. 若有未提交改动，先把 `git diff HEAD` 与未跟踪文件备份到系统临时目录，**不执行 stash、不移动你的工作区代码**；
+2. 直接在现有代码上运行 OpenRewrite（全限定坐标调用 `rewrite-maven-plugin`，不修改项目 pom），因此不会产生 stash 恢复冲突；
+3. 自动运行 `mvn -DskipTests compile` 门禁；失败或配方执行出错时，可一键恢复到修复前（包含你的未提交改动）；
+4. 成功后自动复扫。
 
 执行过程中，面板顶部的猫咪进度条会显示当前阶段（备份改动 / 运行配方 / 校验编译 / 恢复改动）和已用秒数；详细日志写入「质量中心」输出面板。
 
-如果恢复时与修复改动冲突，会列出具体冲突文件，并提供三个入口：打开第一个冲突文件、打开源代码管理、「放弃本次修复并恢复我的改动」。选择最后一项会自动撤销本次修复并恢复你的未提交代码；即使不选择，你的改动也始终完整保存在 `git stash` 中，可用 `git stash list` 查看。
-
-默认白名单仅含 `org.openrewrite.java.RemoveUnusedImports`，可在设置中追加。
+默认配方为清理无用导入、`Objects.isNull` 改写、缩短全限定类名，可在设置中增删。
 
 需要 `org.openrewrite.staticanalysis.*` 等进阶配方时，不必改项目 pom：把配方包坐标填进 `openRewrite.recipeArtifacts` 即可，插件会通过 `-Drewrite.recipeArtifactCoordinates` 临时加入类路径。例如：
 
