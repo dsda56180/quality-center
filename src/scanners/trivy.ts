@@ -73,13 +73,35 @@ const SEVERITY_RANK_RAW: Record<string, number> = {
   CRITICAL: 4
 };
 
+/** 判断目录是否是真实的构建产物（含 jar/pom），避免只残留 site、cachefile 的空 target 被误用 */
+function hasBuildArtifacts(dir: string): boolean {
+  try {
+    const stack: { path: string; depth: number }[] = [{ path: dir, depth: 0 }];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      for (const entry of fs.readdirSync(current.path, { withFileTypes: true })) {
+        if (entry.isFile() && /\.(jar|pom)$/i.test(entry.name)) {
+          return true;
+        }
+        if (entry.isDirectory() && current.depth < 2) {
+          stack.push({ path: path.join(current.path, entry.name), depth: current.depth + 1 });
+        }
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function pickTarget(root: string, configured?: string): { target: string; mode: 'rootfs' | 'fs' } {
   if (configured) {
     const target = path.isAbsolute(configured) ? configured : path.join(root, configured);
-    return { target, mode: fs.existsSync(target) && fs.statSync(target).isDirectory() ? 'rootfs' : 'fs' };
+    const usable = fs.existsSync(target) && fs.statSync(target).isDirectory() && hasBuildArtifacts(target);
+    return { target: usable ? target : root, mode: usable ? 'rootfs' : 'fs' };
   }
   const buildDir = path.join(root, 'target');
-  if (fs.existsSync(buildDir)) {
+  if (fs.existsSync(buildDir) && hasBuildArtifacts(buildDir)) {
     return { target: buildDir, mode: 'rootfs' };
   }
   return { target: root, mode: 'fs' };
@@ -102,6 +124,9 @@ async function invoke(
   }
   if (mode === 'fs') {
     args.push('--skip-dirs', '.git', '--skip-dirs', 'node_modules');
+    // 源码模式下 trivy 会联网向 Maven 中央仓库解析 pom 依赖，公共网络下极易触发 429 限流。
+    // 加 --offline-scan 后只用本地缓存与本地文件，不再发起任何 API 请求。
+    args.push('--offline-scan');
   }
   args.push(target);
   // cwd 设为项目根目录：trivy 自动加载根目录的 .trivyignore 忽略清单
@@ -123,8 +148,9 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
 
   let result = await invoke(exe, mode, target, root, options.dbRepository, options.javaDbRepository);
 
-  // 未显式配置仓库且首次失败时，自动回退到国内镜像
-  const dbDownloadFailed = result.code !== 0 && !options.dbRepository;
+  // 未显式配置仓库且首次失败时，自动回退到国内镜像；429 属于仓库限流，换镜像重试无意义
+  const throttled = /429|too many requests/i.test(`${result.stderr}\n${result.stdout}`);
+  const dbDownloadFailed = result.code !== 0 && !options.dbRepository && !throttled;
   if (dbDownloadFailed) {
     const retry = await invoke(exe, mode, target, root, FALLBACK_DB, FALLBACK_JAVA_DB);
     if (retry.code === 0) {
@@ -133,6 +159,15 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
   }
 
   if (result.code !== 0) {
+    if (throttled) {
+      return {
+        issues: [],
+        mode,
+        error:
+          '依赖仓库限流（HTTP 429），已停止联网解析。请先在项目根目录执行 mvn package 生成 target 目录后重新扫描，' +
+          '或等待约 30 分钟解除封禁；期间代码质量与密钥检查不受影响。'
+      };
+    }
     const detail = result.stderr.split(/\r?\n/).filter(Boolean).slice(-4).join('\n');
     const hint =
       mode === 'fs' ? '\n提示：先在项目里执行 mvn package 生成 target 目录，可避免联网解析依赖。' : '';

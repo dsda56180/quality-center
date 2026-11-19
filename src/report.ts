@@ -34,6 +34,17 @@ export function toMarkdown(result: ScanResult, root: string): string {
     lines.push('');
   }
 
+  if (result.suggestions.length > 0) {
+    lines.push('## 修复建议');
+    lines.push('');
+    for (const [index, item] of result.suggestions.entries()) {
+      lines.push(`### ${index + 1}. ${item.title}`);
+      lines.push('');
+      lines.push(`影响 ${item.impact} 项。${item.detail}`);
+      lines.push('');
+    }
+  }
+
   const trivy = result.issues.filter((issue) => issue.source === 'trivy');
   if (trivy.length > 0) {
     lines.push('## 依赖漏洞（CVE）');

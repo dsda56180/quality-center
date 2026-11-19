@@ -6,6 +6,7 @@ import { Issue, ScanResult, SEVERITY_ORDER } from './model';
 import { resolveConfig, scanCheckstyle } from './scanners/checkstyle';
 import { scanGitleaks } from './scanners/gitleaks';
 import { scanTrivy } from './scanners/trivy';
+import { buildSuggestions } from './suggest';
 
 export class ScanRunner {
   private running = false;
@@ -52,7 +53,8 @@ export class ScanRunner {
 
       if (config.get<boolean>('checkstyle.enabled', true)) {
         const configured = config.get<string>('checkstyle.config', '');
-        const configPath = resolveConfig(root, configured);
+        const bundled = path.join(this.context.extensionPath, 'media', 'checkstyle-default.xml');
+        const configPath = resolveConfig(root, configured, bundled);
         if (!configPath) {
           skipped.push({ source: 'checkstyle', reason: '未找到 Checkstyle 规则文件' });
         } else {
@@ -134,8 +136,10 @@ export class ScanRunner {
       finishedAt: Date.now(),
       issues,
       errors,
-      skipped
+      skipped,
+      suggestions: []
     };
+    this.lastResult.suggestions = buildSuggestions(root, this.lastResult);
     return this.lastResult;
   }
 }

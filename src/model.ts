@@ -23,12 +23,24 @@ export interface ScanError {
   message: string;
 }
 
+export type SuggestionCategory = 'framework' | 'dependency' | 'secret' | 'manual';
+
+/** 基于扫描结果推导出的修复建议（不是逐条问题，而是行动方案） */
+export interface Suggestion {
+  category: SuggestionCategory;
+  title: string;
+  detail: string;
+  /** 该建议能覆盖的问题条数，用于排序 */
+  impact: number;
+}
+
 export interface ScanResult {
   startedAt: number;
   finishedAt: number;
   issues: Issue[];
   errors: ScanError[];
   skipped: { source: IssueSource; reason: string }[];
+  suggestions: Suggestion[];
 }
 
 export const SOURCE_LABEL: Record<IssueSource, string> = {

@@ -63,6 +63,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
       case 'fixIssue':
         await this.fixIssue(message.id ?? 0);
         break;
+      case 'copySuggestion':
+        await this.copySuggestion(message.id ?? 0);
+        break;
       case 'save':
         await this.exportReport();
         break;
@@ -121,6 +124,21 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
     }
     await vscode.env.clipboard.writeText(formatIssueForCopy(issue, root, id));
     void vscode.window.showInformationMessage(`已复制第 ${id} 条问题，可直接粘贴给 AI。`);
+  }
+
+  private async copySuggestion(id: number): Promise<void> {
+    const suggestion = this.runner.result?.suggestions[id - 1];
+    if (!suggestion) {
+      return;
+    }
+    const text = [
+      `### 修复建议：${suggestion.title}`,
+      `- 可覆盖问题数：${suggestion.impact}`,
+      `- 类别：${suggestion.category}`,
+      `- 说明：${suggestion.detail}`
+    ].join('\n');
+    await vscode.env.clipboard.writeText(text);
+    void vscode.window.showInformationMessage('已复制修复建议，可直接粘贴给 AI。');
   }
 
   private async openAgentFile(): Promise<void> {
@@ -194,6 +212,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
       scanning: override ? override.scanning : this.runner.isRunning,
       finishedAt: result?.finishedAt ?? null,
       issues,
+      suggestions: (result?.suggestions ?? []).map((item) => ({
+        category: item.category,
+        title: item.title,
+        detail: item.detail,
+        impact: item.impact
+      })),
       errors: (result?.errors ?? []).map((error) => ({
         source: SOURCE_LABEL[error.source],
         message: error.message

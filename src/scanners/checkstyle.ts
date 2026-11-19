@@ -72,15 +72,24 @@ const RULE_SEVERITY: Record<string, Severity> = {
   IllegalImport: 'high'
 };
 
-export function resolveConfig(root: string, configured: string): string | undefined {
+/**
+ * 解析规则文件：显式配置 > 项目内常见位置 > 扩展内置默认规则。
+ * 内置兜底保证没有任何配置的 Java 项目也能立即出结果，不会因缺规则文件被跳过。
+ */
+export function resolveConfig(root: string, configured: string, bundled: string): string | undefined {
   const candidates = configured
     ? [path.isAbsolute(configured) ? configured : path.join(root, configured)]
     : [
         path.join(root, '.githooks', 'checkstyle-config.xml'),
         path.join(root, 'checkstyle.xml'),
-        path.join(root, 'config', 'checkstyle', 'checkstyle.xml')
+        path.join(root, 'config', 'checkstyle', 'checkstyle.xml'),
+        path.join(root, 'src', 'main', 'resources', 'checkstyle.xml')
       ];
-  return candidates.find((file) => fs.existsSync(file));
+  const found = candidates.find((file) => fs.existsSync(file));
+  if (found) {
+    return found;
+  }
+  return fs.existsSync(bundled) ? bundled : undefined;
 }
 
 export async function scanCheckstyle(

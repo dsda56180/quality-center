@@ -11,11 +11,19 @@ export interface SnapshotIssue {
   fixable: boolean;
 }
 
+export interface SnapshotSuggestion {
+  category: string;
+  title: string;
+  detail: string;
+  impact: number;
+}
+
 export interface Snapshot {
   type: 'state';
   scanning: boolean;
   finishedAt: number | null;
   issues: SnapshotIssue[];
+  suggestions: SnapshotSuggestion[];
   errors: { source: string; message: string }[];
   skipped: { source: string; reason: string }[];
   agentFile?: string;
@@ -127,6 +135,25 @@ export function getHtml(nonce: string): string {
   .msg { margin-top: 2px; line-height: 1.45; word-break: break-word; }
   .empty, .hint { color: var(--vscode-descriptionForeground); padding: 8px 0; line-height: 1.6; }
   .notice { margin-top: 8px; font-size: 11px; color: var(--vscode-descriptionForeground); line-height: 1.6; }
+  .sug {
+    padding: 8px 10px; margin-bottom: 8px; border-radius: 4px;
+    background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.08));
+    border-left: 3px solid var(--vscode-focusBorder, #007acc);
+  }
+  .sug-head { display: flex; gap: 6px; align-items: baseline; }
+  .sug-tag {
+    flex: none; font-size: 10px; padding: 0 5px; border-radius: 8px;
+    background: rgba(58,141,219,.18); color: #4a9fe0;
+  }
+  .sug-title { font-weight: 600; line-height: 1.4; }
+  .sug-detail { margin-top: 4px; line-height: 1.55; color: var(--vscode-descriptionForeground); }
+  .sug-actions { margin-top: 6px; }
+  .copy-sug {
+    flex: none; padding: 1px 6px; font-size: 10px;
+    background: transparent; color: var(--vscode-textLink-foreground);
+    border: 1px solid var(--vscode-panel-border); border-radius: 3px;
+  }
+  .copy-sug:hover { background: var(--vscode-list-hoverBackground); }
 </style>
 </head>
 <body>
@@ -141,6 +168,7 @@ export function getHtml(nonce: string): string {
     <button class="tab" data-tab="checkstyle">代码质量</button>
     <button class="tab" data-tab="gitleaks">密钥泄露</button>
     <button class="tab" data-tab="trivy">依赖漏洞</button>
+    <button class="tab" data-tab="suggest">建议</button>
   </div>
   <input type="search" id="q" placeholder="搜索文件、规则或描述">
   <div id="notice" class="notice"></div>
@@ -152,9 +180,10 @@ export function getHtml(nonce: string): string {
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const SRC_LABEL = { checkstyle: '代码质量', gitleaks: '密钥泄露', trivy: '依赖漏洞' };
+  const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, finishedAt: null, issues: [], errors: [], skipped: [] };
+  let state = { scanning: false, finishedAt: null, issues: [], suggestions: [], errors: [], skipped: [] };
   let activeTab = 'all';
   let query = '';
 
@@ -165,12 +194,16 @@ export function getHtml(nonce: string): string {
 
   function updateTabs() {
     const issues = state.issues || [];
+    const suggestions = state.suggestions || [];
     document.querySelectorAll('.tab').forEach(function (tab) {
       const key = tab.getAttribute('data-tab');
       const count = key === 'all'
         ? issues.length
-        : issues.filter(function (i) { return i.source === key; }).length;
-      tab.textContent = (key === 'all' ? '全部' : SRC_LABEL[key]) + ' ' + count;
+        : (key === 'suggest'
+            ? suggestions.length
+            : issues.filter(function (i) { return i.source === key; }).length);
+      const label = key === 'all' ? '全部' : (key === 'suggest' ? '修复建议' : SRC_LABEL[key]);
+      tab.textContent = label + ' ' + count;
       tab.classList.toggle('active', activeTab === key);
     });
   }
@@ -202,6 +235,18 @@ export function getHtml(nonce: string): string {
       list.innerHTML = '<div class="empty">正在运行 Checkstyle / Gitleaks / Trivy…</div>';
     } else if (!state.finishedAt) {
       list.innerHTML = '<div class="empty">点击「重新扫描」开始</div>';
+    } else if (activeTab === 'suggest') {
+      const suggestions = state.suggestions || [];
+      list.innerHTML = suggestions.length
+        ? suggestions.map(function (s, i) {
+            return '<div class="sug">'
+              + '<div class="sug-head"><span class="sug-tag">' + (SUG_LABEL[s.category] || esc(s.category)) + '</span>'
+              + '<span class="sug-title">' + esc(s.title) + '</span></div>'
+              + '<div class="sug-detail">' + esc(s.detail) + '</div>'
+              + '<div class="sug-actions"><button class="copy-sug" data-sug="' + (i + 1) + '">复制建议</button>'
+              + '<span class="sug-impact"> 可覆盖 ' + s.impact + ' 项问题</span></div></div>';
+          }).join('')
+        : '<div class="empty">暂无可推导的修复建议</div>';
     } else {
       const filtered = (state.issues || []).filter(function (issue) {
         if (activeTab !== 'all' && issue.source !== activeTab) return false;
@@ -279,6 +324,11 @@ export function getHtml(nonce: string): string {
     vscode.postMessage({ type: 'fixAll' });
   });
   document.getElementById('list').addEventListener('click', function (e) {
+    if (e.target.classList && e.target.classList.contains('copy-sug')) {
+      vscode.postMessage({ type: 'copySuggestion', id: Number(e.target.getAttribute('data-sug')) });
+      e.stopPropagation();
+      return;
+    }
     if (e.target.classList && e.target.classList.contains('fix-one')) {
       vscode.postMessage({ type: 'fixIssue', id: Number(e.target.getAttribute('data-fix')) });
       e.stopPropagation();

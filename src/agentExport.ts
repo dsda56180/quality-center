@@ -57,6 +57,7 @@ export function exportForAgent(root: string, result: ScanResult): AgentExport {
     generatedAt: new Date(result.finishedAt).toISOString(),
     projectRoot: root,
     summary: summarize(result.issues),
+    suggestions: result.suggestions,
     errors: result.errors,
     skipped: result.skipped,
     issues
