@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2
+
+- 修复展开详情抢占点击跳转的问题：点击条目恢复跳转到对应代码行，详情改由「详情」按钮展开
+- CVE 条目没有代码位置，点击条目仍直接展开详情
+
 ## 0.4.1
 
 - 代码质量问题补充中文说明与修复建议（覆盖 UnusedImports、ModifierOrder、SimplifyBooleanExpression 等常用规则，并对常见英文消息做中文替换）

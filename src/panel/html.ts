@@ -130,12 +130,12 @@ export function getHtml(nonce: string): string {
   .item .head { display: flex; gap: 6px; align-items: baseline; }
   .sev { font-size: 10px; padding: 0 5px; border-radius: 8px; flex: none; }
   .rule { font-family: var(--vscode-editor-font-family); font-size: 11px; opacity: .85; }
-  .copy-one, .fix-one {
+  .copy-one, .fix-one, .detail-toggle {
     flex: none; padding: 1px 6px; font-size: 10px;
     background: transparent; color: var(--vscode-textLink-foreground);
     border: 1px solid var(--vscode-panel-border); border-radius: 3px;
   }
-  .copy-one:hover, .fix-one:hover { background: var(--vscode-list-hoverBackground); }
+  .copy-one:hover, .fix-one:hover, .detail-toggle:hover { background: var(--vscode-list-hoverBackground); }
   .actions { margin-left: auto; display: flex; gap: 4px; flex: none; }
   .fixbar {
     display: flex; align-items: center; gap: 8px;
@@ -387,11 +387,12 @@ export function getHtml(nonce: string): string {
               + '<span class="rule">' + esc(issue.rule) + '</span>'
               + '<span class="actions">'
               + (issue.fixable ? '<button class="fix-one" data-fix="' + issue.id + '">修复</button>' : '')
+              + (issue.zhSummary ? '<button class="detail-toggle" data-detail="' + issue.id + '">详情</button>' : '')
               + '<button class="copy-one" data-copy="' + issue.id + '">复制</button>'
               + '</span></div>'
               + '<div class="msg' + (issue.zhSummary ? ' clamp' : '') + '">' + esc(text) + '</div>'
               + '<div class="loc">' + loc + '</div>'
-              + (issue.zhSummary ? '<div class="more">点击查看详情与修复建议 ▸</div>' : '')
+              + (issue.zhSummary && !issue.abs ? '<div class="more">点击查看详情与修复建议 ▸</div>' : '')
               + '<div class="detail" id="d-' + issue.id + '"></div>'
               + '</div>';
           }).join('');
@@ -470,6 +471,16 @@ export function getHtml(nonce: string): string {
       e.stopPropagation();
       return;
     }
+    if (e.target.classList && e.target.classList.contains('detail-toggle')) {
+      const target = e.target.closest('.item');
+      const detailId = Number(e.target.getAttribute('data-detail')) || 0;
+      const detailIssue = (state.issues || []).filter(function (i) { return i.id === detailId; })[0];
+      if (target && detailIssue) {
+        toggleDetail(target, detailIssue);
+      }
+      e.stopPropagation();
+      return;
+    }
     if (e.target.classList && e.target.classList.contains('link-one')) {
       const url = e.target.getAttribute('data-url');
       if (url) {
@@ -482,13 +493,14 @@ export function getHtml(nonce: string): string {
     if (!node) return;
     const id = Number(node.getAttribute('data-id')) || 0;
     const issue = (state.issues || []).filter(function (i) { return i.id === id; })[0];
-    if (issue && issue.zhSummary) {
-      toggleDetail(node, issue);
-      return;
-    }
     const abs = node.getAttribute('data-abs');
     const line = Number(node.getAttribute('data-line')) || 0;
     const link = node.getAttribute('data-link');
+    if (!abs && !link && issue && issue.zhSummary) {
+      // 没有代码位置可跳转（如 CVE），点击条目展开详情
+      toggleDetail(node, issue);
+      return;
+    }
     if (abs) {
       vscode.postMessage({ type: 'open', file: abs, line: line });
     } else if (link) {
