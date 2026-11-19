@@ -79,6 +79,58 @@ export function getHtml(nonce: string): string {
     border-radius: 4px;
     background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.1));
   }
+  .catbar { display: none; margin: 0 0 10px; }
+  .catbar.on { display: block; }
+  .cat-stage { position: relative; height: 26px; }
+  .cat-track {
+    position: absolute; left: 0; right: 0; bottom: 2px; height: 9px;
+    border-radius: 9px; overflow: hidden;
+    background: var(--vscode-input-background, rgba(128,128,128,.15));
+    border: 1px solid var(--vscode-panel-border);
+  }
+  .cat-fill {
+    position: absolute; top: 0; bottom: 0; width: 38%;
+    border-radius: 9px; opacity: .55;
+    background: repeating-linear-gradient(115deg,
+      var(--vscode-progressBar-background, #3794ff) 0 8px,
+      transparent 8px 16px);
+    animation: catFill 1.1s linear infinite;
+  }
+  .cat-runner {
+    position: absolute; bottom: 6px; left: -34px;
+    font-size: 19px; line-height: 1;
+    animation: catRun 2.8s linear infinite;
+    pointer-events: none;
+  }
+  .cat-runner .cat {
+    display: inline-block;
+    animation: catBob .28s ease-in-out infinite alternate;
+    filter: drop-shadow(0 1px 1px rgba(0,0,0,.25));
+  }
+  .cat-tip {
+    display: block; margin-top: 2px;
+    font-size: 10px; color: var(--vscode-descriptionForeground);
+  }
+  .cat-tip::after { content: ''; animation: catDots 1.4s steps(4, end) infinite; }
+  @keyframes catRun {
+    from { left: -34px; }
+    to { left: calc(100% + 4px); }
+  }
+  @keyframes catBob {
+    from { transform: translateY(0) scaleX(-1); }
+    to { transform: translateY(-4px) scaleX(-1) rotate(-4deg); }
+  }
+  @keyframes catFill {
+    from { left: -40%; }
+    to { left: 100%; }
+  }
+  @keyframes catDots {
+    0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cat-runner, .cat-runner .cat, .cat-fill, .cat-tip::after { animation: none; }
+    .cat-runner { left: 45%; }
+  }
   .ai-link {
     margin-left: auto; flex: none; padding: 1px 8px;
     font-size: 10px; border-radius: 10px;
@@ -210,6 +262,13 @@ export function getHtml(nonce: string): string {
     <button id="copy" class="secondary">复制给 AI</button>
     <button id="save" class="secondary">导出报告</button>
   </div>
+  <div id="catbar" class="catbar">
+    <div class="cat-stage">
+      <div class="cat-track"><div class="cat-fill"></div></div>
+      <div class="cat-runner"><span class="cat">🐈</span></div>
+    </div>
+    <span class="cat-tip">猫咪正在奔跑检查代码</span>
+  </div>
   <div id="summary" class="summary"><span class="hint">尚未扫描</span></div>
   <div class="tabs" id="tabs">
     <button class="tab active" data-tab="all">全部</button>
@@ -326,6 +385,7 @@ export function getHtml(nonce: string): string {
 
   function render() {
     updateTabs();
+    document.getElementById('catbar').classList.toggle('on', !!state.scanning);
     const sum = document.getElementById('summary');
     if (!state.finishedAt) {
       sum.innerHTML = '<span class="hint">' + (state.scanning ? '扫描中…' : '尚未扫描') + '</span>';
