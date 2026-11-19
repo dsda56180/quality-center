@@ -81,7 +81,11 @@ export function toMarkdown(result: ScanResult, root: string): string {
       lines.push(`### ${file}`);
       for (const issue of items) {
         const location = issue.line ? `第 ${issue.line} 行` : '';
-        lines.push(`- ${location}（${issue.rule}）：${issue.message}`);
+        const text = issue.zhSummary || issue.message;
+        lines.push(`- ${location}（${issue.rule}）：${text}`);
+        if (issue.advice) {
+          lines.push(`  - 修复建议：${issue.advice}`);
+        }
       }
       lines.push('');
     }

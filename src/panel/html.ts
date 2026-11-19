@@ -263,16 +263,24 @@ export function getHtml(nonce: string): string {
         : '';
     }
     var html = '';
-    html += row('漏洞编号', issue.rule);
-    html += row('影响组件', issue.packageName + ' ' + issue.installedVersion);
-    html += row('修复版本', issue.fixedVersion || '暂无');
-    if (issue.cvss) {
-      html += row('CVSS', String(issue.cvss) + ((issue.cwe || []).length ? '（' + issue.cwe.join(', ') + '）' : ''));
-    } else if ((issue.cwe || []).length) {
-      html += row('CWE', issue.cwe.join(', '));
-    }
-    if (issue.publishedAt) {
-      html += row('披露时间', issue.publishedAt);
+    if (issue.source === 'trivy') {
+      html += row('漏洞编号', issue.rule);
+      html += row('影响组件', issue.packageName + ' ' + issue.installedVersion);
+      html += row('修复版本', issue.fixedVersion || '暂无');
+      if (issue.cvss) {
+        html += row('CVSS', String(issue.cvss) + ((issue.cwe || []).length ? '（' + issue.cwe.join(', ') + '）' : ''));
+      } else if ((issue.cwe || []).length) {
+        html += row('CWE', issue.cwe.join(', '));
+      }
+      if (issue.publishedAt) {
+        html += row('披露时间', issue.publishedAt);
+      }
+    } else {
+      html += row('规则', issue.rule);
+      if (issue.title) {
+        html += row('类型', issue.title);
+      }
+      html += row('位置', (issue.file || '') + (issue.line ? ':' + issue.line : ''));
     }
     if (issue.zhSummary) {
       html += '<div class="d-sec">问题说明</div><div class="d-en">' + esc(issue.zhSummary) + '</div>';
@@ -280,9 +288,11 @@ export function getHtml(nonce: string): string {
     if (issue.advice) {
       html += '<div class="d-sec">修复建议</div><div class="d-en">' + esc(issue.advice) + '</div>';
     }
-    if (issue.title || issue.description) {
+    if (issue.source === 'trivy' && (issue.title || issue.description)) {
       html += '<div class="d-sec">英文原文</div><div class="d-en">' + esc(issue.title || '')
         + (issue.description ? '<br/>' + esc(issue.description) : '') + '</div>';
+    } else if (issue.source !== 'trivy' && issue.message) {
+      html += '<div class="d-sec">原始信息</div><div class="d-en">' + esc(issue.message) + '</div>';
     }
     var links = '';
     if (issue.link) {
@@ -370,7 +380,7 @@ export function getHtml(nonce: string): string {
                   ? esc(issue.file) + (issue.line ? ':' + issue.line : '')
                   : '依赖清单');
             const linkAttr = issue.link ? ' data-link="' + esc(issue.link) + '"' : '';
-            const text = isCve && issue.zhSummary ? issue.zhSummary : issue.message;
+            const text = issue.zhSummary || issue.message;
             return '<div class="item" data-id="' + issue.id + '" data-abs="' + esc(issue.abs)
               + '" data-line="' + (issue.line || 0) + '"' + linkAttr + '>'
               + '<div class="head"><span class="sev c-' + issue.severity + '">' + SEV_LABEL[issue.severity] + '</span>'
@@ -379,9 +389,9 @@ export function getHtml(nonce: string): string {
               + (issue.fixable ? '<button class="fix-one" data-fix="' + issue.id + '">修复</button>' : '')
               + '<button class="copy-one" data-copy="' + issue.id + '">复制</button>'
               + '</span></div>'
-              + '<div class="msg' + (isCve ? ' clamp' : '') + '">' + esc(text) + '</div>'
+              + '<div class="msg' + (issue.zhSummary ? ' clamp' : '') + '">' + esc(text) + '</div>'
               + '<div class="loc">' + loc + '</div>'
-              + (isCve ? '<div class="more">点击查看详情与修复建议 ▸</div>' : '')
+              + (issue.zhSummary ? '<div class="more">点击查看详情与修复建议 ▸</div>' : '')
               + '<div class="detail" id="d-' + issue.id + '"></div>'
               + '</div>';
           }).join('');
@@ -472,7 +482,7 @@ export function getHtml(nonce: string): string {
     if (!node) return;
     const id = Number(node.getAttribute('data-id')) || 0;
     const issue = (state.issues || []).filter(function (i) { return i.id === id; })[0];
-    if (issue && issue.source === 'trivy' && issue.zhSummary) {
+    if (issue && issue.zhSummary) {
       toggleDetail(node, issue);
       return;
     }

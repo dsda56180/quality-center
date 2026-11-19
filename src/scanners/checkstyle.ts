@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Issue, Severity } from '../model';
 import { run } from '../exec';
+import { localizeCheckstyle } from '../zh';
 
 export interface CheckstyleResult {
   issues: Issue[];
@@ -141,15 +142,17 @@ export async function scanCheckstyle(
     while ((errorMatch = errorRe.exec(body)) !== null) {
       const attrs = parseAttributes(errorMatch[1]);
       const rule = ruleName(attrs.source);
-      issues.push({
-        source: 'checkstyle',
-        severity: RULE_SEVERITY[rule] ?? toSeverity(attrs.severity),
-        file: path.isAbsolute(fileName) ? fileName : path.join(root, fileName),
-        line: Number(attrs.line) || 1,
-        column: Number(attrs.column) || 1,
-        rule,
-        message: (attrs.message || '').trim()
-      });
+      issues.push(
+        localizeCheckstyle({
+          source: 'checkstyle',
+          severity: RULE_SEVERITY[rule] ?? toSeverity(attrs.severity),
+          file: path.isAbsolute(fileName) ? fileName : path.join(root, fileName),
+          line: Number(attrs.line) || 1,
+          column: Number(attrs.column) || 1,
+          rule,
+          message: (attrs.message || '').trim()
+        })
+      );
     }
   }
 

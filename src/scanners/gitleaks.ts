@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Issue } from '../model';
 import { resolveBinary, run } from '../exec';
+import { localizeGitleaks } from '../zh';
 
 export interface GitleaksResult {
   issues: Issue[];
@@ -79,7 +80,7 @@ export async function scanGitleaks(
 
   const issues = findings.map<Issue>((finding) => {
     const rel = finding.File || '';
-    return {
+    return localizeGitleaks({
       source: 'gitleaks',
       severity: 'high',
       file: rel ? path.resolve(root, rel) : undefined,
@@ -87,7 +88,7 @@ export async function scanGitleaks(
       column: finding.StartColumn || 1,
       rule: finding.RuleID || 'secret',
       message: finding.Description || '检测到疑似硬编码凭证'
-    };
+    });
   });
 
   return { issues };
