@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+- 深度修复不再要求工作区干净：检测到未提交改动时自动 `git stash --include-untracked` 备份，结束后恢复
+- 回滚只撤销本次修复改动，不会丢失用户未提交的代码；恢复冲突时改动仍保留在 stash 中
+- OpenRewrite 执行失败时自动撤销本次产生的改动并恢复备份
+
 ## 0.5.1
 
 - 新增 `openRewrite.recipeArtifacts`：通过 `-Drewrite.recipeArtifactCoordinates` 加载额外配方包（如 `rewrite-static-analysis`），仍无需修改项目 pom

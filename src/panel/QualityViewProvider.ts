@@ -191,12 +191,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
       void vscode.window.showErrorMessage('深度修复需要在 Git 仓库中运行，便于失败时回滚。');
       return;
     }
-    if (status.stdout.trim()) {
-      void vscode.window.showWarningMessage(
-        '工作区有未提交改动。请先提交或暂存，再执行深度修复——失败回滚会丢弃这些改动。'
-      );
-      return;
-    }
+    const dirtyCount = status.stdout.split(/\r?\n/).filter(Boolean).length;
 
     const recipes = config.get<string[]>('openRewrite.recipes', []);
     if (recipes.length === 0) {
@@ -211,12 +206,47 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
 
     const answer = await vscode.window.showWarningMessage(
       `将用 OpenRewrite 执行 ${recipes.length} 个配方：\n${recipes.join('\n')}\n\n` +
+        (dirtyCount > 0
+          ? `检测到 ${dirtyCount} 处未提交改动，执行前会自动 stash 备份，结束后恢复。\n`
+          : '') +
         '仅改写源码结构，不改变业务行为。完成后自动校验编译，失败可回滚。是否继续？',
       { modal: true },
       '执行深度修复'
     );
     if (answer !== '执行深度修复') {
       return;
+    }
+
+    // 有未提交改动时先自动备份，回滚时只撤销本次修复，不影响用户代码
+    let stashed = false;
+    const restoreStash = async (): Promise<boolean> => {
+      if (!stashed) {
+        return true;
+      }
+      const pop = await run('git', ['stash', 'pop', '--index'], root, 120_000);
+      if (pop.code !== 0) {
+        void vscode.window.showErrorMessage(
+          '恢复未提交改动时发生冲突。你的改动仍保存在 git stash 中（可用 git stash list 查看），请手动处理。'
+        );
+        return false;
+      }
+      stashed = false;
+      return true;
+    };
+
+    if (dirtyCount > 0) {
+      const stash = await run(
+        'git',
+        ['stash', 'push', '--include-untracked', '-m', `quality-center-backup-${Date.now()}`],
+        root,
+        120_000
+      );
+      if (stash.code !== 0) {
+        const tail = (stash.stderr || stash.stdout).split(/\r?\n/).filter(Boolean).slice(-6).join('\n');
+        void vscode.window.showErrorMessage(`自动备份未提交改动失败，已取消深度修复：\n${tail}`);
+        return;
+      }
+      stashed = true;
     }
 
     const outcome = await vscode.window.withProgress(
@@ -240,13 +270,16 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
         .filter(Boolean)
         .slice(-6)
         .join('\n');
-      void vscode.window.showErrorMessage(`深度修复失败：\n${tail}`);
+      await run('git', ['checkout', '--', '.'], root, 60_000);
+      await restoreStash();
+      void vscode.window.showErrorMessage(`深度修复失败，已撤销本次改动：\n${tail}`);
       return;
     }
 
     const changed = await run('git', ['status', '--porcelain'], root, 30_000);
     const changedCount = changed.stdout.split(/\r?\n/).filter(Boolean).length;
     if (changedCount === 0) {
+      await restoreStash();
       void vscode.window.showInformationMessage('深度修复完成，没有需要改动的代码。');
       return;
     }
@@ -273,12 +306,18 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
         );
         if (revert === '立即回滚') {
           await run('git', ['checkout', '--', '.'], root, 60_000);
-          void vscode.window.showInformationMessage('已回滚到修复前的状态。');
+          await restoreStash();
+          void vscode.window.showInformationMessage('已回滚到修复前的状态，并恢复未提交的改动。');
+        } else {
+          await restoreStash();
         }
         return;
       }
     }
 
+    if (!(await restoreStash())) {
+      return;
+    }
     await this.scanAndPush();
     void vscode.window.showInformationMessage(`深度修复完成，共改动 ${changedCount} 个文件。`);
   }

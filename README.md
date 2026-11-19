@@ -174,11 +174,13 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 面板工具栏点「深度修复」后：
 
-1. 校验工作区无未提交改动（避免回滚时丢失你的代码）；
+1. 检测未提交改动；若有，自动执行 `git stash push --include-untracked` 备份，结束后自动恢复，不需要你先提交代码；
 2. 用全限定坐标调用 `rewrite-maven-plugin`，**不修改项目 pom**；
 3. 执行配置中的配方白名单；
-4. 自动运行 `mvn -DskipTests compile` 门禁，失败时弹窗询问是否执行 `git checkout -- .` 回滚；
-5. 成功后自动复扫。
+4. 自动运行 `mvn -DskipTests compile` 门禁，失败时弹窗询问是否执行 `git checkout -- .` 回滚（只撤销本次修复，不会碰你已备份的改动）；
+5. 恢复未提交改动后自动复扫。
+
+如果恢复时与修复改动冲突，你的原始改动仍完整保存在 `git stash` 中，可用 `git stash list` 查看并手动处理。
 
 默认白名单仅含 `org.openrewrite.java.RemoveUnusedImports`，可在设置中追加。
 
