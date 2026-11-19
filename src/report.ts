@@ -62,7 +62,7 @@ export function toMarkdown(result: ScanResult, root: string): string {
     lines.push('');
   }
 
-  for (const source of ['gitleaks', 'checkstyle'] as const) {
+  for (const source of ['gitleaks', 'checkstyle', 'spotbugs'] as const) {
     const group = result.issues.filter((issue) => issue.source === source);
     if (group.length === 0) {
       continue;

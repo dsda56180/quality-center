@@ -1,4 +1,4 @@
-export type IssueSource = 'checkstyle' | 'gitleaks' | 'trivy';
+export type IssueSource = 'checkstyle' | 'gitleaks' | 'trivy' | 'spotbugs';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
@@ -29,6 +29,8 @@ export interface Issue {
   cwe?: string[];
   references?: string[];
   publishedAt?: string;
+  /** SpotBugs 缺陷类别，例如 SECURITY / CORRECTNESS */
+  category?: string;
 }
 
 export interface ScanError {
@@ -63,7 +65,8 @@ export interface ScanResult {
 export const SOURCE_LABEL: Record<IssueSource, string> = {
   checkstyle: '代码质量',
   gitleaks: '密钥泄露',
-  trivy: '依赖漏洞'
+  trivy: '依赖漏洞',
+  spotbugs: '静态缺陷'
 };
 
 export const SEVERITY_LABEL: Record<Severity, string> = {

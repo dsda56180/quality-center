@@ -21,7 +21,7 @@ function summarize(issues: Issue[]): Record<string, number> {
   for (const severity of SEVERITY_ORDER) {
     summary[severity] = issues.filter((issue) => issue.severity === severity).length;
   }
-  for (const source of ['checkstyle', 'gitleaks', 'trivy'] as const) {
+  for (const source of ['checkstyle', 'gitleaks', 'trivy', 'spotbugs'] as const) {
     summary[source] = issues.filter((issue) => issue.source === source).length;
   }
   return summary;
@@ -56,7 +56,8 @@ export function exportForAgent(root: string, result: ScanResult): AgentExport {
     title: issue.title ?? '',
     cvss: issue.cvss ?? 0,
     cwe: issue.cwe ?? [],
-    publishedAt: issue.publishedAt ?? ''
+    publishedAt: issue.publishedAt ?? '',
+    category: issue.category ?? ''
   }));
 
   const payload = {

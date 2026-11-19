@@ -1,8 +1,8 @@
 {
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
-  "description": "聚合代码质量、密钥泄露与依赖漏洞(CVE)的统一面板，支持一键导出给 AI 修复",
-  "version": "0.8.0",
+  "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)与字节码级静态缺陷的统一面板，支持一键导出给 AI 修复",
+  "version": "0.9.0",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -16,6 +16,8 @@
     "checkstyle",
     "gitleaks",
     "trivy",
+    "spotbugs",
+    "findsecbugs",
     "cve",
     "security",
     "quality"
@@ -151,6 +153,11 @@
           "type": "boolean",
           "default": true,
           "description": "只显示有修复版本的 CVE（无修复版本的通常只能等待上游，默认隐藏）"
+        },
+        "qualityCenter.spotbugs.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用 SpotBugs + FindSecBugs 字节码级缺陷与安全检测（需要 target/classes，首次运行会下载分析器）"
         },
         "qualityCenter.openRewrite.enabled": {
           "type": "boolean",

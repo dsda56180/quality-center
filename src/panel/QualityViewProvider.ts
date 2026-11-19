@@ -744,7 +744,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         cvss: issue.cvss ?? 0,
         cwe: issue.cwe ?? [],
         references: issue.references ?? [],
-        publishedAt: issue.publishedAt ?? ''
+        publishedAt: issue.publishedAt ?? '',
+        category: issue.category ?? ''
       };
     };
     const issues: SnapshotIssue[] = (result?.issues ?? []).map(toSnapshot);

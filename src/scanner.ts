@@ -6,6 +6,7 @@ import { addToBaseline, removeFromBaseline, splitByBaseline } from './baseline';
 import { Issue, ScanResult, SEVERITY_ORDER } from './model';
 import { resolveConfig, scanCheckstyle } from './scanners/checkstyle';
 import { scanGitleaks } from './scanners/gitleaks';
+import { scanSpotbugs } from './scanners/spotbugs';
 import { scanTrivy } from './scanners/trivy';
 import { buildSuggestions } from './suggest';
 
@@ -126,6 +127,26 @@ export class ScanRunner {
         );
       } else {
         skipped.push({ source: 'trivy', reason: '已在设置中关闭' });
+      }
+
+      if (config.get<boolean>('spotbugs.enabled', true)) {
+        jobs.push(
+          scanSpotbugs(root).then((res) => {
+            if (res.needsBuild) {
+              skipped.push({ source: 'spotbugs', reason: '未找到 target/classes，需要先构建项目' });
+              buildHint =
+                buildHint ??
+                '未找到编译产物，字节码级静态缺陷扫描（SpotBugs）已跳过。点击「构建并扫描」执行 mvn package 后可获得完整结果。';
+              return;
+            }
+            issues.push(...res.issues);
+            if (res.error) {
+              errors.push({ source: 'spotbugs', message: res.error });
+            }
+          })
+        );
+      } else {
+        skipped.push({ source: 'spotbugs', reason: '已在设置中关闭' });
       }
 
       await Promise.all(jobs);

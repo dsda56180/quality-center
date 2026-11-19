@@ -247,5 +247,24 @@ export function buildSuggestions(root: string, result: ScanResult): Suggestion[]
     });
   }
 
+  const defects = result.issues.filter((issue) => issue.source === 'spotbugs');
+  if (defects.length > 0) {
+    const security = defects.filter((issue) => issue.category === 'SECURITY');
+    const high = defects.filter(
+      (issue) => issue.severity === 'critical' || issue.severity === 'high'
+    );
+    suggestions.push({
+      category: 'manual',
+      title: `处理 ${defects.length} 项字节码级静态缺陷`,
+      detail:
+        (security.length > 0
+          ? `其中 ${security.length} 项被 FindSecBugs 判定为安全风险（${cveSummary(security)}）。`
+          : '') +
+        (high.length > 0 ? `高危及以上 ${high.length} 项，建议优先处理。` : '') +
+        '这类问题需要看调用上下文，可在「静态缺陷」页逐条复制给 AI 修复，修复后重新编译再扫描确认。',
+      impact: defects.length
+    });
+  }
+
   return suggestions.sort((a, b) => b.impact - a.impact);
 }

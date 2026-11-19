@@ -21,6 +21,7 @@ export interface SnapshotIssue {
   cwe: string[];
   references: string[];
   publishedAt: string;
+  category: string;
 }
 
 export interface SnapshotSuggestion {
@@ -279,6 +280,7 @@ export function getHtml(nonce: string): string {
     <button class="tab" data-tab="checkstyle">代码质量</button>
     <button class="tab" data-tab="gitleaks">密钥泄露</button>
     <button class="tab" data-tab="trivy">依赖漏洞</button>
+    <button class="tab" data-tab="spotbugs">静态缺陷</button>
     <button class="tab" data-tab="ignored">已忽略</button>
     <button class="tab" data-tab="suggest">建议</button>
   </div>
@@ -295,7 +297,16 @@ export function getHtml(nonce: string): string {
   <div id="list"><div class="empty">点击「重新扫描」开始</div></div>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
-  const SRC_LABEL = { checkstyle: '代码质量', gitleaks: '密钥泄露', trivy: '依赖漏洞' };
+  const SRC_LABEL = { checkstyle: '代码质量', gitleaks: '密钥泄露', trivy: '依赖漏洞', spotbugs: '静态缺陷' };
+  const CAT_LABEL = {
+    SECURITY: '安全漏洞',
+    CORRECTNESS: '逻辑正确性',
+    MALICIOUS_CODE: '可变对象暴露',
+    BAD_PRACTICE: '不良实践',
+    PERFORMANCE: '性能问题',
+    STYLE: '可疑代码',
+    I18N: '国际化'
+  };
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
@@ -353,6 +364,12 @@ export function getHtml(nonce: string): string {
       html += row('规则', issue.rule);
       if (issue.title) {
         html += row('类型', issue.title);
+      }
+      if (issue.category) {
+        html += row('类别', CAT_LABEL[issue.category] || issue.category);
+      }
+      if ((issue.cwe || []).length) {
+        html += row('CWE', issue.cwe.join(', '));
       }
       html += row('位置', (issue.file || '') + (issue.line ? ':' + issue.line : ''));
     }
@@ -461,7 +478,7 @@ export function getHtml(nonce: string): string {
     if (deep && !state.finishedAt) {
       list.innerHTML = '<div class="empty">深度修复进行中：' + esc(deep.stage) + '</div>';
     } else if (state.scanning && !state.finishedAt) {
-      list.innerHTML = '<div class="empty">正在运行 Checkstyle / Gitleaks / Trivy…</div>';
+      list.innerHTML = '<div class="empty">正在运行 Checkstyle / Gitleaks / Trivy / SpotBugs…</div>';
     } else if (!state.finishedAt) {
       list.innerHTML = '<div class="empty">点击「重新扫描」开始</div>';
     } else if (activeTab === 'suggest') {
@@ -492,7 +509,7 @@ export function getHtml(nonce: string): string {
               : '')
           + '</div>';
       } else {
-        list.innerHTML = ['checkstyle', 'gitleaks', 'trivy'].map(function (source) {
+        list.innerHTML = ['checkstyle', 'gitleaks', 'spotbugs', 'trivy'].map(function (source) {
           const group = filtered.filter(function (i) { return i.source === source; });
           if (!group.length) return '';
           const items = group.map(function (issue) {

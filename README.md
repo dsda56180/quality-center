@@ -1,16 +1,17 @@
 # Quality Center 质量中心
 
-把 **代码质量**、**密钥泄露**、**依赖漏洞（CVE）** 三类检查聚合到一个 IDE 侧边栏面板里，结果可一键复制给 AI 修复。
+把 **代码质量**、**密钥泄露**、**依赖漏洞（CVE）**、**字节码级静态缺陷** 四类检查聚合到一个 IDE 侧边栏面板里，结果可一键复制给 AI 修复。
 
 > 适用于所有基于 VS Code 内核的编辑器：VS Code、Cursor、Trae、VSCodium 等。
 > JetBrains IDEA 属于独立的插件体系，暂不适用（后续可考虑移植）。
 
 ## 功能
 
-- **一个面板看全部**：活动栏「质量中心」图标，汇总三类问题，按严重度排序
+- **一个面板看全部**：活动栏「质量中心」图标，汇总四类问题，按严重度排序
 - **代码质量**：调用 Maven Checkstyle 规则扫描 Java 项目
 - **密钥泄露**：调用 Gitleaks 检测硬编码的 API Key、Token、密码
 - **依赖漏洞**：调用 Trivy 扫描 pom.xml / jar，列出 CVE、受影响版本和修复版本
+- **静态缺陷**：调用 SpotBugs + FindSecBugs 分析编译后的字节码，发现空指针、资源泄漏、可变对象暴露以及 SQL 注入、命令注入、XSS、路径穿越等安全 sink
 - **零手动触发**：打开项目自动扫描，保存文件后自动增量扫描
 - **一键交付 AI**：面板「复制给 AI」生成结构化 Markdown，或「导出报告」保存为 `.md`
 - **单条复制**：每条问题右侧有「复制」按钮，只把这一条交给 AI
@@ -24,6 +25,7 @@
 | Checkstyle | JDK 8+、Maven | 项目自带即可 |
 | Gitleaks | `gitleaks` 可执行文件 | `winget install gitleaks.gitleaks` |
 | Trivy | `trivy` 可执行文件 | `winget install aquasecurity.trivy` |
+| SpotBugs | JDK、Maven、已编译的 `target/classes` | 首次运行自动从 Maven 仓库下载分析器与 FindSecBugs 插件 |
 
 缺失的工具会自动跳过，并在面板底部提示，不影响其他检查。
 
@@ -68,6 +70,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.trivy.javaDbRepository` | `""` | Java 依赖索引库 OCI 仓库，同上 |
 | `qualityCenter.trivy.minSeverity` | `low` | 低于该等级的 CVE 不显示（low/medium/high/critical） |
 | `qualityCenter.trivy.onlyFixed` | `true` | 只显示有修复版本的 CVE |
+| `qualityCenter.spotbugs.enabled` | `true` | 启用 SpotBugs + FindSecBugs 字节码检测 |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
 | `qualityCenter.openRewrite.recipes` | 清理无用导入 / `Objects.isNull` / 缩短全限定类名 | 允许执行的 OpenRewrite 配方白名单 |
 | `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标，如 `org.openrewrite.recipe:rewrite-static-analysis:2.10.0` |
@@ -109,6 +112,8 @@ code --install-extension dsda56180.quality-center
 
 配置缺失时自动兜底：项目没有 Checkstyle 配置就使用内置规则集；没有 `target` 目录时改用离线模式扫描源码，不联网、不触发仓库限流。
 
+SpotBugs 分析的是 `target/classes` 里的字节码，因此需要项目先构建过；没有编译产物时该板块自动跳过，并在面板提示点击「构建并扫描」。升级窗口内的字节码可能落后于源码，改完代码后建议先构建再扫描。
+
 ## 修复建议
 
 「修复建议」标签页不是逐条问题的罗列，而是从结果推导根因级行动方案：
@@ -147,12 +152,13 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 ## 代码质量与密钥的中文说明
 
-三个板块行为一致：列表显示中文摘要，点击展开详情（中文说明、修复建议、原始信息）。
+四个板块行为一致：列表显示中文摘要，点击展开详情（中文说明、修复建议、原始信息）。
 
 | 板块 | 中文来源 |
 | --- | --- |
 | 代码质量 | 内置规则字典 + 常见英文消息的中文替换，如 `Unused import - X` → `未使用的导入：X` |
 | 密钥泄露 | 规则字典覆盖 API Key、私钥、AWS/GitHub/GitLab Token、Slack Token、JWT、口令等，并给出轮换与迁移建议 |
+| 静态缺陷 | 按 SpotBugs 缺陷类型（空指针、资源泄漏、可变对象暴露、SQL/命令注入、XSS、路径穿越等）给出中文说明与修复建议，未收录类型回退到类别说明 |
 | 依赖漏洞 | CVSS 向量与依赖字段生成，见上一节 |
 
 未收录的规则会回退到通用说明，不会显示空白。
