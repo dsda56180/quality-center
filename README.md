@@ -70,6 +70,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.trivy.onlyFixed` | `true` | 只显示有修复版本的 CVE |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
 | `qualityCenter.openRewrite.recipes` | `["org.openrewrite.java.RemoveUnusedImports"]` | 允许执行的 OpenRewrite 配方白名单 |
+| `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标，如 `org.openrewrite.recipe:rewrite-static-analysis:2.10.0` |
 | `qualityCenter.openRewrite.pluginVersion` | `5.44.0` | `rewrite-maven-plugin` 版本 |
 | `qualityCenter.openRewrite.compileGate` | `true` | 修复后自动编译校验，失败提示回滚 |
 
@@ -179,7 +180,21 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 4. 自动运行 `mvn -DskipTests compile` 门禁，失败时弹窗询问是否执行 `git checkout -- .` 回滚；
 5. 成功后自动复扫。
 
-默认白名单仅含 `org.openrewrite.java.RemoveUnusedImports`，可在设置中追加。出于安全考虑，插件不会自动加载任意外部配方：默认类路径只带 `rewrite-java` 自带配方；`org.openrewrite.staticanalysis.*` 等进阶配方需要先在你的 pom 里为插件声明对应依赖，才会被识别。
+默认白名单仅含 `org.openrewrite.java.RemoveUnusedImports`，可在设置中追加。
+
+需要 `org.openrewrite.staticanalysis.*` 等进阶配方时，不必改项目 pom：把配方包坐标填进 `openRewrite.recipeArtifacts` 即可，插件会通过 `-Drewrite.recipeArtifactCoordinates` 临时加入类路径。例如：
+
+```json
+"qualityCenter.openRewrite.recipes": [
+  "org.openrewrite.java.RemoveUnusedImports",
+  "org.openrewrite.staticanalysis.SimplifyBooleanExpression"
+],
+"qualityCenter.openRewrite.recipeArtifacts": [
+  "org.openrewrite.recipe:rewrite-static-analysis:2.10.0"
+]
+```
+
+插件只执行白名单里明确列出的配方，不会自动加载任意来源的配方包。
 
 ## 发布
 

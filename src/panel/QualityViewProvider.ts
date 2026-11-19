@@ -204,6 +204,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     const version = config.get<string>('openRewrite.pluginVersion', '5.44.0');
+    const recipeArtifacts = config
+      .get<string[]>('openRewrite.recipeArtifacts', [])
+      .map((item) => item.trim())
+      .filter(Boolean);
 
     const answer = await vscode.window.showWarningMessage(
       `将用 OpenRewrite 执行 ${recipes.length} 个配方：\n${recipes.join('\n')}\n\n` +
@@ -221,18 +225,14 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
         title: '质量中心：OpenRewrite 深度修复中…',
         cancellable: false
       },
-      () =>
-        run(
-          'mvn',
-          [
-            '-B',
-            '-q',
-            `-Drewrite.activeRecipes=${recipes.join(',')}`,
-            `org.openrewrite.maven:rewrite-maven-plugin:${version}:run`
-          ],
-          root,
-          20 * 60_000
-        )
+      () => {
+        const args = ['-B', '-q', `-Drewrite.activeRecipes=${recipes.join(',')}`];
+        if (recipeArtifacts.length > 0) {
+          args.push(`-Drewrite.recipeArtifactCoordinates=${recipeArtifacts.join(',')}`);
+        }
+        args.push(`org.openrewrite.maven:rewrite-maven-plugin:${version}:run`);
+        return run('mvn', args, root, 20 * 60_000);
+      }
     );
     if (outcome.code !== 0) {
       const tail = (outcome.stderr || outcome.stdout)

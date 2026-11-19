@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露与依赖漏洞(CVE)的统一面板，支持一键导出给 AI 修复",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -161,7 +161,13 @@
           "type": "array",
           "items": { "type": "string" },
           "default": ["org.openrewrite.java.RemoveUnusedImports"],
-          "description": "允许运行的 OpenRewrite 配方白名单，仅支持 rewrite-maven-plugin 默认类路径自带的配方"
+          "description": "允许运行的 OpenRewrite 配方白名单"
+        },
+        "qualityCenter.openRewrite.recipeArtifacts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "额外配方包的 Maven 坐标，通过 -Drewrite.recipeArtifactCoordinates 传入，无需修改项目 pom。例如 org.openrewrite.recipe:rewrite-static-analysis:2.10.0"
         },
         "qualityCenter.openRewrite.pluginVersion": {
           "type": "string",

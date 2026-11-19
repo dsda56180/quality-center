@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- 新增 `openRewrite.recipeArtifacts`：通过 `-Drewrite.recipeArtifactCoordinates` 加载额外配方包（如 `rewrite-static-analysis`），仍无需修改项目 pom
+- 此前白名单只能使用 `rewrite-maven-plugin` 自带配方，现在可扩展到 OpenRewrite 静态分析配方库
+
 ## 0.5.0
 
 - 新增「深度修复」：调用 OpenRewrite 社区配方做编译级重构，默认执行 `org.openrewrite.java.RemoveUnusedImports`
