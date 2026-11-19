@@ -84,7 +84,7 @@ function isFrameworkPackage(packageName: string): boolean {
  * 选择升级目标版本：优先同一主次版本号（如 9.0.41 → 9.0.x 最新），
  * 避免跨大版本升级带来的破坏性变更；无同线版本时退到同主版本，最后才取全局最高。
  */
-function pickFixedVersion(installed: string, fixedValues: string[]): string {
+export function pickFixedVersion(installed: string, fixedValues: string[]): string {
   const all = [...new Set(
     fixedValues
       .flatMap((value) => value.split(','))

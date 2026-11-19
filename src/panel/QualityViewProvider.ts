@@ -9,6 +9,7 @@ import { Issue, SOURCE_LABEL } from '../model';
 import { detectProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
+import { applyUpgrade, planUpgrades, UpgradeCandidate } from '../upgrader';
 import { getHtml, Snapshot, SnapshotIssue } from './html';
 
 const RECIPE_LABELS: Record<string, string> = {
@@ -102,6 +103,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     line?: number;
     url?: string;
     id?: number;
+    pkg?: string;
   }): Promise<void> {
     switch (message.type) {
       case 'scan':
@@ -133,6 +135,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'deepFixRule':
         await this.deepFixRule(message.id ?? 0);
+        break;
+      case 'upgradeDeps':
+        await this.upgradeDependencies(message.pkg);
         break;
       case 'ignore':
         if (message.id && this.runner.ignoreIssue(message.id)) {
@@ -292,6 +297,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     let previewPatch: string | undefined;
     let previewSummary = '';
+    let previewFiles: string[] = [];
+    /** 用户勾选要应用改动的文件；undefined 表示全部应用 */
+    let selectedFiles: Set<string> | undefined;
     if (config.get<boolean>('openRewrite.dryRunPreview', true)) {
       this.deepFixState = { stage: '预演修复（不会改动代码）', startedAt: Date.now() };
       this.push();
@@ -305,6 +313,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         } else {
           previewPatch = preview.patchFile;
+          previewFiles = preview.files;
           const shown = preview.files.slice(0, 8);
           previewSummary =
             `预演结果：将改动 ${preview.files.length} 个文件：\n` +
@@ -315,6 +324,31 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       } finally {
         this.deepFixState = null;
         this.push();
+      }
+    }
+
+    // 预演拿到文件清单后，先让用户勾选要应用的文件；未勾选的执行后会恢复原样
+    if (previewFiles.length > 1) {
+      const picks = await vscode.window.showQuickPick(
+        previewFiles.map((file) => ({ label: file, picked: true })),
+        {
+          canPickMany: true,
+          title: '选择要应用修复的文件',
+          placeHolder: '取消勾选的文件会在修复后恢复为原样'
+        }
+      );
+      if (!picks) {
+        return;
+      }
+      if (picks.length === 0) {
+        void vscode.window.showInformationMessage('未选择任何文件，已取消深度修复。');
+        return;
+      }
+      if (picks.length < previewFiles.length) {
+        selectedFiles = new Set(picks.map((item) => item.label));
+        previewSummary =
+          `已选择 ${picks.length}/${previewFiles.length} 个文件应用改动，其余文件会恢复原样。\n\n` +
+          previewSummary;
       }
     }
 
@@ -511,6 +545,68 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
             changedFiles.add(file);
           }
         });
+      // 把未勾选的文件恢复到修复前快照，只保留用户选择的改动
+      if (selectedFiles) {
+        const trackedList = await run('git', ['ls-files'], root, 60_000);
+        const tracked = new Set(trackedList.stdout.split(/\r?\n/).filter(Boolean));
+        const toRestore: string[] = [];
+        const toDelete: string[] = [];
+        for (const file of changedFiles) {
+          if (selectedFiles.has(file)) {
+            continue;
+          }
+          if (tracked.has(file) || untrackedBefore.has(file)) {
+            toRestore.push(file);
+          } else {
+            toDelete.push(file);
+          }
+        }
+        if (toRestore.length > 0 || toDelete.length > 0) {
+          this.setDeepFixStage('恢复未选择的文件');
+          const trackedRestore = toRestore.filter((file) => tracked.has(file));
+          if (trackedRestore.length > 0) {
+            const checkout = await run('git', ['checkout', baseRef, '--', ...trackedRestore], root, 120_000);
+            if (checkout.code !== 0) {
+              this.log(`恢复未选择的文件失败：${(checkout.stderr || checkout.stdout).trim()}`);
+            }
+          }
+          for (const file of toRestore.filter((item) => !tracked.has(item))) {
+            const source = backup ? path.join(backup.dir, 'untracked', file) : '';
+            if (source && fs.existsSync(source)) {
+              fs.copyFileSync(source, path.join(root, file));
+            }
+          }
+          for (const file of toDelete) {
+            try {
+              fs.unlinkSync(path.join(root, file));
+            } catch {
+              // 文件可能已被配方删除，忽略
+            }
+          }
+          changedFiles.clear();
+          const diffAfter = await run('git', ['diff', '--name-only', baseRef], root, 30_000);
+          diffAfter.stdout
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .forEach((file) => changedFiles.add(file));
+          const othersAfterSelect = await run(
+            'git',
+            ['ls-files', '--others', '--exclude-standard'],
+            root,
+            60_000
+          );
+          othersAfterSelect.stdout
+            .split(/\r?\n/)
+            .filter(Boolean)
+            .forEach((file) => {
+              if (!untrackedBefore.has(file) && fs.existsSync(path.join(root, file))) {
+                changedFiles.add(file);
+              }
+            });
+          this.log(`已恢复 ${toRestore.length} 个未选择文件，删除 ${toDelete.length} 个新增文件`);
+        }
+      }
+
       const changedCount = changedFiles.size;
       if (changedCount === 0) {
         discardBackup();
@@ -565,6 +661,144 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     } finally {
       this.deepFixState = null;
       this.push();
+    }
+  }
+
+  /**
+   * CVE 一键升级：只改 pom 中显式声明版本的直接依赖，
+   * 升级后执行 mvn compile 门禁，失败自动还原 pom。
+   */
+  async upgradeDependencies(packageName?: string): Promise<void> {
+    const root = this.runner.root();
+    const result = this.runner.result;
+    if (!root || !result) {
+      void vscode.window.showInformationMessage('还没有扫描结果，请先执行扫描。');
+      return;
+    }
+    if (this.deepFixState) {
+      void vscode.window.showInformationMessage('当前有修复任务在执行，请稍后再试。');
+      return;
+    }
+
+    const plan = planUpgrades(root, result.issues);
+    if (plan.candidates.length === 0) {
+      const detail = plan.skipped.length
+        ? plan.skipped
+            .slice(0, 5)
+            .map((item) => `· ${item.packageName}：${item.reason}`)
+            .join('\n')
+        : '· 没有带修复版本的直接依赖漏洞';
+      void vscode.window.showInformationMessage(`没有可直接升级的依赖：\n${detail}`);
+      return;
+    }
+
+    let chosen: UpgradeCandidate[];
+    if (packageName) {
+      const matched = plan.candidates.find((item) => item.packageName === packageName);
+      if (!matched) {
+        const reason = plan.skipped.find((item) => item.packageName === packageName)?.reason;
+        void vscode.window.showInformationMessage(
+          `${packageName} 不在可自动升级范围${reason ? `：${reason}` : ''}。`
+        );
+        return;
+      }
+      chosen = [matched];
+    } else {
+      const picks = await vscode.window.showQuickPick(
+        plan.candidates.map((item) => ({
+          label: `${item.packageName}  ${item.from} → ${item.to}`,
+          description: `${item.cveCount} 条漏洞`,
+          picked: true,
+          candidate: item
+        })),
+        {
+          canPickMany: true,
+          title: '选择要升级的依赖（仅 pom 中显式声明版本的直接依赖）',
+          placeHolder: '默认全选，回车执行升级'
+        }
+      );
+      if (!picks || picks.length === 0) {
+        return;
+      }
+      chosen = picks.map((item) => item.candidate);
+    }
+
+    const lines = chosen
+      .map((item) => `· ${item.packageName} ${item.from} → ${item.to}（覆盖 ${item.cveCount} 条漏洞）`)
+      .join('\n');
+    const answer = await vscode.window.showWarningMessage(
+      `将修改 pom.xml，并执行 mvn -DskipTests compile 校验；编译失败会自动还原 pom。\n\n${lines}\n\n是否继续？`,
+      { modal: true },
+      '升级'
+    );
+    if (answer !== '升级') {
+      return;
+    }
+
+    const pomFile = path.join(root, 'pom.xml');
+    const openPom = vscode.workspace.textDocuments.find(
+      (document) => document.uri.fsPath.toLowerCase() === pomFile.toLowerCase()
+    );
+    if (openPom?.isDirty) {
+      void vscode.window.showWarningMessage('pom.xml 有未保存的修改，请先保存后再执行依赖升级。');
+      return;
+    }
+    const original = fs.readFileSync(pomFile, 'utf8');
+    let text = original;
+    for (const item of chosen) {
+      const next = applyUpgrade(text, item);
+      if (!next) {
+        void vscode.window.showErrorMessage(
+          `未在 pom.xml 中找到 ${item.packageName} ${item.from}，已取消本次升级。`
+        );
+        return;
+      }
+      text = next;
+    }
+
+    this.deepFixState = { stage: '升级依赖并校验编译', startedAt: Date.now() };
+    this.push();
+    this.log(`开始升级依赖：${chosen.map((item) => `${item.packageName} ${item.from}→${item.to}`).join(', ')}`);
+    let compiled = false;
+    try {
+      fs.writeFileSync(pomFile, text, 'utf8');
+      const build = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: '质量中心：升级依赖后校验编译…',
+          cancellable: false
+        },
+        () => run('mvn', ['-B', '-q', '-DskipTests', 'compile'], root, 20 * 60_000)
+      );
+      if (build.code !== 0) {
+        fs.writeFileSync(pomFile, original, 'utf8');
+        const tail = (build.stderr || build.stdout)
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .slice(-6)
+          .join('\n');
+        this.log(`依赖升级后编译失败，已还原 pom：\n${tail}`);
+        const pick = await vscode.window.showErrorMessage(
+          `依赖升级后编译失败，已还原 pom.xml：\n${tail}`,
+          '查看日志'
+        );
+        if (pick === '查看日志') {
+          this.output?.show(true);
+        }
+        return;
+      }
+      compiled = true;
+      this.log('依赖升级通过编译校验');
+    } finally {
+      this.deepFixState = null;
+      this.push();
+    }
+
+    if (compiled) {
+      await this.scanAndPush();
+      void vscode.window.showInformationMessage(
+        `已升级 ${chosen.length} 个依赖并通过编译校验，已重新扫描。`
+      );
     }
   }
 

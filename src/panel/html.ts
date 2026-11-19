@@ -264,6 +264,7 @@ export function getHtml(nonce: string): string {
   <div class="toolbar">
     <button id="scan">重新扫描</button>
     <button id="deepfix" class="secondary">深度修复</button>
+    <button id="upgrade" class="secondary">升级依赖</button>
     <button id="copy" class="secondary">复制给 AI</button>
     <button id="save" class="secondary">导出报告</button>
   </div>
@@ -386,6 +387,9 @@ export function getHtml(nonce: string): string {
       html += '<div class="d-sec">原始信息</div><div class="d-en">' + esc(issue.message) + '</div>';
     }
     var links = '';
+    if (issue.source === 'trivy' && issue.packageName && issue.fixedVersion) {
+      links += '<button class="link-one upgrade-one" data-upgrade="' + esc(issue.packageName) + '">升级此依赖</button>';
+    }
     if (issue.link) {
       links += '<button class="link-one" data-url="' + esc(issue.link) + '">打开漏洞库</button>';
     }
@@ -596,6 +600,9 @@ export function getHtml(nonce: string): string {
   document.getElementById('deepfix').addEventListener('click', function () {
     vscode.postMessage({ type: 'deepFix' });
   });
+  document.getElementById('upgrade').addEventListener('click', function () {
+    vscode.postMessage({ type: 'upgradeDeps' });
+  });
   document.getElementById('copy').addEventListener('click', function () {
     vscode.postMessage({ type: 'copy' });
   });
@@ -646,6 +653,11 @@ export function getHtml(nonce: string): string {
     }
     if (e.target.classList && e.target.classList.contains('rule-fix')) {
       vscode.postMessage({ type: 'deepFixRule', id: Number(e.target.getAttribute('data-rulefix')) });
+      e.stopPropagation();
+      return;
+    }
+    if (e.target.classList && e.target.classList.contains('upgrade-one')) {
+      vscode.postMessage({ type: 'upgradeDeps', pkg: e.target.getAttribute('data-upgrade') });
       e.stopPropagation();
       return;
     }
