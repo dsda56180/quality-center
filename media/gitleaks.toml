@@ -1,0 +1,13 @@
+# Quality Center 默认 Gitleaks 配置
+# 在默认规则基础上，排除构建产物与依赖目录，避免同一密钥被重复报告
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "忽略构建产物与依赖目录"
+paths = [
+  '''(?i)(^|[\\/])target[\\/]''',
+  '''(?i)(^|[\\/])node_modules[\\/]''',
+  '''(?i)(^|[\\/])\.git[\\/]''',
+]

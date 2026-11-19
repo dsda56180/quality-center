@@ -1,0 +1,156 @@
+{
+  "name": "quality-center",
+  "displayName": "Quality Center 质量中心",
+  "description": "聚合代码质量、密钥泄露与依赖漏洞(CVE)的统一面板，支持一键导出给 AI 修复",
+  "version": "0.2.0",
+  "publisher": "dongxin",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "checkstyle",
+    "gitleaks",
+    "trivy",
+    "cve",
+    "security",
+    "quality"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dsda56180/trae-quality-center"
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:qualityCenter.main"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "qualityCenter",
+          "title": "质量中心",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "qualityCenter": [
+        {
+          "id": "qualityCenter.main",
+          "name": "质量与安全",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "qualityCenter.scan",
+        "title": "质量中心：重新扫描"
+      },
+      {
+        "command": "qualityCenter.autoFix",
+        "title": "质量中心：自动修复可确定性问题"
+      },
+      {
+        "command": "qualityCenter.copyMarkdown",
+        "title": "质量中心：复制报告为 Markdown"
+      },
+      {
+        "command": "qualityCenter.writeReport",
+        "title": "质量中心：导出报告文件"
+      },
+      {
+        "command": "qualityCenter.openIssue",
+        "title": "质量中心：打开问题位置"
+      },
+      {
+        "command": "qualityCenter.openSettings",
+        "title": "质量中心：打开设置"
+      }
+    ],
+    "configuration": {
+      "title": "质量中心",
+      "properties": {
+        "qualityCenter.scanOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "打开项目后自动扫描一次"
+        },
+        "qualityCenter.scanOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "保存文件后自动增量触发扫描"
+        },
+        "qualityCenter.exportForAgent": {
+          "type": "boolean",
+          "default": true,
+          "description": "每轮扫描后把结果写入 .quality-center/issues.json 与 report.md，供 AI agent 直接读取"
+        },
+        "qualityCenter.checkstyle.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用 Checkstyle 代码质量扫描（需要 Maven 项目）"
+        },
+        "qualityCenter.checkstyle.config": {
+          "type": "string",
+          "default": "",
+          "description": "Checkstyle 规则文件路径，留空则依次尝试 .githooks/checkstyle-config.xml、checkstyle.xml"
+        },
+        "qualityCenter.gitleaks.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用 Gitleaks 密钥泄露扫描"
+        },
+        "qualityCenter.gitleaks.path": {
+          "type": "string",
+          "default": "",
+          "description": "gitleaks 可执行文件路径，留空则从 PATH 查找"
+        },
+        "qualityCenter.trivy.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用 Trivy 依赖漏洞(CVE)扫描"
+        },
+        "qualityCenter.trivy.path": {
+          "type": "string",
+          "default": "",
+          "description": "trivy 可执行文件路径，留空则从 PATH 查找"
+        },
+        "qualityCenter.trivy.scanTarget": {
+          "type": "string",
+          "default": "",
+          "description": "扫描目标路径，留空则自动：存在 target 目录时扫描构建产物（推荐），否则扫描项目根目录"
+        },
+        "qualityCenter.trivy.dbRepository": {
+          "type": "string",
+          "default": "",
+          "description": "漏洞库 OCI 仓库地址，留空使用官方源，失败时自动回退国内镜像"
+        },
+        "qualityCenter.trivy.javaDbRepository": {
+          "type": "string",
+          "default": "",
+          "description": "Java 依赖索引库 OCI 仓库地址，留空使用官方源，失败时自动回退国内镜像"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies",
+    "publish:ovsx": "ovsx publish --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^2.24.0",
+    "ovsx": "^0.9.0"
+  }
+}
