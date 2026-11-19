@@ -90,22 +90,27 @@ export function getHtml(nonce: string): string {
     border: 1px solid var(--vscode-panel-border);
   }
   .cat-fill {
-    position: absolute; top: 0; bottom: 0; width: 38%;
-    border-radius: 9px; opacity: .55;
-    background: repeating-linear-gradient(115deg,
-      var(--vscode-progressBar-background, #3794ff) 0 8px,
-      transparent 8px 16px);
-    animation: catFill 1.1s linear infinite;
+    position: absolute; top: 0; bottom: 0; width: 34%;
+    border-radius: 9px;
+    background: linear-gradient(90deg,
+      transparent 0%,
+      var(--vscode-progressBar-background, #3794ff) 30%,
+      #8fd3ff 50%,
+      var(--vscode-progressBar-background, #3794ff) 70%,
+      transparent 100%);
+    filter: blur(.3px);
+    animation: catFill 3.2s linear infinite;
   }
   .cat-runner {
-    position: absolute; bottom: 6px; left: -34px;
-    font-size: 19px; line-height: 1;
-    animation: catRun 2.8s linear infinite;
+    position: absolute; bottom: 6px; left: -24px;
+    font-size: 20px; line-height: 1;
+    animation: catRun 3.2s linear infinite;
+    will-change: left;
     pointer-events: none;
   }
   .cat-runner .cat {
     display: inline-block;
-    animation: catBob .28s ease-in-out infinite alternate;
+    animation: catBob .5s ease-in-out infinite alternate;
     filter: drop-shadow(0 1px 1px rgba(0,0,0,.25));
   }
   .cat-tip {
@@ -114,23 +119,19 @@ export function getHtml(nonce: string): string {
   }
   .cat-tip::after { content: ''; animation: catDots 1.4s steps(4, end) infinite; }
   @keyframes catRun {
-    from { left: -34px; }
-    to { left: calc(100% + 4px); }
+    from { left: -24px; }
+    to { left: calc(100% - 18px); }
   }
   @keyframes catBob {
-    from { transform: translateY(0) scaleX(-1); }
-    to { transform: translateY(-4px) scaleX(-1) rotate(-4deg); }
+    from { transform: translateY(0) rotate(-8deg); }
+    to { transform: translateY(-5px) rotate(8deg); }
   }
   @keyframes catFill {
-    from { left: -40%; }
+    from { left: -38%; }
     to { left: 100%; }
   }
   @keyframes catDots {
     0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .cat-runner, .cat-runner .cat, .cat-fill, .cat-tip::after { animation: none; }
-    .cat-runner { left: 45%; }
   }
   .ai-link {
     margin-left: auto; flex: none; padding: 1px 8px;
@@ -266,7 +267,7 @@ export function getHtml(nonce: string): string {
   <div id="catbar" class="catbar">
     <div class="cat-stage">
       <div class="cat-track"><div class="cat-fill"></div></div>
-      <div class="cat-runner"><span class="cat">🐈</span></div>
+      <div class="cat-runner"><span class="cat">🐱</span></div>
     </div>
     <span class="cat-tip" id="cattip">猫咪正在奔跑检查代码</span>
   </div>
