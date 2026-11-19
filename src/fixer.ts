@@ -1,9 +1,17 @@
 import * as vscode from 'vscode';
 import { Issue } from './model';
 import { reorderModifiers } from './modifiers';
+import { simplifyBooleanLine } from './booleans';
 
-/** 可确定性修复的规则：删导入、调整修饰符顺序 */
-export const FIXABLE_RULES = new Set(['UnusedImports', 'RedundantImport', 'ModifierOrder']);
+/** 可确定性修复的规则：删导入、调整修饰符顺序、简化布尔字面量比较 */
+export const FIXABLE_RULES = new Set([
+  'UnusedImports',
+  'RedundantImport',
+  'ModifierOrder',
+  'SimplifyBooleanExpression'
+]);
+
+const IDENT = '[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*';
 
 export interface FixOutcome {
   applied: number;
@@ -55,6 +63,15 @@ export async function applyAutoFixes(issues: Issue[]): Promise<FixOutcome> {
 
       if (issue.rule === 'ModifierOrder') {
         const fixed = reorderModifiers(text);
+        if (!fixed) {
+          outcome.skipped += 1;
+          continue;
+        }
+        edits.push(
+          vscode.TextEdit.replace(new vscode.Range(line, 0, line, text.length), fixed)
+        );
+      } else if (issue.rule === 'SimplifyBooleanExpression') {
+        const fixed = simplifyBooleanLine(text);
         if (!fixed) {
           outcome.skipped += 1;
           continue;

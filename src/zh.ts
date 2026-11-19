@@ -26,7 +26,7 @@ const CHECKSTYLE_ZH: Record<string, RuleText> = {
   SimplifyBooleanExpression: {
     name: '布尔表达式可简化',
     explain: '存在 x == true、!false 这类冗余布尔判断，逻辑绕且易读错。',
-    advice: '直接使用布尔变量或用 ! 取反，例如 if (flag)。建议确认上下文后手动修改或交给 AI。'
+    advice: '直接使用布尔变量或用 ! 取反，例如 if (flag)。面板的「一键修复」可自动改写这类字面量比较。'
   },
   EmptyStatement: {
     name: '空语句',

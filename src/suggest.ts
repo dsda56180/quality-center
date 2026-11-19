@@ -15,7 +15,12 @@ const FRAMEWORK_PREFIXES = [
 ];
 
 /** 能由插件直接改写的规则，其余需要语义判断 */
-const AUTO_FIXABLE_RULES = ['UnusedImports', 'RedundantImport', 'ModifierOrder'];
+const AUTO_FIXABLE_RULES = [
+  'UnusedImports',
+  'RedundantImport',
+  'ModifierOrder',
+  'SimplifyBooleanExpression'
+];
 
 function readPom(root: string): string {
   const file = path.join(root, 'pom.xml');

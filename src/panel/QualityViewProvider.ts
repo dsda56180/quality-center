@@ -198,7 +198,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider {
     }
     const fileCount = new Set(targets.map((item) => item.file)).size;
     const answer = await vscode.window.showWarningMessage(
-      `将自动修复 ${targets.length} 项（涉及 ${fileCount} 个文件）：删除无用/冗余导入、重排修饰符顺序。是否继续？`,
+      `将自动修复 ${targets.length} 项（涉及 ${fileCount} 个文件）：删除无用/冗余导入、重排修饰符顺序、简化布尔字面量比较。是否继续？`,
       { modal: true },
       '修复'
     );

@@ -434,7 +434,7 @@ export function getHtml(nonce: string): string {
     if (!state.scanning && fixable > 0) {
       bar.style.display = 'flex';
       document.getElementById('fixtip').textContent =
-        '可自动修复 ' + fixable + ' 项（无用导入 / 冗余导入 / 修饰符顺序）';
+        '可自动修复 ' + fixable + ' 项（无用导入 / 冗余导入 / 修饰符顺序 / 布尔表达式简化）';
     } else {
       bar.style.display = 'none';
     }

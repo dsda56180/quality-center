@@ -150,6 +150,18 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 未收录的规则会回退到通用说明，不会显示空白。
 
+## 一键修复
+
+面板会统计可确定性修复的问题，点击「一键修复」或单条「修复」即可改写：
+
+| 规则 | 修复动作 |
+| --- | --- |
+| `UnusedImports` / `RedundantImport` | 删除对应 import 行 |
+| `ModifierOrder` | 按 Java 规范重排修饰符 |
+| `SimplifyBooleanExpression` | `false == x` → `!x`、`x != true` → `!x` 等等价改写 |
+
+含字符串字面量或注释的行会保守跳过；修完自动重新扫描。
+
 ## 发布
 
 推 tag 并创建 GitHub Release 后，CI 会自动构建并发布到 Open VSX：
