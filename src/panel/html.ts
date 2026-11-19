@@ -43,6 +43,7 @@ export interface Snapshot {
   skipped: { source: string; reason: string }[];
   agentFile?: string;
   buildHint?: string;
+  upgradeEnabled?: boolean;
 }
 
 export function getHtml(nonce: string): string {
@@ -311,7 +312,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, deepFix: null, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [] };
+  let state = { scanning: false, deepFix: null, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true };
   let activeTab = 'all';
   let severityFilter = [];
   let query = '';
@@ -387,7 +388,7 @@ export function getHtml(nonce: string): string {
       html += '<div class="d-sec">原始信息</div><div class="d-en">' + esc(issue.message) + '</div>';
     }
     var links = '';
-    if (issue.source === 'trivy' && issue.packageName && issue.fixedVersion) {
+    if (issue.source === 'trivy' && issue.packageName && issue.fixedVersion && state.upgradeEnabled !== false) {
       links += '<button class="link-one upgrade-one" data-upgrade="' + esc(issue.packageName) + '">升级此依赖</button>';
     }
     if (issue.link) {
@@ -437,6 +438,10 @@ export function getHtml(nonce: string): string {
 
   function render() {
     updateTabs();
+    var upgradeBtn = document.getElementById('upgrade');
+    if (upgradeBtn) {
+      upgradeBtn.style.display = state.upgradeEnabled === false ? 'none' : '';
+    }
     var deep = state.deepFix;
     document.getElementById('catbar').classList.toggle('on', !!state.scanning || !!deep);
     document.getElementById('cattip').textContent = catTipText();

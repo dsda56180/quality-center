@@ -72,12 +72,14 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.trivy.minSeverity` | `low` | 低于该等级的 CVE 不显示（low/medium/high/critical） |
 | `qualityCenter.trivy.onlyFixed` | `true` | 只显示有修复版本的 CVE |
 | `qualityCenter.spotbugs.enabled` | `true` | 启用 SpotBugs + FindSecBugs 字节码检测 |
+| `qualityCenter.dependencyUpgrade.enabled` | `true` | 显示「升级依赖」按钮，允许一键改写 pom 版本 |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
 | `qualityCenter.openRewrite.recipes` | 清理无用导入 / `Objects.isNull` / 缩短全限定类名 | 允许执行的 OpenRewrite 配方白名单 |
 | `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标，如 `org.openrewrite.recipe:rewrite-static-analysis:2.10.0` |
 | `qualityCenter.openRewrite.pluginVersion` | `5.44.0` | `rewrite-maven-plugin` 版本 |
 | `qualityCenter.openRewrite.compileGate` | `true` | 修复后自动编译校验，失败提示回滚 |
 | `qualityCenter.openRewrite.dryRunPreview` | `true` | 执行前先 dry-run 预演，展示将改动的文件并支持查看补丁 |
+| `qualityCenter.openRewrite.fileSelection` | `true` | 预演后弹出文件勾选，仅应用勾选文件的改动 |
 
 另外支持在项目根目录放置 `.trivyignore` 文件忽略指定 CVE（Trivy 原生格式，每行一个 CVE 编号）。
 

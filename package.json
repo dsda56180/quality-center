@@ -159,6 +159,11 @@
           "default": true,
           "description": "启用 SpotBugs + FindSecBugs 字节码级缺陷与安全检测（需要 target/classes，首次运行会下载分析器）"
         },
+        "qualityCenter.dependencyUpgrade.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "在工具栏显示「升级依赖」，允许把 CVE 修复版本写回 pom（升级后自动编译校验，失败自动还原）"
+        },
         "qualityCenter.openRewrite.enabled": {
           "type": "boolean",
           "default": true,
@@ -194,6 +199,11 @@
           "type": "boolean",
           "default": true,
           "description": "深度修复前先 dry-run 预演，展示将改动的文件（会增加一次配方运行时间）"
+        },
+        "qualityCenter.openRewrite.fileSelection": {
+          "type": "boolean",
+          "default": true,
+          "description": "预演后弹出文件勾选，仅应用勾选文件的改动；关闭后直接应用全部文件"
         }
       }
     }

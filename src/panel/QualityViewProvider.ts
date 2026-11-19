@@ -328,7 +328,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
 
     // 预演拿到文件清单后，先让用户勾选要应用的文件；未勾选的执行后会恢复原样
-    if (previewFiles.length > 1) {
+    if (
+      previewFiles.length > 1 &&
+      vscode.workspace.getConfiguration('qualityCenter').get<boolean>('openRewrite.fileSelection', true)
+    ) {
       const picks = await vscode.window.showQuickPick(
         previewFiles.map((file) => ({ label: file, picked: true })),
         {
@@ -689,6 +692,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   async upgradeDependencies(packageName?: string): Promise<void> {
     const root = this.runner.root();
     const result = this.runner.result;
+    if (!vscode.workspace.getConfiguration('qualityCenter').get<boolean>('dependencyUpgrade.enabled', true)) {
+      void vscode.window.showInformationMessage('依赖升级已在设置中关闭（qualityCenter.dependencyUpgrade.enabled）。');
+      return;
+    }
     if (!root || !result) {
       void vscode.window.showInformationMessage('还没有扫描结果，请先执行扫描。');
       return;
@@ -1024,7 +1031,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         reason: item.reason
       })),
       agentFile: this.agentFile,
-      buildHint: result?.buildHint
+      buildHint: result?.buildHint,
+      upgradeEnabled: vscode.workspace
+        .getConfiguration('qualityCenter')
+        .get<boolean>('dependencyUpgrade.enabled', true)
     };
     void this.view.webview.postMessage(snapshot);
   }
