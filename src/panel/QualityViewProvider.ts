@@ -46,6 +46,14 @@ const RULE_RECIPE: Record<string, RuleRecipe> = {
   }
 };
 
+interface ScanSettingsInput {
+  checkstyle?: boolean;
+  gitleaks?: boolean;
+  trivy?: boolean;
+  spotbugs?: boolean;
+  scanOnSave?: boolean;
+}
+
 function createNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let text = '';
@@ -110,6 +118,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     url?: string;
     id?: number;
     pkg?: string;
+    options?: ScanSettingsInput;
   }): Promise<void> {
     switch (message.type) {
       case 'scan':
@@ -144,6 +153,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'upgradeDeps':
         await this.upgradeDependencies(message.pkg);
+        break;
+      case 'saveSettings':
+        await this.saveScanSettings(message.options);
         break;
       case 'ignore':
         if (message.id && this.runner.ignoreIssue(message.id)) {
@@ -851,6 +863,41 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
+  /** 面板内设置：写入工作区配置后立即重新扫描 */
+  private async saveScanSettings(options?: ScanSettingsInput): Promise<void> {
+    if (!options) {
+      return;
+    }
+    const config = vscode.workspace.getConfiguration('qualityCenter');
+    const target = vscode.workspace.workspaceFolders?.length
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+    const updates: [string, boolean | undefined][] = [
+      ['checkstyle.enabled', options.checkstyle],
+      ['gitleaks.enabled', options.gitleaks],
+      ['trivy.enabled', options.trivy],
+      ['spotbugs.enabled', options.spotbugs],
+      ['scanOnSave', options.scanOnSave]
+    ];
+    for (const [key, value] of updates) {
+      if (typeof value === 'boolean') {
+        await config.update(key, value, target);
+      }
+    }
+    this.log(
+      `扫描设置已更新：${updates
+        .filter(([, value]) => typeof value === 'boolean')
+        .map(([key, value]) => `${key}=${value}`)
+        .join(', ')}`
+    );
+    if (this.runner.isRunning || this.deepFixState) {
+      this.push();
+      void vscode.window.showInformationMessage('扫描设置已保存，将在当前任务结束后生效。');
+      return;
+    }
+    await this.scanAndPush();
+  }
+
   /** 针对单条问题所属规则执行深度修复 */
   private async deepFixRule(id: number): Promise<void> {
     const issue = this.runner.result?.issues[id - 1];
@@ -1003,6 +1050,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     const result = this.runner.result;
     const root = this.runner.root() ?? '';
+    const config = vscode.workspace.getConfiguration('qualityCenter');
     const toSnapshot = (issue: Issue, index: number): SnapshotIssue => {
       const relative = issue.file ? path.relative(root, issue.file) : '';
       return {
@@ -1058,9 +1106,14 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       })),
       agentFile: this.agentFile,
       buildHint: result?.buildHint,
-      upgradeEnabled: vscode.workspace
-        .getConfiguration('qualityCenter')
-        .get<boolean>('dependencyUpgrade.enabled', true)
+      upgradeEnabled: config.get<boolean>('dependencyUpgrade.enabled', true),
+      scanOptions: {
+        checkstyle: config.get<boolean>('checkstyle.enabled', true),
+        gitleaks: config.get<boolean>('gitleaks.enabled', true),
+        trivy: config.get<boolean>('trivy.enabled', true),
+        spotbugs: config.get<boolean>('spotbugs.enabled', true),
+        scanOnSave: config.get<boolean>('scanOnSave', true)
+      }
     };
     void this.view.webview.postMessage(snapshot);
   }

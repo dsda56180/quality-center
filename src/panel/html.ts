@@ -46,6 +46,13 @@ export interface Snapshot {
   agentFile?: string;
   buildHint?: string;
   upgradeEnabled?: boolean;
+  scanOptions?: {
+    checkstyle: boolean;
+    gitleaks: boolean;
+    trivy: boolean;
+    spotbugs: boolean;
+    scanOnSave: boolean;
+  };
 }
 
 export function getHtml(nonce: string): string {
@@ -263,6 +270,29 @@ export function getHtml(nonce: string): string {
     border: 1px solid var(--vscode-panel-border); border-radius: 3px;
   }
   .link-one:hover { background: var(--vscode-list-hoverBackground); }
+  .mask {
+    position: fixed; inset: 0; z-index: 20; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, .45);
+  }
+  .mask.on { display: flex; }
+  .dialog {
+    width: min(320px, 92vw);
+    padding: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--vscode-panel-border);
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  }
+  .dlg-title { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+  .dlg-presets { display: flex; gap: 6px; margin-bottom: 8px; }
+  .dlg-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 0; font-size: 12px; cursor: pointer;
+  }
+  .dlg-row input { accent-color: var(--vscode-button-background); }
+  .dlg-hint { color: var(--vscode-descriptionForeground); font-size: 11px; margin: 8px 0 4px; line-height: 1.5; }
+  .dlg-actions { display: flex; gap: 6px; margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -272,6 +302,26 @@ export function getHtml(nonce: string): string {
     <button id="upgrade" class="secondary">升级依赖</button>
     <button id="copy" class="secondary">复制给 AI</button>
     <button id="save" class="secondary">导出报告</button>
+    <button id="settings" class="secondary" title="配置扫描类型与自动扫描">设置</button>
+  </div>
+  <div id="mask" class="mask">
+    <div class="dialog">
+      <div class="dlg-title">扫描设置</div>
+      <div class="dlg-presets">
+        <button id="preset-fast" class="secondary">快速模式</button>
+        <button id="preset-full" class="secondary">完整模式</button>
+      </div>
+      <label class="dlg-row"><input type="checkbox" id="opt-checkstyle" /> 代码质量（Checkstyle）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-gitleaks" /> 密钥泄露（Gitleaks）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-trivy" /> 依赖漏洞（Trivy）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-spotbugs" /> 静态缺陷（SpotBugs，较慢）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-scansave" /> 保存文件后自动扫描</label>
+      <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。已缓存的结果不会重复执行。</div>
+      <div class="dlg-actions">
+        <button id="set-cancel" class="secondary">取消</button>
+        <button id="set-apply">应用并扫描</button>
+      </div>
+    </div>
   </div>
   <div id="catbar" class="catbar">
     <div class="cat-stage">
@@ -316,7 +366,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true };
+  let state = { scanning: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true } };
   let activeTab = 'all';
   let severityFilter = [];
   let query = '';
@@ -446,26 +496,6 @@ export function getHtml(nonce: string): string {
     return parts.join(' · ');
   }
 
-  function scanHintText() {
-    if (state.deepFix) {
-      return '深度修复中：' + state.deepFix.stage;
-    }
-    if (!state.scanning) {
-      return '尚未扫描';
-    }
-    var progress = scanProgressText();
-    return '扫描中…' + (progress ? '（' + progress + '）' : '');
-  }
-
-  function scanListText() {
-    var progress = state.scanProgress || { active: [] };
-    var names = (progress.active || []).length
-      ? progress.active.join(' / ')
-      : 'Checkstyle / Gitleaks / Trivy / SpotBugs';
-    var detail = scanProgressText();
-    return '正在运行 ' + names + '…' + (detail ? '（' + detail + '）' : '');
-  }
-
   function catTipText() {
     if (state.deepFix) {
       var sec = Math.max(0, Math.floor((Date.now() - state.deepFix.startedAt) / 1000));
@@ -503,8 +533,11 @@ export function getHtml(nonce: string): string {
     }
     const sum = document.getElementById('summary');
     if (!state.finishedAt) {
-      sum.innerHTML = '<span class="hint" id="scanhint">' + esc(scanHintText()) + '</span>';
+      // 进度只在顶部猫咪进度条展示，这里保持安静，避免同一组数字重复三遍
+      sum.style.display = busy ? 'none' : '';
+      sum.innerHTML = '<span class="hint">尚未扫描</span>';
     } else {
+      sum.style.display = '';
       const issues = state.issues || [];
       const chips = SEV_ORDER.map(function (sev) {
         const total = issues.filter(function (i) { return i.severity === sev; }).length;
@@ -535,7 +568,7 @@ export function getHtml(nonce: string): string {
 
     const list = document.getElementById('list');
     if (state.scanning && !state.finishedAt) {
-      list.innerHTML = '<div class="empty" id="scanlist">' + esc(scanListText()) + '</div>';
+      list.innerHTML = '<div class="empty">扫描完成后将在这里列出问题</div>';
     } else if (!state.finishedAt) {
       list.innerHTML = deep
         ? '<div class="empty">深度修复进行中，完成后会自动重新扫描。</div>'
@@ -658,6 +691,48 @@ export function getHtml(nonce: string): string {
   document.getElementById('upgrade').addEventListener('click', function () {
     vscode.postMessage({ type: 'upgradeDeps' });
   });
+
+  var SETTING_KEYS = ['checkstyle', 'gitleaks', 'trivy', 'spotbugs'];
+  function settingBox(key) {
+    return document.getElementById('opt-' + key);
+  }
+  function openSettings() {
+    var options = state.scanOptions || {};
+    SETTING_KEYS.forEach(function (key) {
+      settingBox(key).checked = options[key] !== false;
+    });
+    document.getElementById('opt-scansave').checked = options.scanOnSave !== false;
+    document.getElementById('mask').classList.add('on');
+  }
+  function closeSettings() {
+    document.getElementById('mask').classList.remove('on');
+  }
+  function applyPreset(fast) {
+    SETTING_KEYS.forEach(function (key) {
+      settingBox(key).checked = fast ? key !== 'spotbugs' : true;
+    });
+  }
+  document.getElementById('settings').addEventListener('click', openSettings);
+  document.getElementById('set-cancel').addEventListener('click', closeSettings);
+  document.getElementById('mask').addEventListener('click', function (event) {
+    if (event.target === document.getElementById('mask')) {
+      closeSettings();
+    }
+  });
+  document.getElementById('preset-fast').addEventListener('click', function () {
+    applyPreset(true);
+  });
+  document.getElementById('preset-full').addEventListener('click', function () {
+    applyPreset(false);
+  });
+  document.getElementById('set-apply').addEventListener('click', function () {
+    var options = { scanOnSave: document.getElementById('opt-scansave').checked };
+    SETTING_KEYS.forEach(function (key) {
+      options[key] = settingBox(key).checked;
+    });
+    closeSettings();
+    vscode.postMessage({ type: 'saveSettings', options: options });
+  });
   document.getElementById('copy').addEventListener('click', function () {
     vscode.postMessage({ type: 'copy' });
   });
@@ -767,10 +842,6 @@ export function getHtml(nonce: string): string {
     }
     var tip = document.getElementById('cattip');
     if (tip) tip.textContent = catTipText();
-    var hint = document.getElementById('scanhint');
-    if (hint) hint.textContent = scanHintText();
-    var scanlist = document.getElementById('scanlist');
-    if (scanlist) scanlist.textContent = scanListText();
   }, 1000);
   render();
 </script>
