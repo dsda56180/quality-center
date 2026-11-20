@@ -849,6 +849,15 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
 
+    const pomFile = path.join(root, 'pom.xml');
+    const openPom = vscode.workspace.textDocuments.find(
+      (document) => document.uri.fsPath.toLowerCase() === pomFile.toLowerCase()
+    );
+    if (openPom?.isDirty) {
+      void vscode.window.showWarningMessage('pom.xml 有未保存的修改，请先保存后再执行依赖升级。');
+      return;
+    }
+
     const context = await this.loadUpgradeContext(root);
     const plan = planUpgrades(root, result.issues, context);
     if (plan.candidates.length === 0) {
@@ -875,15 +884,6 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       pool = [matched];
     } else {
       pool = plan.candidates;
-    }
-
-    const pomFile = path.join(root, 'pom.xml');
-    const openPom = vscode.workspace.textDocuments.find(
-      (document) => document.uri.fsPath.toLowerCase() === pomFile.toLowerCase()
-    );
-    if (openPom?.isDirty) {
-      void vscode.window.showWarningMessage('pom.xml 有未保存的修改，请先保存后再执行依赖升级。');
-      return;
     }
 
     const original = fs.readFileSync(pomFile, 'utf8');
