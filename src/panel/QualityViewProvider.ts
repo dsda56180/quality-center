@@ -129,7 +129,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
   private view?: vscode.WebviewView;
   private agentFile?: string;
-  private deepFixState: { stage: string; startedAt: number } | null = null;
+  private deepFixState: { stage: string; startedAt: number; total: number; done: number } | null = null;
   private previewPanel?: vscode.WebviewPanel;
   /** 上一次 dry-run 的结果，工作区未变化时直接复用，避免重复预演 */
   private fixCache?: { key: string; patchFile?: string; files: string[] };
@@ -154,9 +154,17 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     this.output.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
   }
 
+  /** 开始一个多阶段任务：每个阶段对应进度条上的一只猫 */
+  private beginDeepFix(stage: string, total: number): void {
+    this.deepFixState = { stage, startedAt: Date.now(), total, done: 0 };
+    this.log(stage);
+    this.push();
+  }
+
   private setDeepFixStage(stage: string): void {
     if (this.deepFixState) {
       this.deepFixState.stage = stage;
+      this.deepFixState.done = Math.min(this.deepFixState.total, this.deepFixState.done + 1);
     }
     this.log(stage);
     this.push();
@@ -455,11 +463,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         previewFiles = cached.files;
         this.log(`复用上次预演结果（${previewFiles.length} 个文件），跳过 dry-run`);
       } else {
-        this.deepFixState = { stage: '预演修复（不会改动代码）', startedAt: Date.now() };
-        this.push();
+        this.beginDeepFix('预演修复（不会改动代码）', 3);
         this.log('开始 dry-run 预演');
         try {
           const preview = await this.previewDeepFix(root, recipes, recipeArtifacts, version);
+          this.setDeepFixStage('生成修复补丁');
           if (!preview) {
             previewFailed = true;
           } else if (preview.files.length === 0) {
@@ -479,6 +487,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     // 预演成功后打开独立的预览编辑器页：可查看逐行 diff、勾选文件，关掉或点取消才放弃
     if (previewFiles.length > 0) {
+      this.setDeepFixStage('准备预览');
       if (previewPatch && readPatchText(previewPatch).includes('\uFFFD')) {
         void vscode.window.showErrorMessage(
           '预演补丁包含无法解码的字符，可能是源文件编码与项目配置不一致，已取消本次修复。'
@@ -627,8 +636,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return ok;
     };
 
-    this.deepFixState = { stage: '准备执行', startedAt: Date.now() };
-    this.push();
+    this.beginDeepFix('准备执行', 4);
     this.log(`项目画像：${profileParts.join(' · ') || '未识别'}`);
     if (advice.length > 0) {
       this.log(`配方推荐（未启用）：\n${advice.join('\n')}`);
@@ -690,6 +698,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         return;
       }
 
+      this.setDeepFixStage('收集改动文件');
       const changed = await run('git', ['diff', '--name-only', baseRef], root, 30_000);
       const changedFiles = new Set(changed.stdout.split(/\r?\n/).filter(Boolean));
       const othersAfter = await run('git', ['ls-files', '--others', '--exclude-standard'], root, 60_000);
@@ -872,8 +881,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
 
-    const context = await this.loadUpgradeContext(root);
-    const plan = planUpgrades(root, result.issues, context);
+    const plan = await this.buildUpgradePlan(root);
     if (plan.candidates.length === 0) {
       const detail = plan.skipped.length
         ? plan.skipped
@@ -956,8 +964,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     this.fixCache = undefined;
 
-    this.deepFixState = { stage: '升级依赖并校验编译', startedAt: Date.now() };
-    this.push();
+    this.beginDeepFix('写入 pom', 2);
     this.log(
       `开始升级依赖：${chosen
         .map((item) => `${item.packageName} ${item.from}→${decision.versions[item.packageName] || item.to}`)
@@ -966,6 +973,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     let compiled = false;
     try {
       fs.writeFileSync(pomFile, text, 'utf8');
+      this.setDeepFixStage('校验编译');
       const build = await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
@@ -1030,6 +1038,19 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
    * 按 pom 内容哈希缓存，避免每次打开预览都重新跑 Maven。
    */
   private depContextCache?: { key: string; context: UpgradeContext };
+
+  /** 解析依赖树并生成升级方案；进度条按「解析依赖树 → 对齐 BOM 版本」展示两只猫 */
+  private async buildUpgradePlan(root: string): Promise<ReturnType<typeof planUpgrades>> {
+    this.beginDeepFix('解析依赖树', 2);
+    try {
+      const context = await this.loadUpgradeContext(root);
+      this.setDeepFixStage('对齐 BOM 版本');
+      return planUpgrades(root, this.runner.result?.issues ?? [], context);
+    } finally {
+      this.deepFixState = null;
+      this.push();
+    }
+  }
 
   private async loadUpgradeContext(root: string): Promise<UpgradeContext> {
     const pomFile = path.join(root, 'pom.xml');

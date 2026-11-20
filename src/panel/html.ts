@@ -36,7 +36,7 @@ export interface SnapshotSuggestion {
 export interface Snapshot {
   type: 'state';
   scanning: boolean;
-  deepFix?: { stage: string; startedAt: number } | null;
+  deepFix?: { stage: string; startedAt: number; total?: number; done?: number } | null;
   scanStartedAt?: number | null;
   scanProgress?: { done: number; total: number; active: string[] };
   paused?: boolean;
@@ -138,7 +138,7 @@ export function getHtml(nonce: string): string {
   }
   .catbar { display: none; margin: 0 0 10px; }
   .catbar.on { display: block; }
-  .cat-stage { position: relative; height: 26px; }
+  .cat-stage { position: relative; height: 26px; overflow: hidden; }
   .cat-track {
     position: absolute; left: 0; right: 0; bottom: 2px; height: 9px;
     border-radius: 9px; overflow: hidden;
@@ -158,8 +158,9 @@ export function getHtml(nonce: string): string {
     animation: catFill 3.2s linear infinite;
   }
   .cat-runner {
-    position: absolute; left: 0; right: 0; bottom: 5px; height: 24px;
-    display: flex; align-items: flex-end; justify-content: space-around;
+    position: absolute; left: -280px; bottom: 3px; height: 22px;
+    display: flex; gap: 6px; align-items: flex-end;
+    animation: catRun 4.8s linear infinite;
     pointer-events: none;
   }
   .cat-runner .cat {
@@ -175,12 +176,17 @@ export function getHtml(nonce: string): string {
     transform: translateY(-8px) scale(.45);
     animation: none;
   }
-  .cat-stage.paused .cat { animation-play-state: paused; }
+  .cat-stage.paused .cat,
+  .cat-stage.paused .cat-runner { animation-play-state: paused; }
   .cat-tip {
     display: block; margin-top: 2px;
     font-size: 10px; color: var(--vscode-descriptionForeground);
   }
   .cat-tip::after { content: ''; animation: catDots 1.4s steps(4, end) infinite; }
+  @keyframes catRun {
+    from { left: -280px; }
+    to { left: 100%; }
+  }
   @keyframes catJump {
     0% { transform: translateY(0) rotate(-6deg); }
     50% { transform: translateY(-7px) rotate(0deg); }
@@ -589,7 +595,9 @@ export function getHtml(nonce: string): string {
   function catTipText() {
     if (state.deepFix) {
       var sec = Math.max(0, Math.floor((Date.now() - state.deepFix.startedAt) / 1000));
-      return '猫咪正在深度修复：' + state.deepFix.stage + ' · 已用 ' + sec + ' 秒';
+      var total = state.deepFix.total || 0;
+      var step = total ? '（第 ' + Math.min((state.deepFix.done || 0) + 1, total) + '/' + total + ' 步）' : '';
+      return '猫咪正在' + state.deepFix.stage + step + ' · 已用 ' + sec + ' 秒';
     }
     if (state.scanning) {
       var progress = scanProgressText();
@@ -631,12 +639,12 @@ export function getHtml(nonce: string): string {
     return '<span class="cat" style="animation-delay:' + (index * 0.12).toFixed(2) + 's;">'
       + '<svg viewBox="0 0 24 24" width="22" height="22" role="img" aria-label="' + breed.name + '">'
       + '<title>' + breed.name + '</title>'
-      + '<defs><clipPath id="' + clip + '"><circle cx="12" cy="13" r="8"/></clipPath></defs>'
-      + '<path d="M4.3 8.4 5.1 2.1 10.2 5.9Z" fill="' + breed.base + '"/>'
-      + '<path d="M19.7 8.4 18.9 2.1 13.8 5.9Z" fill="' + breed.base + '"/>'
-      + '<path d="M6 6.9 6.4 4 8.6 6.1Z" fill="' + breed.ear + '"/>'
-      + '<path d="M18 6.9 17.6 4 15.4 6.1Z" fill="' + breed.ear + '"/>'
-      + '<circle cx="12" cy="13" r="8" fill="' + breed.base + '"/>'
+      + '<defs><clipPath id="' + clip + '"><rect x="4" y="5" width="16" height="16" rx="4.5"/></clipPath></defs>'
+      + '<path d="M4.1 8.4 4.6 2.2 9.8 5.2Z" fill="' + breed.ear + '"/>'
+      + '<path d="M19.9 8.4 19.4 2.2 14.2 5.2Z" fill="' + breed.ear + '"/>'
+      + '<path d="M6 6.7 6.4 4.1 8.4 5.7Z" fill="#efb3c0"/>'
+      + '<path d="M18 6.7 17.6 4.1 15.6 5.7Z" fill="#efb3c0"/>'
+      + '<rect x="4" y="5" width="16" height="16" rx="4.5" fill="' + breed.base + '"/>'
       + '<g clip-path="url(#' + clip + ')">' + pattern + '</g>'
       + '<ellipse cx="9.05" cy="12.2" rx="1.5" ry="1.9" fill="' + breed.eye + '"/>'
       + '<ellipse cx="14.95" cy="12.2" rx="1.5" ry="1.9" fill="' + breed.eye + '"/>'
@@ -699,8 +707,17 @@ export function getHtml(nonce: string): string {
         ? Math.max(8, Math.round((progress.done / progress.total) * 100)) + '%'
         : '34%';
     }
-    // 只有扫描阶段才有分项进度；深度修复按单个任务展示一只猫
-    renderCats(state.scanning ? progress.total : 0, state.scanning ? progress.done : 0);
+    // 扫描按扫描器数量、深度修复/依赖升级按阶段数展示猫咪
+    var catTotal = 0;
+    var catDone = 0;
+    if (state.scanning) {
+      catTotal = progress.total;
+      catDone = progress.done;
+    } else if (deep && deep.total) {
+      catTotal = deep.total;
+      catDone = deep.done || 0;
+    }
+    renderCats(catTotal, catDone);
     var stage = document.querySelector('.cat-stage');
     if (stage) {
       stage.classList.toggle('paused', !!state.paused);
