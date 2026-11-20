@@ -35,6 +35,8 @@ export interface Snapshot {
   type: 'state';
   scanning: boolean;
   deepFix?: { stage: string; startedAt: number } | null;
+  scanStartedAt?: number | null;
+  scanProgress?: { done: number; total: number; active: string[] };
   finishedAt: number | null;
   issues: SnapshotIssue[];
   ignored: SnapshotIssue[];
@@ -96,7 +98,7 @@ export function getHtml(nonce: string): string {
   }
   .cat-fill {
     position: absolute; top: 0; bottom: 0; width: 34%;
-    border-radius: 9px;
+    border-radius: 9px; transition: width .3s ease;
     background: linear-gradient(90deg,
       transparent 0%,
       var(--vscode-progressBar-background, #3794ff) 30%,
@@ -314,7 +316,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, deepFix: null, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true };
+  let state = { scanning: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true };
   let activeTab = 'all';
   let severityFilter = [];
   let query = '';
@@ -427,13 +429,51 @@ export function getHtml(nonce: string): string {
     }
   }
 
+  function scanSeconds() {
+    return state.scanStartedAt ? Math.max(0, Math.floor((Date.now() - state.scanStartedAt) / 1000)) : 0;
+  }
+
+  function scanProgressText() {
+    var progress = state.scanProgress || { done: 0, total: 0, active: [] };
+    var parts = [];
+    if (progress.total) {
+      parts.push('已完成 ' + progress.done + '/' + progress.total);
+    }
+    var sec = scanSeconds();
+    if (sec > 0) {
+      parts.push('已用 ' + sec + ' 秒');
+    }
+    return parts.join(' · ');
+  }
+
+  function scanHintText() {
+    if (state.deepFix) {
+      return '深度修复中：' + state.deepFix.stage;
+    }
+    if (!state.scanning) {
+      return '尚未扫描';
+    }
+    var progress = scanProgressText();
+    return '扫描中…' + (progress ? '（' + progress + '）' : '');
+  }
+
+  function scanListText() {
+    var progress = state.scanProgress || { active: [] };
+    var names = (progress.active || []).length
+      ? progress.active.join(' / ')
+      : 'Checkstyle / Gitleaks / Trivy / SpotBugs';
+    var detail = scanProgressText();
+    return '正在运行 ' + names + '…' + (detail ? '（' + detail + '）' : '');
+  }
+
   function catTipText() {
     if (state.deepFix) {
       var sec = Math.max(0, Math.floor((Date.now() - state.deepFix.startedAt) / 1000));
       return '猫咪正在深度修复：' + state.deepFix.stage + ' · 已用 ' + sec + ' 秒';
     }
     if (state.scanning) {
-      return '猫咪正在奔跑检查代码';
+      var progress = scanProgressText();
+      return '猫咪正在奔跑检查代码' + (progress ? '（' + progress + '）' : '');
     }
     return '';
   }
@@ -454,11 +494,16 @@ export function getHtml(nonce: string): string {
     });
     document.getElementById('catbar').classList.toggle('on', busy);
     document.getElementById('cattip').textContent = catTipText();
+    var fill = document.querySelector('.cat-fill');
+    var progress = state.scanProgress || { done: 0, total: 0 };
+    if (fill) {
+      fill.style.width = progress.total
+        ? Math.max(8, Math.round((progress.done / progress.total) * 100)) + '%'
+        : '34%';
+    }
     const sum = document.getElementById('summary');
     if (!state.finishedAt) {
-      sum.innerHTML = '<span class="hint">'
-        + (deep ? '深度修复中：' + esc(deep.stage) : (state.scanning ? '扫描中…' : '尚未扫描'))
-        + '</span>';
+      sum.innerHTML = '<span class="hint" id="scanhint">' + esc(scanHintText()) + '</span>';
     } else {
       const issues = state.issues || [];
       const chips = SEV_ORDER.map(function (sev) {
@@ -490,7 +535,7 @@ export function getHtml(nonce: string): string {
 
     const list = document.getElementById('list');
     if (state.scanning && !state.finishedAt) {
-      list.innerHTML = '<div class="empty">正在运行 Checkstyle / Gitleaks / Trivy / SpotBugs…</div>';
+      list.innerHTML = '<div class="empty" id="scanlist">' + esc(scanListText()) + '</div>';
     } else if (!state.finishedAt) {
       list.innerHTML = deep
         ? '<div class="empty">深度修复进行中，完成后会自动重新扫描。</div>'
@@ -717,10 +762,15 @@ export function getHtml(nonce: string): string {
     }
   });
   setInterval(function () {
-    if (state.scanning || state.deepFix) {
-      var tip = document.getElementById('cattip');
-      if (tip) tip.textContent = catTipText();
+    if (!state.scanning && !state.deepFix) {
+      return;
     }
+    var tip = document.getElementById('cattip');
+    if (tip) tip.textContent = catTipText();
+    var hint = document.getElementById('scanhint');
+    if (hint) hint.textContent = scanHintText();
+    var scanlist = document.getElementById('scanlist');
+    if (scanlist) scanlist.textContent = scanListText();
   }, 1000);
   render();
 </script>

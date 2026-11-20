@@ -70,6 +70,13 @@ function fingerprint(stats: FileStat[], extras: (string | number | boolean | und
   return hash.digest('hex');
 }
 
+/** 扫描进度：已完成的扫描器数量 + 仍在运行的扫描器 */
+export interface ScanProgress {
+  done: number;
+  total: number;
+  active: string[];
+}
+
 export class ScanRunner {
   private running = false;
   private lastResult?: ScanResult;
@@ -162,7 +169,7 @@ export class ScanRunner {
     return path.join(base, 'reports', path.basename(root));
   }
 
-  async scan(): Promise<ScanResult | undefined> {
+  async scan(onProgress?: (progress: ScanProgress) => void): Promise<ScanResult | undefined> {
     const root = this.root();
     if (!root) {
       return undefined;
@@ -181,7 +188,7 @@ export class ScanRunner {
     let buildHint: string | undefined;
 
     try {
-      const jobs: Promise<void>[] = [];
+      const jobs: { label: string; task: Promise<void> }[] = [];
 
       if (config.get<boolean>('checkstyle.enabled', true)) {
         const configured = config.get<string>('checkstyle.config', '');
@@ -205,8 +212,9 @@ export class ScanRunner {
               errors.push({ source: 'checkstyle', message: hit.error });
             }
           } else {
-            jobs.push(
-              scanCheckstyle(root, configPath, path.join(outDir, 'checkstyle.xml')).then((res) => {
+            jobs.push({
+              label: 'Checkstyle',
+              task: scanCheckstyle(root, configPath, path.join(outDir, 'checkstyle.xml')).then((res) => {
                 issues.push(...res.issues);
                 if (res.error) {
                   errors.push({ source: 'checkstyle', message: res.error });
@@ -214,7 +222,7 @@ export class ScanRunner {
                   this.remember('checkstyle', sig, res);
                 }
               })
-            );
+            });
           }
         }
       } else {
@@ -226,24 +234,24 @@ export class ScanRunner {
         const gitleaksConfig = fs.existsSync(localConfig)
           ? localConfig
           : path.join(this.context.extensionPath, 'media', 'gitleaks.toml');
-        jobs.push(
-          scanGitleaks(
+        jobs.push({
+          label: 'Gitleaks',
+          task: scanGitleaks(
             root,
             config.get<string>('gitleaks.path', ''),
             path.join(outDir, 'gitleaks.json'),
             gitleaksConfig
           ).then((res) => {
-              if (res.missing) {
-                skipped.push({ source: 'gitleaks', reason: '未找到 gitleaks 可执行文件' });
-                return;
-              }
-              issues.push(...res.issues);
-              if (res.error) {
-                errors.push({ source: 'gitleaks', message: res.error });
-              }
+            if (res.missing) {
+              skipped.push({ source: 'gitleaks', reason: '未找到 gitleaks 可执行文件' });
+              return;
             }
-          )
-        );
+            issues.push(...res.issues);
+            if (res.error) {
+              errors.push({ source: 'gitleaks', message: res.error });
+            }
+          })
+        });
       } else {
         skipped.push({ source: 'gitleaks', reason: '已在设置中关闭' });
       }
@@ -280,8 +288,9 @@ export class ScanRunner {
             }
           }
         } else {
-          jobs.push(
-            scanTrivy(root, trivyOptions).then((res) => {
+          jobs.push({
+            label: 'Trivy',
+            task: scanTrivy(root, trivyOptions).then((res) => {
               if (res.missing) {
                 skipped.push({ source: 'trivy', reason: '未找到 trivy 可执行文件' });
                 return;
@@ -298,7 +307,7 @@ export class ScanRunner {
                 this.remember('trivy', sig, res);
               }
             })
-          );
+          });
         }
       } else {
         skipped.push({ source: 'trivy', reason: '已在设置中关闭' });
@@ -327,8 +336,9 @@ export class ScanRunner {
             }
           }
         } else {
-          jobs.push(
-            scanSpotbugs(root).then((res) => {
+          jobs.push({
+            label: 'SpotBugs',
+            task: scanSpotbugs(root).then((res) => {
               if (res.needsBuild) {
                 skipped.push({ source: 'spotbugs', reason: '未找到 target/classes，需要先构建项目' });
                 buildHint =
@@ -343,13 +353,25 @@ export class ScanRunner {
                 this.remember('spotbugs', sig, res);
               }
             })
-          );
+          });
         }
       } else {
         skipped.push({ source: 'spotbugs', reason: '已在设置中关闭' });
       }
 
-      await Promise.all(jobs);
+      const total = jobs.length;
+      const active = new Set(jobs.map((job) => job.label));
+      let done = 0;
+      onProgress?.({ done, total, active: [...active] });
+      await Promise.all(
+        jobs.map((job) =>
+          job.task.finally(() => {
+            active.delete(job.label);
+            done += 1;
+            onProgress?.({ done, total, active: [...active] });
+          })
+        )
+      );
     } finally {
       this.running = false;
     }

@@ -61,6 +61,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   private view?: vscode.WebviewView;
   private agentFile?: string;
   private deepFixState: { stage: string; startedAt: number } | null = null;
+  private scanStartedAt: number | null = null;
+  private scanProgress: { done: number; total: number; active: string[] } = {
+    done: 0,
+    total: 0,
+    active: []
+  };
   private output?: vscode.OutputChannel;
 
   constructor(private readonly runner: ScanRunner) {}
@@ -173,9 +179,14 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     if (this.runner.isRunning || this.deepFixState) {
       return;
     }
+    this.scanStartedAt = Date.now();
+    this.scanProgress = { done: 0, total: 0, active: [] };
     this.push({ scanning: true });
     try {
-      const result = await this.runner.scan();
+      const result = await this.runner.scan((progress) => {
+        this.scanProgress = progress;
+        this.push();
+      });
       this.writeAgentFiles();
       if (result) {
         this.log(
@@ -183,6 +194,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         );
       }
     } finally {
+      this.scanStartedAt = null;
+      this.scanProgress = { done: 0, total: 0, active: [] };
       this.push();
     }
   }
@@ -1024,6 +1037,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       type: 'state',
       scanning: override ? override.scanning : this.runner.isRunning,
       deepFix: this.deepFixState,
+      scanStartedAt: this.scanStartedAt,
+      scanProgress: this.scanProgress,
       finishedAt: result?.finishedAt ?? null,
       issues,
       ignored,

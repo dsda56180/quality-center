@@ -114,7 +114,7 @@ export async function scanSpotbugs(root: string): Promise<SpotbugsResult> {
       '-Dspotbugs.xmlOutput=true'
     ],
     root,
-    600_000,
+    240_000,
     { MAVEN_OPTS: '-Dfile.encoding=UTF-8' }
   );
 
