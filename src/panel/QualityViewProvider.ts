@@ -361,17 +361,23 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       if (previewPatch) {
         buttons.push('查看修复预览');
       }
+      // 主文案保持一行，长内容放到 detail 区域，避免弹窗变成一堵文字墙
+      const headline = override?.label ? `深度修复：${override.label}` : '执行深度修复';
+      const detail = [
+        previewSummary.trim(),
+        profileParts.length ? `项目画像：${profileParts.join(' · ')}` : '',
+        `将执行 ${recipes.length} 个配方：\n${recipeLines}`,
+        advice.length ? `推荐（未启用）：\n${advice.map((item) => `· ${item}`).join('\n')}` : '',
+        dirtyCount > 0
+          ? `检测到 ${dirtyCount} 处未提交改动，会在临时目录做完整备份；修复失败或编译不通过时可恢复到修复前。`
+          : '',
+        '直接在现有代码上做编译级改写，不产生 stash 冲突；完成后自动校验编译。'
+      ]
+        .filter(Boolean)
+        .join('\n\n');
       answer = await vscode.window.showWarningMessage(
-        (override?.label ? `本次修复：${override.label}\n\n` : '') +
-          previewSummary +
-          (profileParts.length ? `项目画像：${profileParts.join(' · ')}\n\n` : '') +
-          `将执行 ${recipes.length} 个 OpenRewrite 配方：\n${recipeLines}\n\n` +
-          (advice.length ? `推荐（未启用）：\n${advice.map((item) => `· ${item}`).join('\n')}\n\n` : '') +
-          (dirtyCount > 0
-            ? `检测到 ${dirtyCount} 处未提交改动，会在临时目录做完整备份；修复失败或编译不通过时可恢复到修复前。\n`
-            : '') +
-          '直接在现有代码上做编译级改写，不会再产生 stash 冲突。完成后自动校验编译。是否继续？',
-        { modal: true },
+        headline,
+        { modal: true, detail },
         ...buttons
       );
       if (answer === '查看修复预览' && previewPatch) {

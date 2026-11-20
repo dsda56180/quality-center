@@ -73,6 +73,7 @@ export function getHtml(nonce: string): string {
     font-size: 12px;
   }
   button:hover { background: var(--vscode-button-hoverBackground); }
+  button:disabled { opacity: .45; cursor: default; filter: none; }
   button.secondary {
     background: var(--vscode-button-secondaryBackground, transparent);
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
@@ -154,11 +155,12 @@ export function getHtml(nonce: string): string {
   .c-low      { background: rgba(58,141,219,.18); color: #4a9fe0; }
   .c-info     { background: rgba(140,140,140,.18); color: #9d9d9d; }
   .tabs {
-    display: flex; gap: 2px; margin-bottom: 8px;
+    display: flex; flex-wrap: wrap; gap: 2px 4px;
+    margin-bottom: 8px; padding-bottom: 2px;
     border-bottom: 1px solid var(--vscode-panel-border);
   }
   .tab {
-    flex: 1 1 0; padding: 5px 4px; font-size: 11px;
+    flex: 0 0 auto; padding: 4px 7px; font-size: 11px;
     background: transparent; color: var(--vscode-descriptionForeground);
     border: none; border-bottom: 2px solid transparent; border-radius: 0;
     white-space: nowrap;
@@ -443,7 +445,14 @@ export function getHtml(nonce: string): string {
       upgradeBtn.style.display = state.upgradeEnabled === false ? 'none' : '';
     }
     var deep = state.deepFix;
-    document.getElementById('catbar').classList.toggle('on', !!state.scanning || !!deep);
+    var busy = !!state.scanning || !!deep;
+    ['scan', 'deepfix', 'upgrade'].forEach(function (id) {
+      var button = document.getElementById(id);
+      if (button) {
+        button.disabled = busy;
+      }
+    });
+    document.getElementById('catbar').classList.toggle('on', busy);
     document.getElementById('cattip').textContent = catTipText();
     const sum = document.getElementById('summary');
     if (!state.finishedAt) {
@@ -470,26 +479,22 @@ export function getHtml(nonce: string): string {
       const aiButton = state.agentFile
         ? '<button class="ai-link" title="AI agent 可直接读取 ' + esc(state.agentFile) + '">AI 数据</button>'
         : '';
-      const scanningChip = state.scanning
-        ? '<span class="chip c-info">扫描中…</span>'
-        : (deep ? '<span class="chip c-info">深度修复中…</span>' : '');
       const clearChip = severityFilter.length > 0
         ? '<span class="chip c-info" data-clear="1" title="清除等级筛选">✕ 清除等级</span>'
         : '';
-      sum.innerHTML = scanningChip
-        + (issues.length ? chips : '<span class="chip c-info">未发现问题</span>')
+      sum.innerHTML = (issues.length ? chips : '<span class="chip c-info">未发现问题</span>')
         + '<span class="chip">' + totalText + ' · ' + time + '</span>'
         + clearChip
         + aiButton;
     }
 
     const list = document.getElementById('list');
-    if (deep && !state.finishedAt) {
-      list.innerHTML = '<div class="empty">深度修复进行中：' + esc(deep.stage) + '</div>';
-    } else if (state.scanning && !state.finishedAt) {
+    if (state.scanning && !state.finishedAt) {
       list.innerHTML = '<div class="empty">正在运行 Checkstyle / Gitleaks / Trivy / SpotBugs…</div>';
     } else if (!state.finishedAt) {
-      list.innerHTML = '<div class="empty">点击「重新扫描」开始</div>';
+      list.innerHTML = deep
+        ? '<div class="empty">深度修复进行中，完成后会自动重新扫描。</div>'
+        : '<div class="empty">点击「重新扫描」开始</div>';
     } else if (activeTab === 'suggest') {
       const suggestions = state.suggestions || [];
       list.innerHTML = suggestions.length
@@ -560,7 +565,7 @@ export function getHtml(nonce: string): string {
 
     const fixable = (state.issues || []).filter(function (i) { return i.fixable; }).length;
     const bar = document.getElementById('fixbar');
-    if (!state.scanning && fixable > 0) {
+    if (!busy && fixable > 0) {
       bar.style.display = 'flex';
       document.getElementById('fixtip').textContent =
         '可自动修复 ' + fixable + ' 项（无用导入 / 冗余导入 / 修饰符顺序 / 布尔表达式简化）';
@@ -569,7 +574,7 @@ export function getHtml(nonce: string): string {
     }
 
     const buildbar = document.getElementById('buildbar');
-    if (!state.scanning && state.finishedAt && state.buildHint) {
+    if (!busy && state.finishedAt && state.buildHint) {
       buildbar.style.display = 'flex';
       document.getElementById('buildtip').textContent = state.buildHint;
     } else {
