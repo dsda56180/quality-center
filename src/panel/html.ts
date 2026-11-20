@@ -157,9 +157,8 @@ export function getHtml(nonce: string): string {
     animation: catShimmer 1.6s linear infinite;
   }
   .cat-runner {
-    position: absolute; left: 0; bottom: 14px; height: 24px;
+    position: absolute; left: -60px; bottom: 14px; height: 24px;
     display: flex; gap: 6px; align-items: flex-end;
-    animation: catRun 6s linear infinite;
     pointer-events: none;
   }
   .cat-runner .cat {
@@ -182,12 +181,6 @@ export function getHtml(nonce: string): string {
     font-size: 10px; color: var(--vscode-descriptionForeground);
   }
   .cat-tip::after { content: ''; animation: catDots 1.4s steps(4, end) infinite; }
-  @keyframes catRun {
-    0% { left: -120px; }
-    82% { left: 100%; }
-    84% { left: -120px; }
-    100% { left: -120px; }
-  }
   @keyframes catJump {
     0% { transform: translate(0, 0) rotate(-5deg); }
     50% { transform: translate(3px, -6px) rotate(0deg); }
@@ -657,6 +650,41 @@ export function getHtml(nonce: string): string {
       + '<path d="M12 15.1v1.05M12 16.15q-1.1.95-2.05.05M12 16.15q1.1.95 2.05.05" stroke="#6d4c4c" stroke-width=".55" fill="none" stroke-linecap="round"/>'
       + '</svg></span>';
   }
+  // 用 requestAnimationFrame 驱动奔跑：跑到右端后瞬时回到左侧，
+  // 避免关键帧插值把猫咪可见地"拉回"左边
+  var catRunRaf = 0;
+  var catRunLeft = -60;
+  function startCatRun() {
+    cancelAnimationFrame(catRunRaf);
+    catRunLeft = -60;
+    var runner = document.getElementById('catrunner');
+    var stageEl = document.querySelector('.cat-stage');
+    runner.style.left = catRunLeft + 'px';
+    var last = 0;
+    function tick(now) {
+      if (!last) {
+        last = now;
+      }
+      var delta = Math.min(64, now - last);
+      last = now;
+      if (!state.paused) {
+        catRunLeft += delta * 0.09;
+        if (catRunLeft > stageEl.clientWidth) {
+          catRunLeft = -60;
+        }
+        runner.style.left = catRunLeft + 'px';
+      }
+      catRunRaf = requestAnimationFrame(tick);
+    }
+    catRunRaf = requestAnimationFrame(tick);
+  }
+  function stopCatRun() {
+    if (catRunRaf) {
+      cancelAnimationFrame(catRunRaf);
+      catRunRaf = 0;
+    }
+  }
+
   // 任务结束时让剩余猫咪逐只淡出，而不是整条进度条瞬间消失
   var catHideTimer = null;
   var catbarVisible = false;
@@ -682,6 +710,7 @@ export function getHtml(nonce: string): string {
       bar.classList.remove('on');
       catbarVisible = false;
       catHideTimer = null;
+      stopCatRun();
     }, 340 + cats.length * 100);
   }
 
@@ -726,11 +755,7 @@ export function getHtml(nonce: string): string {
     var catbar = document.getElementById('catbar');
     if (busy) {
       if (!catbarVisible) {
-        // 任务刚开始时重启动画，确保猫咪立刻出现在最左侧起点
-        var runnerStart = document.getElementById('catrunner');
-        runnerStart.style.animation = 'none';
-        void runnerStart.offsetWidth;
-        runnerStart.style.animation = '';
+        startCatRun();
       }
       clearTimeout(catHideTimer);
       catHideTimer = null;
