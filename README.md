@@ -83,8 +83,8 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标，如 `org.openrewrite.recipe:rewrite-static-analysis:2.10.0` |
 | `qualityCenter.openRewrite.pluginVersion` | `5.44.0` | `rewrite-maven-plugin` 版本 |
 | `qualityCenter.openRewrite.compileGate` | `true` | 修复后自动编译校验，失败提示回滚 |
-| `qualityCenter.openRewrite.dryRunPreview` | `true` | 执行前先 dry-run 预演，展示将改动的文件并支持查看补丁 |
-| `qualityCenter.openRewrite.fileSelection` | `true` | 预演后弹出文件勾选，仅应用勾选文件的改动 |
+| `qualityCenter.openRewrite.dryRunPreview` | `true` | 执行前先 dry-run，并在编辑器页签打开 diff 预览 |
+| `qualityCenter.openRewrite.fileSelection` | `true` | 预览页允许勾选部分文件，仅应用勾选文件的改动 |
 
 另外支持在项目根目录放置 `.trivyignore` 文件忽略指定 CVE（Trivy 原生格式，每行一个 CVE 编号）。
 
@@ -245,8 +245,8 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 面板工具栏点「深度修复」后：
 
-1. 先执行 dry-run 预演，列出将改动的文件；可打开补丁预览后再确认执行（`qualityCenter.openRewrite.dryRunPreview`，默认开启）；
-2. 预演后进入文件勾选：取消勾选的文件不会保留改动，执行完会自动恢复为修复前的状态；
+1. 先执行 dry-run 预演，然后在编辑器页签打开「深度修复预览」：左侧文件列表、右侧逐行 diff，可勾选要应用的文件（`qualityCenter.openRewrite.dryRunPreview`，默认开启）；
+2. 预览页可以一直留着慢慢看，切到其他编辑器或点击别处不会关闭；只有点「应用选中文件」才执行，点「取消」或直接关闭页签则放弃；
 3. 若有未提交改动，先把 `git diff HEAD` 与未跟踪文件备份到系统临时目录，**不执行 stash、不移动你的工作区代码**；
 4. 直接在现有代码上运行 OpenRewrite（全限定坐标调用 `rewrite-maven-plugin`，不修改项目 pom），因此不会产生 stash 恢复冲突；
 5. 自动运行 `mvn -DskipTests compile` 门禁；失败或配方执行出错时，可一键恢复到修复前（包含你的未提交改动）；

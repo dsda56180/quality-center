@@ -10,6 +10,7 @@ import { detectProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
 import { mavenMirrorArgs } from '../maven';
+import { buildDeepFixPreviewHtml } from './deepFixPanel';
 import { applyUpgrade, planUpgrades, UpgradeCandidate } from '../upgrader';
 import { getHtml, Snapshot, SnapshotIssue } from './html';
 
@@ -70,6 +71,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   private view?: vscode.WebviewView;
   private agentFile?: string;
   private deepFixState: { stage: string; startedAt: number } | null = null;
+  private previewPanel?: vscode.WebviewPanel;
   private scanStartedAt: number | null = null;
   private scanProgress: { done: number; total: number; active: string[] } = {
     done: 0,
@@ -318,6 +320,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       void vscode.window.showInformationMessage('深度修复正在进行中，请等待当前任务完成。');
       return;
     }
+    if (this.previewPanel) {
+      this.previewPanel.reveal();
+      void vscode.window.showInformationMessage('修复预览已打开，请先应用或取消当前预览。');
+      return;
+    }
     if (this.runner.isRunning) {
       void vscode.window.showInformationMessage('扫描进行中，请稍后再执行深度修复。');
       return;
@@ -351,10 +358,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       .join('\n');
 
     let previewPatch: string | undefined;
-    let previewSummary = '';
     let previewFiles: string[] = [];
     /** 用户勾选要应用改动的文件；undefined 表示全部应用 */
     let selectedFiles: Set<string> | undefined;
+    let previewFailed = false;
     if (config.get<boolean>('openRewrite.dryRunPreview', true)) {
       this.deepFixState = { stage: '预演修复（不会改动代码）', startedAt: Date.now() };
       this.push();
@@ -362,19 +369,13 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       try {
         const preview = await this.previewDeepFix(root, recipes, recipeArtifacts, version);
         if (!preview) {
-          previewSummary = '预演失败（详见输出日志），可直接执行。\n\n';
+          previewFailed = true;
         } else if (preview.files.length === 0) {
           void vscode.window.showInformationMessage('预演未发现需要改动的代码，已跳过深度修复。');
           return;
         } else {
           previewPatch = preview.patchFile;
           previewFiles = preview.files;
-          const shown = preview.files.slice(0, 8);
-          previewSummary =
-            `预演结果：将改动 ${preview.files.length} 个文件：\n` +
-            shown.map((file) => `· ${file}`).join('\n') +
-            (preview.files.length > shown.length ? `\n· 等 ${preview.files.length} 个文件` : '') +
-            '\n\n';
         }
       } finally {
         this.deepFixState = null;
@@ -382,45 +383,30 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       }
     }
 
-    // 预演拿到文件清单后，先让用户勾选要应用的文件；未勾选的执行后会恢复原样
-    if (
-      previewFiles.length > 1 &&
-      vscode.workspace.getConfiguration('qualityCenter').get<boolean>('openRewrite.fileSelection', true)
-    ) {
-      const picks = await vscode.window.showQuickPick(
-        previewFiles.map((file) => ({ label: file, picked: true })),
-        {
-          canPickMany: true,
-          title: '选择要应用修复的文件',
-          placeHolder: '取消勾选的文件会在修复后恢复为原样'
-        }
-      );
-      if (!picks) {
+    // 预演成功后打开独立的预览编辑器页：可查看逐行 diff、勾选文件，关掉或点取消才放弃
+    if (previewFiles.length > 0) {
+      const selectable =
+        previewFiles.length > 1 &&
+        config.get<boolean>('openRewrite.fileSelection', true);
+      const decision = await this.showFixPreview(previewPatch, previewFiles, {
+        label: override?.label,
+        project: profileParts.length ? profileParts.join(' · ') : 'Java 项目',
+        recipes: recipes.map((recipe) => RECIPE_LABELS[recipe] ?? recipe),
+        advice,
+        dirtyCount,
+        selectable
+      });
+      if (!decision) {
+        this.log('用户取消了深度修复预览');
         return;
       }
-      if (picks.length === 0) {
-        void vscode.window.showInformationMessage('未选择任何文件，已取消深度修复。');
-        return;
+      if (decision.files.length < previewFiles.length) {
+        selectedFiles = new Set(decision.files);
       }
-      if (picks.length < previewFiles.length) {
-        selectedFiles = new Set(picks.map((item) => item.label));
-        previewSummary =
-          `已选择 ${picks.length}/${previewFiles.length} 个文件应用改动，其余文件会恢复原样。\n\n` +
-          previewSummary;
-      }
-    }
-
-    let answer: string | undefined;
-    while (true) {
-      const buttons = ['执行深度修复'];
-      if (previewPatch) {
-        buttons.push('查看修复预览');
-      }
-      // 主文案保持一行，长内容放到 detail 区域，避免弹窗变成一堵文字墙
+    } else {
       const headline = override?.label ? `深度修复：${override.label}` : '执行深度修复';
       const detail = [
-        previewSummary.trim(),
-        profileParts.length ? `项目画像：${profileParts.join(' · ')}` : '',
+        previewFailed ? '预演失败（详见输出日志），将直接执行修复。' : '',
         `将执行 ${recipes.length} 个配方：\n${recipeLines}`,
         advice.length ? `推荐（未启用）：\n${advice.map((item) => `· ${item}`).join('\n')}` : '',
         dirtyCount > 0
@@ -430,19 +416,14 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       ]
         .filter(Boolean)
         .join('\n\n');
-      answer = await vscode.window.showWarningMessage(
+      const answer = await vscode.window.showWarningMessage(
         headline,
         { modal: true, detail },
-        ...buttons
+        '执行深度修复'
       );
-      if (answer === '查看修复预览' && previewPatch) {
-        await vscode.window.showTextDocument(vscode.Uri.file(previewPatch), { preview: false });
-        continue;
+      if (answer !== '执行深度修复') {
+        return;
       }
-      break;
-    }
-    if (answer !== '执行深度修复') {
-      return;
     }
 
     // 不 stash：先备份改动，再直接在现有代码上跑配方，从根本上避免 stash 恢复冲突
@@ -917,6 +898,68 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     );
     this.push();
     void vscode.window.showInformationMessage('扫描设置已保存，下次扫描生效。');
+  }
+
+  /** 在编辑器区域打开修复预览面板，返回用户勾选的文件；关闭面板视为取消 */
+  private showFixPreview(
+    patchFile: string | undefined,
+    files: string[],
+    info: {
+      label?: string;
+      project: string;
+      recipes: string[];
+      advice: string[];
+      dirtyCount: number;
+      selectable: boolean;
+    }
+  ): Promise<{ files: string[] } | null> {
+    const panel = vscode.window.createWebviewPanel(
+      'qualityCenter.deepFixPreview',
+      '深度修复预览',
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    this.previewPanel = panel;
+    panel.webview.html = buildDeepFixPreviewHtml(createNonce(), {
+      ...info,
+      patchFile,
+      files
+    });
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value: { files: string[] } | null): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.previewPanel === panel) {
+          this.previewPanel = undefined;
+        }
+        resolve(value);
+      };
+      panel.onDidDispose(() => finish(null));
+      panel.webview.onDidReceiveMessage((message: { type?: string; files?: string[] }) => {
+        if (message.type === 'cancel') {
+          finish(null);
+          panel.dispose();
+          return;
+        }
+        if (message.type !== 'apply') {
+          return;
+        }
+        const picks = (message.files ?? []).filter((file) => files.includes(file));
+        if (!picks.length) {
+          return;
+        }
+        if (this.runner.isRunning) {
+          void vscode.window.showInformationMessage('扫描进行中，请稍后再应用修复。');
+          return;
+        }
+        finish({ files: picks });
+        panel.dispose();
+      });
+    });
   }
 
   /** 针对单条问题所属规则执行深度修复 */
