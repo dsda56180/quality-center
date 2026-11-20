@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Issue, Severity } from '../model';
 import { run } from '../exec';
+import { mavenMirrorArgs } from '../maven';
+import { Issue, Severity } from '../model';
 import { localizeCheckstyle } from '../zh';
 
 export interface CheckstyleResult {
@@ -112,6 +113,7 @@ export async function scanCheckstyle(
     [
       '-B',
       '-q',
+      ...mavenMirrorArgs(),
       PLUGIN,
       `-Dcheckstyle.config.location=${configPath}`,
       `-Dcheckstyle.output.file=${outputFile}`,

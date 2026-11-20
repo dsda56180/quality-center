@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { initMaven } from './maven';
 import { QualityViewProvider, openIssue } from './panel/QualityViewProvider';
 import { ScanRunner } from './scanner';
 
@@ -8,6 +9,7 @@ const SAVE_SCAN_EXT = /\.(java|xml|properties|ya?ml|toml|json|gradle|kts)$/i;
 const IGNORED_DIRS = new Set(['target', 'node_modules', '.git', 'build', 'out']);
 
 export function activate(context: vscode.ExtensionContext): void {
+  initMaven(context.storageUri?.fsPath ?? context.globalStorageUri?.fsPath);
   const runner = new ScanRunner(context);
   const provider = new QualityViewProvider(runner);
 

@@ -71,6 +71,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.trivy.dbRepository` | `""` | 漏洞库 OCI 仓库，留空用官方源，失败自动回退国内镜像 |
 | `qualityCenter.trivy.javaDbRepository` | `""` | Java 依赖索引库 OCI 仓库，同上 |
 | `qualityCenter.trivy.minSeverity` | `low` | 低于该等级的 CVE 不显示（low/medium/high/critical） |
+| `qualityCenter.maven.useChinaMirror` | `true` | 无 `~/.m2/settings.xml` 时用阿里云公共仓库镜像执行 Maven；已有配置不覆盖 |
 | `qualityCenter.trivy.onlyFixed` | `true` | 只显示有修复版本的 CVE |
 | `qualityCenter.trivy.preferMirror` | `true` | 未配置仓库时优先走 daocloud 镜像，避免 ghcr.io 不可达导致长时间等待 |
 | `qualityCenter.spotbugs.enabled` | `true` | 启用 SpotBugs + FindSecBugs 字节码检测 |
@@ -133,6 +134,18 @@ code --install-extension dsda56180.quality-center
 上次扫描结果与各扫描器缓存持久化在扩展存储目录，重开 IDE 后打开面板即可秒出结果，后台再刷新。
 
 Trivy 的耗时主要在漏洞库更新：本地库 12 小时内下载过时会直接跳过更新检查（约 3 秒）；超过 12 小时后首次扫描会先更新漏洞库（国内镜像下约 90 秒），之后恢复 3 秒。
+
+### 远程源与镜像
+
+所有需要联网拉取的内容默认走国内可达镜像，避免在无法访问境外服务时长时间卡住：
+
+| 内容 | 默认源 | 配置项 |
+| --- | --- | --- |
+| Maven 插件与依赖（Checkstyle / SpotBugs / OpenRewrite / 编译校验） | 阿里云公共仓库 `maven.aliyun.com` | `qualityCenter.maven.useChinaMirror` |
+| Trivy 漏洞库 | `ghcr.m.daocloud.io/aquasecurity/trivy-db` | `qualityCenter.trivy.dbRepository` |
+| Trivy Java 索引库 | `ghcr.m.daocloud.io/aquasecurity/trivy-java-db` | `qualityCenter.trivy.javaDbRepository` |
+
+Maven 镜像只在用户没有 `~/.m2/settings.xml` 时启用，已有配置（企业私服、代理、本地仓库）不会被覆盖；需要走官方源时把对应配置清空或关闭开关即可。
 
 ### 面板内设置
 

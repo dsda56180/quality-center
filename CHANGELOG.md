@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.4
+
+- 远程源默认改用国内可达镜像，避免联网阻塞：
+  - Maven：用户没有 `~/.m2/settings.xml` 时自动使用阿里云公共仓库镜像；已有 settings.xml 时不覆盖，避免影响企业私服与代理
+  - Trivy：漏洞库与 Java 索引库默认使用 daocloud 镜像
+- 两类镜像都可在设置中改回官方源：`maven.useChinaMirror`、`trivy.dbRepository` / `trivy.javaDbRepository`
+
 ## 0.12.3
 
 - 修复 Trivy 可能卡住数分钟的问题：本地漏洞库 12 小时内下载过时直接跳过更新检查

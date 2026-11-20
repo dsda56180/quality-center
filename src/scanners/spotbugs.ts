@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Issue, Severity } from '../model';
 import { run } from '../exec';
+import { mavenMirrorArgs } from '../maven';
 import { localizeSpotbugs } from '../zh';
 
 /** SpotBugs 4.7.x 是最后一个可在 JDK 8 运行的分析器版本 */
@@ -105,6 +106,7 @@ export async function scanSpotbugs(root: string): Promise<SpotbugsResult> {
     [
       '-B',
       '-q',
+      ...mavenMirrorArgs(),
       `${PLUGIN}:spotbugs`,
       '-Dspotbugs.effort=Max',
       '-Dspotbugs.threshold=Low',

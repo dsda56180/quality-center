@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)与字节码级静态缺陷的统一面板，支持一键导出给 AI 修复",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -135,18 +135,18 @@
         },
         "qualityCenter.trivy.dbRepository": {
           "type": "string",
-          "default": "",
-          "description": "漏洞库 OCI 仓库地址；留空时默认使用国内镜像，避免 ghcr.io 不可达导致扫描长时间卡住"
+          "default": "ghcr.m.daocloud.io/aquasecurity/trivy-db",
+          "description": "漏洞库 OCI 仓库地址，默认使用国内可访问的 daocloud 镜像；可改为私有镜像或官方源"
         },
         "qualityCenter.trivy.preferMirror": {
           "type": "boolean",
           "default": true,
-          "description": "未显式配置仓库时优先使用 daocloud 镜像下载漏洞库；关闭后使用 trivy 官方 ghcr.io"
+          "description": "仓库地址留空时优先使用 daocloud 镜像；关闭后使用 trivy 官方 ghcr.io"
         },
         "qualityCenter.trivy.javaDbRepository": {
           "type": "string",
-          "default": "",
-          "description": "Java 依赖索引库 OCI 仓库地址，留空使用官方源，失败时自动回退国内镜像"
+          "default": "ghcr.m.daocloud.io/aquasecurity/trivy-java-db",
+          "description": "Java 依赖索引库地址，默认使用国内可访问的 daocloud 镜像"
         },
         "qualityCenter.trivy.minSeverity": {
           "type": "string",
@@ -158,6 +158,11 @@
           "type": "boolean",
           "default": true,
           "description": "只显示有修复版本的 CVE（无修复版本的通常只能等待上游，默认隐藏）"
+        },
+        "qualityCenter.maven.useChinaMirror": {
+          "type": "boolean",
+          "default": true,
+          "description": "当用户没有 ~/.m2/settings.xml 时，自动使用阿里云公共仓库镜像执行 Maven，避免 central 在国内不可达；已有 settings.xml 时不做任何覆盖"
         },
         "qualityCenter.spotbugs.enabled": {
           "type": "boolean",

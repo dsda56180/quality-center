@@ -9,6 +9,7 @@ import { Issue, SOURCE_LABEL } from '../model';
 import { detectProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
+import { mavenMirrorArgs } from '../maven';
 import { applyUpgrade, planUpgrades, UpgradeCandidate } from '../upgrader';
 import { getHtml, Snapshot, SnapshotIssue } from './html';
 
@@ -261,7 +262,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         title: '质量中心：正在构建项目…',
         cancellable: false
       },
-      () => run('mvn', ['-B', '-q', '-DskipTests', 'package'], root, 20 * 60_000)
+      () => run('mvn', ['-B', '-q', ...mavenMirrorArgs(), '-DskipTests', 'package'], root, 20 * 60_000)
     );
     if (outcome.code !== 0) {
       const tail = (outcome.stderr || outcome.stdout)
@@ -547,7 +548,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           cancellable: false
         },
         () => {
-          const args = ['-B', '-q', `-Drewrite.activeRecipes=${recipes.join(',')}`];
+          const args = ['-B', '-q', ...mavenMirrorArgs(), `-Drewrite.activeRecipes=${recipes.join(',')}`];
           if (recipeArtifacts.length > 0) {
             args.push(`-Drewrite.recipeArtifactCoordinates=${recipeArtifacts.join(',')}`);
           }
@@ -680,7 +681,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
             title: '质量中心：校验编译…',
             cancellable: false
           },
-          () => run('mvn', ['-B', '-q', '-DskipTests', 'compile'], root, 20 * 60_000)
+          () => run('mvn', ['-B', '-q', ...mavenMirrorArgs(), '-DskipTests', 'compile'], root, 20 * 60_000)
         );
         if (build.code !== 0) {
           const tail = (build.stderr || build.stdout)
@@ -829,7 +830,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           title: '质量中心：升级依赖后校验编译…',
           cancellable: false
         },
-        () => run('mvn', ['-B', '-q', '-DskipTests', 'compile'], root, 20 * 60_000)
+        () => run('mvn', ['-B', '-q', ...mavenMirrorArgs(), '-DskipTests', 'compile'], root, 20 * 60_000)
       );
       if (build.code !== 0) {
         fs.writeFileSync(pomFile, original, 'utf8');
@@ -924,7 +925,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     version: string
   ): Promise<{ files: string[]; patchFile?: string } | null> {
     const startedAt = Date.now();
-    const args = ['-B', `-Drewrite.activeRecipes=${recipes.join(',')}`];
+    const args = ['-B', ...mavenMirrorArgs(), `-Drewrite.activeRecipes=${recipes.join(',')}`];
     if (artifacts.length > 0) {
       args.push(`-Drewrite.recipeArtifactCoordinates=${artifacts.join(',')}`);
     }
