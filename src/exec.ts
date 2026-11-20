@@ -1,6 +1,33 @@
-import { exec, execSync } from 'child_process';
+import { exec, execSync, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+
+/** 正在运行的子进程，用于「终止扫描」时把它们连同子进程一起杀掉 */
+const running = new Set<ChildProcess>();
+
+export function killRunningCommands(): void {
+  for (const child of running) {
+    const pid = child.pid;
+    if (!pid) {
+      continue;
+    }
+    try {
+      if (process.platform === 'win32') {
+        // /T 连同 JVM 等子进程一起结束
+        execSync(`taskkill /T /F /PID ${pid}`, { stdio: 'ignore', windowsHide: true });
+      } else {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          process.kill(pid, 'SIGKILL');
+        }
+      }
+    } catch {
+      // 进程已自行退出
+    }
+  }
+  running.clear();
+}
 
 export interface RunResult {
   code: number;
@@ -69,7 +96,7 @@ export function run(
 ): Promise<RunResult> {
   const line = [command, ...args.map(quote)].join(' ');
   return new Promise((resolve) => {
-    exec(
+    const child = exec(
       line,
       {
         cwd,
@@ -80,6 +107,7 @@ export function run(
         env: { ...process.env, ...env }
       },
       (err, stdout, stderr) => {
+        running.delete(child);
         const code = err && typeof (err as { code?: number }).code === 'number'
           ? (err as unknown as { code: number }).code
           : err
@@ -88,5 +116,6 @@ export function run(
         resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '' });
       }
     );
+    running.add(child);
   });
 }

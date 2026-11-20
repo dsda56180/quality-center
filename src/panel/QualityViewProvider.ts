@@ -123,7 +123,24 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   }): Promise<void> {
     switch (message.type) {
       case 'scan':
-        await this.scanAndPush();
+        await this.scanAndPush(true);
+        break;
+      case 'pauseScan':
+        this.runner.pause();
+        this.push();
+        break;
+      case 'resumeScan':
+        this.runner.resume();
+        if (this.runner.isRunning) {
+          this.push();
+        } else {
+          await this.scanAndPush(true);
+        }
+        break;
+      case 'stopScan':
+        this.log('扫描已被用户终止');
+        this.runner.cancel();
+        this.push();
         break;
       case 'copy':
         await this.copyMarkdown();
@@ -188,9 +205,16 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
-  async scanAndPush(): Promise<void> {
+  /** force=true 表示用户主动开始，忽略「自动扫描暂停」状态 */
+  async scanAndPush(force = false): Promise<void> {
     if (this.runner.isRunning || this.deepFixState) {
       return;
+    }
+    if (!force && this.runner.isPaused) {
+      return;
+    }
+    if (force) {
+      this.runner.resume();
     }
     this.scanStartedAt = Date.now();
     this.scanProgress = { done: 0, total: 0, active: [] };
@@ -1085,6 +1109,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const snapshot: Snapshot = {
       type: 'state',
       scanning: override ? override.scanning : this.runner.isRunning,
+      paused: this.runner.isPaused,
       deepFix: this.deepFixState,
       scanStartedAt: this.scanStartedAt,
       scanProgress: this.scanProgress,

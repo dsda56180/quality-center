@@ -37,6 +37,7 @@ export interface Snapshot {
   deepFix?: { stage: string; startedAt: number } | null;
   scanStartedAt?: number | null;
   scanProgress?: { done: number; total: number; active: string[] };
+  paused?: boolean;
   finishedAt: number | null;
   issues: SnapshotIssue[];
   ignored: SnapshotIssue[];
@@ -63,14 +64,25 @@ export function getHtml(nonce: string): string {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
 <style nonce="${nonce}">
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0; padding: 10px;
     font-family: var(--vscode-font-family);
     font-size: 12px;
     color: var(--vscode-foreground);
     background: var(--vscode-editor-background);
+    display: flex; flex-direction: column;
+    overflow: hidden;
   }
-  .toolbar { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+  .head { flex: 0 0 auto; }
+  #list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+  .toolbar { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
+  .toolbar .spacer { flex: 1 1 auto; }
+  .icon-btn {
+    flex: 0 0 auto; width: 28px; height: 26px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .icon-btn svg { display: block; }
   button {
     flex: 1 1 auto;
     padding: 5px 8px;
@@ -164,15 +176,15 @@ export function getHtml(nonce: string): string {
   .c-low      { background: rgba(58,141,219,.18); color: #4a9fe0; }
   .c-info     { background: rgba(140,140,140,.18); color: #9d9d9d; }
   .tabs {
-    display: flex; flex-wrap: wrap; gap: 2px 4px;
-    margin-bottom: 8px; padding-bottom: 2px;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 2px; margin-bottom: 8px; padding-bottom: 2px;
     border-bottom: 1px solid var(--vscode-panel-border);
   }
   .tab {
-    flex: 0 0 auto; padding: 4px 7px; font-size: 11px;
+    padding: 4px 2px; font-size: 11px; min-width: 0;
     background: transparent; color: var(--vscode-descriptionForeground);
     border: none; border-bottom: 2px solid transparent; border-radius: 0;
-    white-space: nowrap;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .tab:hover { background: var(--vscode-list-hoverBackground); color: var(--vscode-foreground); }
   .tab.active {
@@ -296,32 +308,18 @@ export function getHtml(nonce: string): string {
 </style>
 </head>
 <body>
+  <div class="head">
   <div class="toolbar">
-    <button id="scan">重新扫描</button>
-    <button id="deepfix" class="secondary">深度修复</button>
-    <button id="upgrade" class="secondary">升级依赖</button>
-    <button id="copy" class="secondary">复制给 AI</button>
-    <button id="save" class="secondary">导出报告</button>
-    <button id="settings" class="secondary" title="配置扫描类型与自动扫描">设置</button>
-  </div>
-  <div id="mask" class="mask">
-    <div class="dialog">
-      <div class="dlg-title">扫描设置</div>
-      <div class="dlg-presets">
-        <button id="preset-fast" class="secondary">快速模式</button>
-        <button id="preset-full" class="secondary">完整模式</button>
-      </div>
-      <label class="dlg-row"><input type="checkbox" id="opt-checkstyle" /> 代码质量（Checkstyle）</label>
-      <label class="dlg-row"><input type="checkbox" id="opt-gitleaks" /> 密钥泄露（Gitleaks）</label>
-      <label class="dlg-row"><input type="checkbox" id="opt-trivy" /> 依赖漏洞（Trivy）</label>
-      <label class="dlg-row"><input type="checkbox" id="opt-spotbugs" /> 静态缺陷（SpotBugs，较慢）</label>
-      <label class="dlg-row"><input type="checkbox" id="opt-scansave" /> 保存文件后自动扫描</label>
-      <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。已缓存的结果不会重复执行。</div>
-      <div class="dlg-actions">
-        <button id="set-cancel" class="secondary">取消</button>
-        <button id="set-apply">应用并扫描</button>
-      </div>
-    </div>
+    <button id="scan" class="icon-btn" title="开始扫描"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 2l8 5-8 5z"/></svg></button>
+    <button id="resume" class="icon-btn" title="继续扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 2l8 5-8 5z"/></svg></button>
+    <button id="pause" class="icon-btn secondary" title="暂停扫描：当前扫描器结束后不再启动新的扫描器" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 2h3v10H3zM8 2h3v10H8z"/></svg></button>
+    <button id="stop" class="icon-btn secondary" title="终止扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 3h8v8H3z"/></svg></button>
+    <span class="spacer"></span>
+    <button id="deepfix" class="icon-btn secondary" title="深度修复"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M9.6 1l1.2 2.2L13 4.4l-2.2 1.2L9.6 8 8.4 5.6 6.2 4.4l2.2-1.2zM2.5 8.5l3 3-1.4 1.4-3-3z"/></svg></button>
+    <button id="upgrade" class="icon-btn secondary" title="升级依赖"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M6 2l4 4H7.5v4h-3V6H2zM2 12h10v1.5H2z"/></svg></button>
+    <button id="copy" class="icon-btn secondary" title="复制给 AI"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 1h6l2 2v8H4zM2 4h1.5v9h7v1.5H2z"/></svg></button>
+    <button id="save" class="icon-btn secondary" title="导出报告"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M6 1h2v6h2.5L7 12 3.5 7H6zM2 12.5h10V14H2z"/></svg></button>
+    <button id="settings" class="icon-btn secondary" title="扫描设置"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M1 3h12v1.5H1zM1 9h12v1.5H1zM4 1.5h2v4.5H4zM8 7.5h2v4.5H8z"/></svg></button>
   </div>
   <div id="catbar" class="catbar">
     <div class="cat-stage">
@@ -350,7 +348,27 @@ export function getHtml(nonce: string): string {
     <span id="buildtip"></span>
     <button id="build">构建并扫描</button>
   </div>
-  <div id="list"><div class="empty">点击「重新扫描」开始</div></div>
+  </div>
+  <div id="list"><div class="empty">点击「▶」开始扫描</div></div>
+  <div id="mask" class="mask">
+    <div class="dialog">
+      <div class="dlg-title">扫描设置</div>
+      <div class="dlg-presets">
+        <button id="preset-fast" class="secondary">快速模式</button>
+        <button id="preset-full" class="secondary">完整模式</button>
+      </div>
+      <label class="dlg-row"><input type="checkbox" id="opt-checkstyle" /> 代码质量（Checkstyle）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-gitleaks" /> 密钥泄露（Gitleaks）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-trivy" /> 依赖漏洞（Trivy）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-spotbugs" /> 静态缺陷（SpotBugs，较慢）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-scansave" /> 保存文件后自动扫描</label>
+      <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。已缓存的结果不会重复执行。</div>
+      <div class="dlg-actions">
+        <button id="set-cancel" class="secondary">取消</button>
+        <button id="set-apply">应用并扫描</button>
+      </div>
+    </div>
+  </div>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const SRC_LABEL = { checkstyle: '代码质量', gitleaks: '密钥泄露', trivy: '依赖漏洞', spotbugs: '静态缺陷' };
@@ -366,7 +384,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true } };
+  let state = { scanning: false, paused: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true } };
   let activeTab = 'all';
   let severityFilter = [];
   let query = '';
@@ -503,7 +521,8 @@ export function getHtml(nonce: string): string {
     }
     if (state.scanning) {
       var progress = scanProgressText();
-      return '猫咪正在奔跑检查代码' + (progress ? '（' + progress + '）' : '');
+      var label = state.paused ? '猫咪暂停中，等待当前扫描器结束' : '猫咪正在奔跑检查代码';
+      return label + (progress ? '（' + progress + '）' : '');
     }
     return '';
   }
@@ -524,6 +543,12 @@ export function getHtml(nonce: string): string {
     });
     document.getElementById('catbar').classList.toggle('on', busy);
     document.getElementById('cattip').textContent = catTipText();
+    var scanning = !!state.scanning;
+    var paused = !!state.paused;
+    document.getElementById('scan').style.display = scanning || paused ? 'none' : '';
+    document.getElementById('resume').style.display = paused ? '' : 'none';
+    document.getElementById('pause').style.display = scanning && !paused ? '' : 'none';
+    document.getElementById('stop').style.display = scanning ? '' : 'none';
     var fill = document.querySelector('.cat-fill');
     var progress = state.scanProgress || { done: 0, total: 0 };
     if (fill) {
@@ -684,6 +709,15 @@ export function getHtml(nonce: string): string {
   });
   document.getElementById('scan').addEventListener('click', function () {
     vscode.postMessage({ type: 'scan' });
+  });
+  document.getElementById('resume').addEventListener('click', function () {
+    vscode.postMessage({ type: 'resumeScan' });
+  });
+  document.getElementById('pause').addEventListener('click', function () {
+    vscode.postMessage({ type: 'pauseScan' });
+  });
+  document.getElementById('stop').addEventListener('click', function () {
+    vscode.postMessage({ type: 'stopScan' });
   });
   document.getElementById('deepfix').addEventListener('click', function () {
     vscode.postMessage({ type: 'deepFix' });

@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { addToBaseline, removeFromBaseline, splitByBaseline } from './baseline';
+import { killRunningCommands } from './exec';
 import { Issue, ScanResult, SEVERITY_ORDER } from './model';
 import { CheckstyleResult, resolveConfig, scanCheckstyle } from './scanners/checkstyle';
 import { scanGitleaks } from './scanners/gitleaks';
@@ -80,6 +81,10 @@ export interface ScanProgress {
 export class ScanRunner {
   private running = false;
   private lastResult?: ScanResult;
+  /** 扫描队列暂停：当前扫描器结束后不再启动新的扫描器 */
+  private paused = false;
+  private cancelled = false;
+  private resumeWaiters: Array<() => void> = [];
   /** 扫描器结果缓存：文件指纹一致时跳过 Maven/Trivy 调用 */
   private caches = new Map<string, { sig: string; value: unknown }>();
   private cacheLoaded = false;
@@ -95,6 +100,32 @@ export class ScanRunner {
 
   get isRunning(): boolean {
     return this.running;
+  }
+
+  get isPaused(): boolean {
+    return this.paused;
+  }
+
+  pause(): void {
+    this.paused = true;
+  }
+
+  resume(): void {
+    this.paused = false;
+    const waiters = this.resumeWaiters.splice(0);
+    waiters.forEach((resolve) => resolve());
+  }
+
+  /** 终止当前扫描：唤醒等待中的队列并杀掉正在运行的命令进程树 */
+  cancel(): void {
+    this.cancelled = true;
+    const waiters = this.resumeWaiters.splice(0);
+    waiters.forEach((resolve) => resolve());
+    killRunningCommands();
+  }
+
+  private waitForResume(): Promise<void> {
+    return new Promise((resolve) => this.resumeWaiters.push(resolve));
   }
 
   root(): string | undefined {
@@ -179,6 +210,7 @@ export class ScanRunner {
     }
 
     this.running = true;
+    this.cancelled = false;
     const startedAt = Date.now();
     const issues: Issue[] = [];
     const errors: ScanResult['errors'] = [];
@@ -188,7 +220,7 @@ export class ScanRunner {
     let buildHint: string | undefined;
 
     try {
-      const jobs: { label: string; task: Promise<void> }[] = [];
+      const jobs: { label: string; run: () => Promise<void> }[] = [];
 
       if (config.get<boolean>('checkstyle.enabled', true)) {
         const configured = config.get<string>('checkstyle.config', '');
@@ -214,7 +246,7 @@ export class ScanRunner {
           } else {
             jobs.push({
               label: 'Checkstyle',
-              task: scanCheckstyle(root, configPath, path.join(outDir, 'checkstyle.xml')).then((res) => {
+              run: () => scanCheckstyle(root, configPath, path.join(outDir, 'checkstyle.xml')).then((res) => {
                 issues.push(...res.issues);
                 if (res.error) {
                   errors.push({ source: 'checkstyle', message: res.error });
@@ -236,7 +268,7 @@ export class ScanRunner {
           : path.join(this.context.extensionPath, 'media', 'gitleaks.toml');
         jobs.push({
           label: 'Gitleaks',
-          task: scanGitleaks(
+          run: () => scanGitleaks(
             root,
             config.get<string>('gitleaks.path', ''),
             path.join(outDir, 'gitleaks.json'),
@@ -291,7 +323,7 @@ export class ScanRunner {
         } else {
           jobs.push({
             label: 'Trivy',
-            task: scanTrivy(root, trivyOptions).then((res) => {
+            run: () => scanTrivy(root, trivyOptions).then((res) => {
               if (res.missing) {
                 skipped.push({ source: 'trivy', reason: '未找到 trivy 可执行文件' });
                 return;
@@ -339,7 +371,7 @@ export class ScanRunner {
         } else {
           jobs.push({
             label: 'SpotBugs',
-            task: scanSpotbugs(root).then((res) => {
+            run: () => scanSpotbugs(root).then((res) => {
               if (res.needsBuild) {
                 skipped.push({ source: 'spotbugs', reason: '未找到 target/classes，需要先构建项目' });
                 buildHint =
@@ -363,16 +395,40 @@ export class ScanRunner {
       const total = jobs.length;
       const active = new Set(jobs.map((job) => job.label));
       let done = 0;
+      let next = 0;
       onProgress?.({ done, total, active: [...active] });
-      await Promise.all(
-        jobs.map((job) =>
-          job.task.finally(() => {
-            active.delete(job.label);
-            done += 1;
-            onProgress?.({ done, total, active: [...active] });
-          })
-        )
-      );
+
+      // 最多同时跑两个扫描器：既保留并行速度，又让「暂停」能在扫描器边界生效
+      const worker = async (): Promise<void> => {
+        while (true) {
+          while (this.paused && !this.cancelled) {
+            await this.waitForResume();
+          }
+          if (this.cancelled) {
+            return;
+          }
+          const job = jobs[next];
+          if (!job) {
+            return;
+          }
+          next += 1;
+          try {
+            await job.run();
+          } catch {
+            // 单个扫描器异常不阻断其它扫描器
+          }
+          active.delete(job.label);
+          done += 1;
+          onProgress?.({ done, total, active: [...active] });
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(2, jobs.length) }, () => worker()));
+
+      if (this.cancelled) {
+        // 终止扫描时，被杀进程会返回非零退出码，这里清掉由此产生的误报
+        errors.length = 0;
+        buildHint = undefined;
+      }
     } finally {
       this.running = false;
     }
