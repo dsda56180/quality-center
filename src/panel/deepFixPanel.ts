@@ -5,6 +5,8 @@ export interface UpgradePreviewEntry {
   from: string;
   to: string;
   cveCount: number;
+  /** 写回 pom 的方式，用于界面标注 */
+  mode: 'property' | 'pin' | 'manage';
   /** pom 中受影响的行（删除 / 新增），用于展示局部 diff */
   oldLine: string;
   newLine: string;
@@ -17,32 +19,61 @@ export interface UpgradePreviewInfo {
 }
 
 export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo): string {
-  const cards = info.entries
-    .map((entry, index) => {
-      const oldLines = entry.oldLine
-        .split(/\r?\n/)
-        .map((line) => `<div class="ln del">${escapeHtml(line) || '&nbsp;'}</div>`)
-        .join('');
-      const newLines = entry.newLine
-        .split(/\r?\n/)
-        .map((line) => `<div class="ln add">${escapeHtml(line) || '&nbsp;'}</div>`)
-        .join('');
-      return `<section class="card" id="u-${index}">
+  const MODE_LABEL: Record<UpgradePreviewEntry['mode'], string> = {
+    property: '属性',
+    pin: '固定版本',
+    manage: '版本覆盖'
+  };
+  const renderCard = (entry: UpgradePreviewEntry, index: number): string => {
+    const oldLines = entry.oldLine
+      .split(/\r?\n/)
+      .map((line) => `<div class="ln del">${escapeHtml(line) || '&nbsp;'}</div>`)
+      .join('');
+    const newLines = entry.newLine
+      .split(/\r?\n/)
+      .map((line) => `<div class="ln add">${escapeHtml(line) || '&nbsp;'}</div>`)
+      .join('');
+    return `<section class="card" id="u-${index}">
   <label class="card-head">
     <input type="checkbox" class="pick" data-pkg="${escapeHtml(entry.packageName)}" checked />
     <span class="pkg">${escapeHtml(entry.packageName)}</span>
     <span class="ver">${escapeHtml(entry.from)} → ${escapeHtml(entry.to)}</span>
+    <span class="kind">${MODE_LABEL[entry.mode] ?? ''}</span>
     <span class="cve">${entry.cveCount} 条漏洞</span>
   </label>
-  <pre class="code">${oldLines}${newLines}</pre>
+  <pre class="code">${entry.oldLine ? oldLines : ''}${entry.newLine ? newLines : ''}</pre>
 </section>`;
-    })
-    .join('');
+  };
+  const direct = info.entries.filter((entry) => entry.mode !== 'manage');
+  const managed = info.entries.filter((entry) => entry.mode === 'manage');
+  const cards =
+    (direct.length
+      ? `<h2>直接依赖（${direct.length}）</h2>`
+        + direct.map((entry) => renderCard(entry, info.entries.indexOf(entry))).join('')
+      : '')
+    + (managed.length
+      ? `<h2>版本覆盖（${managed.length}）<span class="hint">未直接声明，通过 dependencyManagement 覆盖</span></h2>`
+        + managed.map((entry) => renderCard(entry, info.entries.indexOf(entry))).join('')
+      : '');
 
-  const skipped = info.skipped.length
-    ? `<div class="skipped">未纳入自动升级：${info.skipped
-        .map((item) => `${escapeHtml(item.packageName)}（${escapeHtml(item.reason)}）`)
-        .join('；')}</div>`
+  const groups = new Map<string, string[]>();
+  info.skipped.forEach((item) => {
+    if (!groups.has(item.reason)) {
+      groups.set(item.reason, []);
+    }
+    groups.get(item.reason)!.push(item.packageName);
+  });
+  const skipped = groups.size
+    ? `<details class="skipped">
+  <summary>未纳入自动升级（${info.skipped.length} 项）</summary>
+  ${Array.from(groups.entries())
+    .map(([reason, names]) => {
+      const shown = names.slice(0, 10).join('、') + (names.length > 10 ? ` 等 ${names.length} 项` : '');
+      return `<div class="skip-group"><div class="skip-reason">${escapeHtml(reason)}（${names.length}）</div>`
+        + `<div class="skip-list">${escapeHtml(shown)}</div></div>`;
+    })
+    .join('')}
+</details>`
     : '';
 
   return `<!DOCTYPE html>
@@ -62,6 +93,8 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
   .title { font-size: 14px; font-weight: 600; }
   .sub { margin-top: 4px; color: var(--vscode-descriptionForeground); }
   main { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 14px; }
+  h2 { margin: 10px 0 6px; font-size: 12px; font-weight: 600; }
+  h2 .hint { margin-left: 6px; font-weight: 400; font-size: 11px; color: var(--vscode-descriptionForeground); }
   .card { margin-bottom: 12px; }
   .card-head {
     display: flex; align-items: center; gap: 8px;
@@ -81,7 +114,15 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
   .ln { white-space: pre; padding: 0 8px; }
   .ln.add { background: rgba(46,160,67,.18); }
   .ln.del { background: rgba(248,81,73,.16); }
-  .skipped { margin-top: 14px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.6; }
+  .kind {
+    padding: 0 6px; border-radius: 8px; font-size: 10px;
+    background: rgba(128,128,128,.2); color: var(--vscode-descriptionForeground);
+  }
+  .skipped { margin-top: 14px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+  .skipped summary { cursor: pointer; user-select: none; margin-bottom: 6px; }
+  .skip-group { margin: 6px 0 10px; padding-left: 6px; border-left: 2px solid var(--vscode-panel-border); }
+  .skip-reason { color: var(--vscode-foreground); margin-bottom: 2px; }
+  .skip-list { line-height: 1.7; word-break: break-all; }
   footer {
     flex: none; display: flex; align-items: center; gap: 8px;
     padding: 8px 14px; border-top: 1px solid var(--vscode-panel-border);

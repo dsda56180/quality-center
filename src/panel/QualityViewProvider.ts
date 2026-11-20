@@ -72,8 +72,8 @@ function changedLines(before: string, after: string): { oldLine: string; newLine
     newEnd -= 1;
   }
   return {
-    oldLine: oldLines.slice(start, oldEnd).join('\n') || '（无变化）',
-    newLine: newLines.slice(start, newEnd).join('\n') || '（无变化）'
+    oldLine: oldLines.slice(start, oldEnd).join('\n'),
+    newLine: newLines.slice(start, newEnd).join('\n')
   };
 }
 
@@ -835,6 +835,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           from: candidate.from,
           to: candidate.to,
           cveCount: candidate.cveCount,
+          mode: candidate.mode,
           ...changedLines(original, next)
         };
       })
@@ -1040,6 +1041,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       from: string;
       to: string;
       cveCount: number;
+      mode: 'property' | 'pin' | 'manage';
       oldLine: string;
       newLine: string;
     }>,
