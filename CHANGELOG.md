@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.1
+
+- 修复深度修复预览里中文注释显示为乱码：OpenRewrite 用 JVM 默认字符集读写源码，Windows 上默认编码可能不是 UTF-8，现在会按项目源码编码启动 Maven，补丁中的中文可正常显示
+- 预演补丁若仍含无法解码的字符，会直接拦截并提示，避免把乱码写回源码
+- 内置静态分析配方库 `org.openrewrite.recipe:rewrite-static-analysis`，无需再手动配置 `openRewrite.recipeArtifacts`
+- 配方推荐文案改为说明配方库已内置，只需把配方加入白名单
+
 ## 0.15.0
 
 - 依赖升级不再只支持「显式声明版本」的依赖：

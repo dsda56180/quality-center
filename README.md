@@ -80,7 +80,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.dependencyUpgrade.enabled` | `true` | 显示「升级依赖」按钮，允许一键改写 pom 版本 |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
 | `qualityCenter.openRewrite.recipes` | 清理无用导入 / `Objects.isNull` / 缩短全限定类名 | 允许执行的 OpenRewrite 配方白名单 |
-| `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标，如 `org.openrewrite.recipe:rewrite-static-analysis:2.10.0` |
+| `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标；`org.openrewrite.recipe:rewrite-static-analysis` 已内置，通常无需填写 |
 | `qualityCenter.openRewrite.pluginVersion` | `5.44.0` | `rewrite-maven-plugin` 版本 |
 | `qualityCenter.openRewrite.compileGate` | `true` | 修复后自动编译校验，失败提示回滚 |
 | `qualityCenter.openRewrite.dryRunPreview` | `true` | 执行前先 dry-run，并在编辑器页签打开 diff 预览 |
@@ -280,17 +280,16 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 忽略记录使用稳定指纹（来源 + 规则 + 文件 + 消息；CVE 用包名 + 版本），不包含行号，代码移动后仍能匹配。该文件默认位于已被 `.gitignore` 忽略的目录中，仅本机生效；如需团队共享，可自行取消忽略并提交。
 
-需要 `org.openrewrite.staticanalysis.*` 等进阶配方时，不必改项目 pom：把配方包坐标填进 `openRewrite.recipeArtifacts` 即可，插件会通过 `-Drewrite.recipeArtifactCoordinates` 临时加入类路径。例如：
+需要 `org.openrewrite.staticanalysis.*` 等进阶配方时，不必改项目 pom。插件已内置 `org.openrewrite.recipe:rewrite-static-analysis:2.10.0`，直接把配方加入白名单即可，插件会通过 `-Drewrite.recipeArtifactCoordinates` 临时加入类路径。例如：
 
 ```json
 "qualityCenter.openRewrite.recipes": [
   "org.openrewrite.java.RemoveUnusedImports",
   "org.openrewrite.staticanalysis.SimplifyBooleanExpression"
-],
-"qualityCenter.openRewrite.recipeArtifacts": [
-  "org.openrewrite.recipe:rewrite-static-analysis:2.10.0"
 ]
 ```
+
+若使用其他配方包，也可以把坐标填进 `openRewrite.recipeArtifacts`，插件会合并到内置配方库一起传入。
 
 插件只执行白名单里明确列出的配方，不会自动加载任意来源的配方包。
 

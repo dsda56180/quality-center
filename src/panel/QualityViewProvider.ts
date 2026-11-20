@@ -11,7 +11,7 @@ import { detectProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
 import { mavenMirrorArgs } from '../maven';
-import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml } from './deepFixPanel';
+import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText } from './deepFixPanel';
 import { applyUpgrade, planUpgrades, UpgradeCandidate } from '../upgrader';
 import { getHtml, Snapshot, SnapshotIssue } from './html';
 
@@ -55,6 +55,41 @@ interface ScanSettingsInput {
   trivy?: boolean;
   spotbugs?: boolean;
   scanOnSave?: boolean;
+}
+
+/** 插件内置的配方库，用户无需手动配置坐标 */
+const BUILTIN_RECIPE_ARTIFACTS = ['org.openrewrite.recipe:rewrite-static-analysis:2.10.0'];
+
+/** 读取项目源码编码，缺失时按 UTF-8 处理 */
+function sourceEncoding(root: string): string {
+  try {
+    const pom = fs.readFileSync(path.join(root, 'pom.xml'), 'utf8');
+    const property = /<project\.build\.sourceEncoding>\s*([^<]+?)\s*<\/project\.build\.sourceEncoding>/i.exec(pom);
+    if (property) {
+      return property[1].trim();
+    }
+    const compiler = /<encoding>\s*([^<]+?)\s*<\/encoding>/i.exec(pom);
+    if (compiler) {
+      return compiler[1].trim();
+    }
+  } catch {
+    // pom 不可读时按 UTF-8 处理
+  }
+  return 'UTF-8';
+}
+
+/**
+ * OpenRewrite 读写源码用的是 JVM 默认字符集（file.encoding），
+ * Windows 上默认编码不一定是 UTF-8，会把中文注释读成乱码再写进补丁。
+ * 这里把 Maven 进程的默认字符集对齐到项目源码编码。
+ */
+function encodingEnv(encoding: string): NodeJS.ProcessEnv {
+  const option = `-Dfile.encoding=${encoding}`;
+  const current = process.env.MAVEN_OPTS ?? '';
+  const merged = /-Dfile\.encoding=\S+/.test(current)
+    ? current.replace(/-Dfile\.encoding=\S+/g, option)
+    : `${current} ${option}`.trim();
+  return { MAVEN_OPTS: merged };
 }
 
 /** 提取两段文本之间变化的最小行区间，用于升级预览里的局部 diff */
@@ -366,9 +401,14 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
     const version = config.get<string>('openRewrite.pluginVersion', '5.44.0');
-    const recipeArtifacts = (override?.artifacts ?? config.get<string[]>('openRewrite.recipeArtifacts', []))
-      .map((item) => item.trim())
-      .filter(Boolean);
+    const recipeArtifacts = Array.from(
+      new Set([
+        ...BUILTIN_RECIPE_ARTIFACTS,
+        ...(override?.artifacts ?? config.get<string[]>('openRewrite.recipeArtifacts', []))
+          .map((item) => item.trim())
+          .filter(Boolean)
+      ])
+    );
 
     const profile = detectProjectProfile(root);
     const profileParts = [
@@ -417,6 +457,13 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     // 预演成功后打开独立的预览编辑器页：可查看逐行 diff、勾选文件，关掉或点取消才放弃
     if (previewFiles.length > 0) {
+      if (previewPatch && readPatchText(previewPatch).includes('\uFFFD')) {
+        void vscode.window.showErrorMessage(
+          '预演补丁包含无法解码的字符，可能是源文件编码与项目配置不一致，已取消本次修复。'
+            + '请检查 pom 中的 project.build.sourceEncoding 是否与实际文件编码一致。'
+        );
+        return;
+      }
       const selectable =
         previewFiles.length > 1 &&
         config.get<boolean>('openRewrite.fileSelection', true);
@@ -581,6 +628,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       }
 
       this.setDeepFixStage('运行 OpenRewrite 配方');
+      const encoding = sourceEncoding(root);
       const outcome = await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
@@ -588,12 +636,18 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           cancellable: false
         },
         () => {
-          const args = ['-B', '-q', ...mavenMirrorArgs(), `-Drewrite.activeRecipes=${recipes.join(',')}`];
+          const args = [
+            '-B',
+            '-q',
+            ...mavenMirrorArgs(),
+            `-Dproject.build.sourceEncoding=${encoding}`,
+            `-Drewrite.activeRecipes=${recipes.join(',')}`
+          ];
           if (recipeArtifacts.length > 0) {
             args.push(`-Drewrite.recipeArtifactCoordinates=${recipeArtifacts.join(',')}`);
           }
           args.push(`org.openrewrite.maven:rewrite-maven-plugin:${version}:run`);
-          return run('mvn', args, root, 20 * 60_000);
+          return run('mvn', args, root, 20 * 60_000, encodingEnv(encoding));
         }
       );
       if (outcome.code !== 0) {
@@ -1124,7 +1178,13 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     version: string
   ): Promise<{ files: string[]; patchFile?: string } | null> {
     const startedAt = Date.now();
-    const args = ['-B', ...mavenMirrorArgs(), `-Drewrite.activeRecipes=${recipes.join(',')}`];
+    const encoding = sourceEncoding(root);
+    const args = [
+      '-B',
+      ...mavenMirrorArgs(),
+      `-Dproject.build.sourceEncoding=${encoding}`,
+      `-Drewrite.activeRecipes=${recipes.join(',')}`
+    ];
     if (artifacts.length > 0) {
       args.push(`-Drewrite.recipeArtifactCoordinates=${artifacts.join(',')}`);
     }
@@ -1136,7 +1196,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         title: '质量中心：预演深度修复（不会改动代码）…',
         cancellable: false
       },
-      () => run('mvn', args, root, 20 * 60_000)
+      () => run('mvn', args, root, 20 * 60_000, encodingEnv(encoding))
     );
     if (result.code !== 0) {
       const tail = (result.stderr || result.stdout)

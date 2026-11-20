@@ -218,6 +218,23 @@ interface FileDiff {
 
 const MAX_LINES = 400;
 
+/** 读取补丁文件：优先按 UTF-8，失败时回退到 GB18030（Windows 下 Maven 可能用平台编码写文件） */
+export function readPatchText(patchFile: string): string {
+  const buffer = fs.readFileSync(patchFile);
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+  } catch {
+    for (const encoding of ['gb18030', 'big5']) {
+      try {
+        return new TextDecoder(encoding).decode(buffer);
+      } catch {
+        // 尝试下一种编码
+      }
+    }
+    return buffer.toString('utf8');
+  }
+}
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
@@ -232,7 +249,7 @@ function collectDiffs(patchFile: string | undefined, files: string[]): FileDiff[
 
   if (patchFile && fs.existsSync(patchFile)) {
     let current: string | undefined;
-    for (const line of fs.readFileSync(patchFile, 'utf8').split(/\r?\n/)) {
+    for (const line of readPatchText(patchFile).split(/\r?\n/)) {
       // 兼容 `diff --git a/x b/x` 与只有 `+++ b/x` 的补丁格式
       const gitHeader = /^diff --git a\/(.+?) b\/(.+?)$/.exec(line);
       const plusHeader = /^\+\+\+ b\/(.+)$/.exec(line);

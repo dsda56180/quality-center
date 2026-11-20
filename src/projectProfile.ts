@@ -68,7 +68,7 @@ export function recipeAdvice(profile: ProjectProfile): string[] {
   if (profile.javaVersion && profile.javaVersion >= 8) {
     advice.push(
       '静态分析（低风险）：SimplifyBooleanExpression、UnnecessaryParentheses；' +
-        '需在 openRewrite.recipeArtifacts 加入 org.openrewrite.recipe:rewrite-static-analysis:2.10.0'
+        '所需配方库已由插件内置，可在设置中把这些配方加入白名单后启用'
     );
   }
   const major = profile.springBootVersion?.split('.')[0];
