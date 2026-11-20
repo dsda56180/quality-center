@@ -158,29 +158,32 @@ export function getHtml(nonce: string): string {
     animation: catFill 3.2s linear infinite;
   }
   .cat-runner {
-    position: absolute; bottom: 6px; left: -24px;
-    font-size: 20px; line-height: 1;
-    animation: catRun 3.2s linear infinite;
-    will-change: left;
+    position: absolute; left: 0; right: 0; bottom: 5px; height: 24px;
+    display: flex; align-items: flex-end; justify-content: space-around;
     pointer-events: none;
   }
   .cat-runner .cat {
     display: inline-block;
-    animation: catBob .5s ease-in-out infinite alternate;
-    filter: drop-shadow(0 1px 1px rgba(0,0,0,.25));
+    font-size: 19px; line-height: 1;
+    transform-origin: 50% 90%;
+    animation: catJump 1s ease-in-out infinite alternate;
+    transition: opacity .28s ease, transform .28s ease;
   }
+  .cat-runner .cat.gone {
+    opacity: 0;
+    transform: translateY(-8px) scale(.45);
+    animation: none;
+  }
+  .cat-stage.paused .cat { animation-play-state: paused; }
   .cat-tip {
     display: block; margin-top: 2px;
     font-size: 10px; color: var(--vscode-descriptionForeground);
   }
   .cat-tip::after { content: ''; animation: catDots 1.4s steps(4, end) infinite; }
-  @keyframes catRun {
-    from { left: -24px; }
-    to { left: calc(100% - 18px); }
-  }
-  @keyframes catBob {
-    from { transform: translateY(0) rotate(-8deg); }
-    to { transform: translateY(-5px) rotate(8deg); }
+  @keyframes catJump {
+    0% { transform: translateY(0) rotate(-6deg); }
+    50% { transform: translateY(-7px) rotate(0deg); }
+    100% { transform: translateY(0) rotate(6deg); }
   }
   @keyframes catFill {
     from { left: -38%; }
@@ -383,7 +386,7 @@ export function getHtml(nonce: string): string {
   <div id="catbar" class="catbar">
     <div class="cat-stage">
       <div class="cat-track"><div class="cat-fill"></div></div>
-      <div class="cat-runner"><span class="cat">🐱</span></div>
+      <div class="cat-runner" id="catrunner"></div>
     </div>
     <span class="cat-tip" id="cattip">猫咪正在奔跑检查代码</span>
   </div>
@@ -595,6 +598,34 @@ export function getHtml(nonce: string): string {
     return '';
   }
 
+  // 每只猫对应一个待执行项目：不同品种用 emoji 区分，颜色用 hue-rotate 区分
+  var CAT_EMOJI = ['🐱', '🐈', '🐈‍⬛', '😺', '😸', '😻', '😼', '🐆', '🙀', '🐾'];
+  var CAT_HUE = [0, 28, 190, 320, 90, 260, 45, 140, 210, 75];
+  function renderCats(total, done) {
+    var runner = document.getElementById('catrunner');
+    if (!runner) {
+      return;
+    }
+    // 扫描器数量即项目数；深度修复没有分项时保留一只猫
+    var target = total > 0 ? Math.min(total, CAT_EMOJI.length) : 1;
+    if (runner.children.length !== target) {
+      var html = '';
+      for (var index = 0; index < target; index += 1) {
+        html += '<span class="cat" style="'
+          + 'filter:hue-rotate(' + CAT_HUE[index % CAT_HUE.length] + 'deg) drop-shadow(0 1px 1px rgba(0,0,0,.25));'
+          + 'animation-delay:' + (index * 0.12).toFixed(2) + 's;">'
+          + CAT_EMOJI[index % CAT_EMOJI.length] + '</span>';
+      }
+      runner.innerHTML = html;
+    }
+    var remaining = total > 0
+      ? Math.max(0, Math.round(target * (1 - Math.min(done, total) / total)))
+      : target;
+    Array.from(runner.children).forEach(function (cat, index) {
+      cat.classList.toggle('gone', index >= remaining);
+    });
+  }
+
   function render() {
     updateTabs();
     var upgradeBtn = document.getElementById('upgrade');
@@ -623,6 +654,12 @@ export function getHtml(nonce: string): string {
       fill.style.width = progress.total
         ? Math.max(8, Math.round((progress.done / progress.total) * 100)) + '%'
         : '34%';
+    }
+    // 只有扫描阶段才有分项进度；深度修复按单个任务展示一只猫
+    renderCats(state.scanning ? progress.total : 0, state.scanning ? progress.done : 0);
+    var stage = document.querySelector('.cat-stage');
+    if (stage) {
+      stage.classList.toggle('paused', !!state.paused);
     }
     const sum = document.getElementById('summary');
     if (!state.finishedAt) {

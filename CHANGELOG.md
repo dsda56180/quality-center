@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.17.1
+
+- 猫咪进度条改为按任务数展示：N 个待执行项对应 N 只不同品种/颜色的猫咪，每完成一项减少一只；暂停扫描时猫咪同步暂停
+- 深度修复阶段没有分项进度，保留一只猫咪
+
 ## 0.17.0
 
 - 新增「显示全部可用配方」：通过 `rewrite-maven-plugin:discover -Ddetail=true` 列出类路径上的全部 OpenRewrite 配方（约 1400 个），并带上官方 displayName 与 description
