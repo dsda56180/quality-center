@@ -1,3 +1,5 @@
+import { RECIPE_LIBRARY, RecipeRisk, RISK_LABEL } from '../recipes';
+
 export interface SnapshotIssue {
   id: number;
   source: string;
@@ -53,7 +55,34 @@ export interface Snapshot {
     trivy: boolean;
     spotbugs: boolean;
     scanOnSave: boolean;
+    /** 手动启用的深度修复配方 */
+    recipes: string[];
+    /** 自动启用低风险配方 */
+    autoRecipes: boolean;
   };
+}
+
+/** 设置面板中的深度修复配方勾选列表，按风险分组 */
+function recipeGroupsHtml(): string {
+  const risks: RecipeRisk[] = ['low', 'medium', 'high'];
+  return risks
+    .map((risk) => {
+      const items = RECIPE_LIBRARY.filter((recipe) => recipe.risk === risk);
+      if (!items.length) {
+        return '';
+      }
+      const rows = items
+        .map(
+          (recipe) =>
+            `<label class="dlg-row recipe-row">`
+            + `<input type="checkbox" class="recipe-box" data-recipe="${recipe.id}" data-risk="${recipe.risk}" />`
+            + `<span class="recipe-name">${recipe.label}</span>`
+            + `<span class="recipe-desc">${recipe.description}</span></label>`
+        )
+        .join('');
+      return `<div class="recipe-group"><div class="recipe-group-title">${RISK_LABEL[risk]}</div>${rows}</div>`;
+    })
+    .join('');
 }
 
 export function getHtml(nonce: string): string {
@@ -307,7 +336,8 @@ export function getHtml(nonce: string): string {
   }
   .mask.on { display: flex; }
   .dialog {
-    width: min(320px, 92vw);
+    width: min(420px, 94vw);
+    max-height: 86vh; overflow-y: auto;
     padding: 12px;
     border-radius: 6px;
     border: 1px solid var(--vscode-panel-border);
@@ -315,6 +345,19 @@ export function getHtml(nonce: string): string {
     box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
   }
   .dlg-title { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+  .dlg-sec {
+    margin: 12px 0 4px; padding-top: 8px; font-weight: 600; font-size: 12px;
+    border-top: 1px solid var(--vscode-panel-border);
+  }
+  .recipe-group { margin: 4px 0 6px; }
+  .recipe-group-title { font-size: 10px; color: var(--vscode-descriptionForeground); margin: 4px 0 2px; }
+  .recipe-row { align-items: flex-start; flex-wrap: wrap; }
+  .recipe-row .recipe-name { flex: 0 0 auto; }
+  .recipe-row .recipe-desc {
+    flex: 1 1 100%; padding-left: 20px;
+    font-size: 10px; line-height: 1.4; color: var(--vscode-descriptionForeground);
+  }
+  .recipe-row input:disabled + .recipe-name { opacity: .75; }
   .dlg-presets { display: flex; gap: 6px; margin-bottom: 8px; }
   .dlg-row {
     display: flex; align-items: center; gap: 6px;
@@ -381,6 +424,10 @@ export function getHtml(nonce: string): string {
       <label class="dlg-row"><input type="checkbox" id="opt-spotbugs" /> 静态缺陷（SpotBugs，较慢）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-scansave" /> 保存文件后自动扫描</label>
       <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。保存后下次扫描生效。</div>
+      <div class="dlg-sec">深度修复配方</div>
+      <label class="dlg-row"><input type="checkbox" id="opt-autorecipes" /> 自动启用低风险配方（推荐）</label>
+      <div class="dlg-hint">配方库由插件内置，无需填写 Maven 坐标。低风险配方只做等价改写，勾选后保存生效。</div>
+      <div id="recipe-groups">${recipeGroupsHtml()}</div>
       <div class="dlg-actions">
         <button id="set-cancel" class="secondary">取消</button>
         <button id="set-apply">保存</button>
@@ -402,7 +449,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, paused: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true } };
+  let state = { scanning: false, paused: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true, recipes: [], autoRecipes: true } };
   let activeTab = 'all';
   /** 各来源分组的折叠状态，跨渲染保留 */
   let collapsed = {};
@@ -752,8 +799,21 @@ export function getHtml(nonce: string): string {
   });
 
   var SETTING_KEYS = ['checkstyle', 'gitleaks', 'trivy', 'spotbugs'];
+  var RECIPE_BOXES = Array.from(document.querySelectorAll('.recipe-box'));
   function settingBox(key) {
     return document.getElementById('opt-' + key);
+  }
+  function syncRecipeUI() {
+    var auto = document.getElementById('opt-autorecipes').checked;
+    RECIPE_BOXES.forEach(function (box) {
+      if (box.getAttribute('data-risk') !== 'low') {
+        return;
+      }
+      if (auto) {
+        box.checked = true;
+      }
+      box.disabled = auto;
+    });
   }
   function openSettings() {
     var options = state.scanOptions || {};
@@ -761,6 +821,12 @@ export function getHtml(nonce: string): string {
       settingBox(key).checked = options[key] !== false;
     });
     document.getElementById('opt-scansave').checked = options.scanOnSave !== false;
+    document.getElementById('opt-autorecipes').checked = options.autoRecipes !== false;
+    var recipes = options.recipes || [];
+    RECIPE_BOXES.forEach(function (box) {
+      box.checked = recipes.indexOf(box.getAttribute('data-recipe')) >= 0;
+    });
+    syncRecipeUI();
     markPreset(currentPreset());
     document.getElementById('mask').classList.add('on');
   }
@@ -793,6 +859,7 @@ export function getHtml(nonce: string): string {
     });
   });
   document.getElementById('settings').addEventListener('click', openSettings);
+  document.getElementById('opt-autorecipes').addEventListener('change', syncRecipeUI);
   document.getElementById('set-cancel').addEventListener('click', closeSettings);
   document.getElementById('mask').addEventListener('click', function (event) {
     if (event.target === document.getElementById('mask')) {
@@ -809,6 +876,12 @@ export function getHtml(nonce: string): string {
     var options = { scanOnSave: document.getElementById('opt-scansave').checked };
     SETTING_KEYS.forEach(function (key) {
       options[key] = settingBox(key).checked;
+    });
+    options.autoRecipes = document.getElementById('opt-autorecipes').checked;
+    options.recipes = RECIPE_BOXES.filter(function (box) {
+      return !box.disabled && box.checked;
+    }).map(function (box) {
+      return box.getAttribute('data-recipe');
     });
     closeSettings();
     vscode.postMessage({ type: 'saveSettings', options: options });

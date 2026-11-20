@@ -62,22 +62,21 @@ export function detectProjectProfile(root: string): ProjectProfile {
   };
 }
 
-/** 根据项目画像给出配方建议；仅展示，不自动启用 */
+/** 根据项目画像给出配方与升级提示；低风险配方已由插件自动启用 */
 export function recipeAdvice(profile: ProjectProfile): string[] {
   const advice: string[] = [];
   if (profile.javaVersion && profile.javaVersion >= 8) {
     advice.push(
-      '静态分析（低风险）：SimplifyBooleanExpression、UnnecessaryParentheses；' +
-        '所需配方库已由插件内置，可在设置中把这些配方加入白名单后启用'
+      '低风险配方已自动启用（清理无用导入、简化布尔表达式、去除多余括号等），无需手动配置 Maven 坐标，可在面板「设置」中调整'
     );
   }
-  const major = profile.springBootVersion?.split('.')[0];
-  if (major === '2') {
+  const [major, minor] = (profile.springBootVersion ?? '').split('.').map((part) => Number(part));
+  if (major === 2 && minor < 7) {
     advice.push(
-      `Spring Boot ${profile.springBootVersion} 已停止维护，建议评估升级到 2.7.x（rewrite-spring，高风险，未自动启用）`
+      `检测到 Spring Boot ${profile.springBootVersion}（已停止维护）：可在「升级依赖」中一次升级到 2.7.18，再执行代码级迁移`
     );
-  } else if (major === '3') {
-    advice.push('Spring Boot 3.x：可按需使用 rewrite-spring 的升级配方（高风险，未自动启用）');
+  } else if (major === 3) {
+    advice.push('Spring Boot 3.x：可在设置里手动启用代码迁移配方（高风险，默认不勾选）');
   }
   return advice;
 }

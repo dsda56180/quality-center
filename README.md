@@ -79,8 +79,9 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.spotbugs.enabled` | `true` | 启用 SpotBugs + FindSecBugs 字节码检测 |
 | `qualityCenter.dependencyUpgrade.enabled` | `true` | 显示「升级依赖」按钮，允许一键改写 pom 版本 |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
-| `qualityCenter.openRewrite.recipes` | 清理无用导入 / `Objects.isNull` / 缩短全限定类名 | 允许执行的 OpenRewrite 配方白名单 |
-| `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标；`org.openrewrite.recipe:rewrite-static-analysis` 已内置，通常无需填写 |
+| `qualityCenter.openRewrite.recipes` | `[]` | 手动启用的进阶配方；面板「设置」里按风险分组勾选，低风险配方默认自动启用 |
+| `qualityCenter.openRewrite.autoRecipes` | `true` | 自动启用低风险配方（清理无用导入、简化布尔表达式、去除多余括号等） |
+| `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标；配方库所需的包已内置，通常无需填写 |
 | `qualityCenter.openRewrite.pluginVersion` | `5.44.0` | `rewrite-maven-plugin` 版本 |
 | `qualityCenter.openRewrite.compileGate` | `true` | 修复后自动编译校验，失败提示回滚 |
 | `qualityCenter.openRewrite.dryRunPreview` | `true` | 执行前先 dry-run，并在编辑器页签打开 diff 预览 |
@@ -208,20 +209,24 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 面板工具栏点「升级依赖」，或在某条 CVE 详情里点「升级此依赖」，会先打开「依赖升级预览」页签：
 
-- 每个可升级依赖一张卡片，直接展示 `pom.xml` 中将被替换的行（红删绿增），并标注覆盖的漏洞数；
-- 勾选要升级的依赖后点「升级并校验编译」；关闭页签或点「取消」不会改动任何文件；
+- 每个可升级项一张卡片，展示当前版本来源（父 POM / 导入的 BOM / pom 直接声明 / 传递依赖）、将被改动的内容（红删绿增）与覆盖漏洞数；
+- 会在预览前执行一次 `mvn dependency:tree -Dverbose`（按 pom 内容哈希缓存），用于识别真实解析版本、版本冲突与 BOM 联动关系；
+- 升级 BOM 或父 POM 时列出会被一并解决的子依赖；多个可选目标版本时可直接在下拉框里确认；
+- 勾选要升级的项后点「升级并校验编译」；关闭页签或点「取消」不会改动任何文件；
 - 预览页是普通编辑器页签，切走或点击别处不会关闭，可以反复比对。
 
 执行时的规则：
 
-1. 三种写回方式，预览页会标注：
+1. 写回方式遵循「版本号统一由 `<properties>` 管理」的标准设计，预览页会标注：
    - `属性`：版本写成 `${xxx}` 且只被这一个依赖引用时，改属性值；
-   - `固定版本`：依赖由 BOM 管理、或版本属性被多处引用时，只给这个依赖补一个显式 `<version>`，不影响其它依赖；
-   - `版本覆盖`：依赖没有在 pom 中声明（传递依赖），写入 `<dependencyManagement>` 覆盖实际解析版本；
-2. 版本同一线内择优：例如 `9.0.41` 优先升到 `9.0.x` 最新补丁，避免跨大版本引入破坏性变更；
-3. 无法确定的项（版本不一致、缺少同线修复版本等）会在预览页底部按原因折叠分组列出；
-4. 自动执行 `mvn -DskipTests compile` 门禁，失败会还原 `pom.xml` 并展示失败日志；
-5. 成功后自动重新扫描，确认漏洞已消除。
+   - `版本抽离`：硬编码版本、或属性被多处共用时，抽离出 `<artifactId>.version` 属性并让依赖引用它；
+   - `版本覆盖`：依赖没有在 pom 中声明（传递依赖），在 `<dependencyManagement>` 中新增条目，版本同样引用抽离出的属性；
+   - `父 POM / BOM / 构建插件`：升级父 POM、导入的 BOM 或显式固定的插件版本，整组组件一起对齐；
+2. Spring Boot 2.x（<2.7）会作为一组升级到 2.7.18：由 BOM 管理的 `spring-*`、`tomcat-embed-*`、`jackson-*`、`logback-*` 等不再逐个固定；显式写了版本的依赖不会被 BOM 覆盖，仍单独提示；
+3. 版本同一线内择优：例如 `9.0.41` 优先升到 `9.0.x` 最新补丁，避免跨大版本引入破坏性变更；
+4. 无法确定的项（版本不一致、缺少同线修复版本等）会在预览页底部按原因折叠分组列出；
+5. 自动执行 `mvn -DskipTests compile` 门禁，失败会还原 `pom.xml` 并展示失败日志；
+6. 成功后自动重新扫描，确认漏洞已消除；若升级了 Spring Boot，还会询问是否继续执行代码级迁移（rewrite-spring，高风险，先预览再应用）。
 
 ## 代码质量与密钥的中文说明
 
@@ -263,16 +268,21 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 执行过程中，面板顶部的猫咪进度条会显示当前阶段（备份改动 / 运行配方 / 校验编译 / 恢复改动）和已用秒数；详细日志写入「质量中心」输出面板。
 
-默认配方为清理无用导入、`Objects.isNull` 改写、缩短全限定类名，可在设置中增删。
+默认启用低风险配方（清理无用导入、`Objects.isNull` 改写、缩短全限定类名、简化布尔表达式、去除多余括号），无需配置 Maven 坐标。在面板「设置 → 深度修复配方」里可以：
 
-执行前会解析项目根 `pom.xml`（parent、`dependencyManagement`、compiler 配置），识别 Java 与 Spring Boot 版本，并在确认弹窗中展示：
+- 关闭「自动启用低风险配方」，改为逐项勾选；
+- 按风险分组查看配方说明，手动勾选高风险配方（如 Spring Boot 2.7 代码迁移）；
+- 配方所需的依赖包由插件按选择自动带入，`rewrite-maven-plugin` 版本也会按配方兼容性自动选择。
+
+执行前会解析项目根 `pom.xml`（parent、`dependencyManagement`、compiler 配置），识别 Java 与 Spring Boot 版本，并给出提示：
 
 - 项目画像，例如 `Java 8 · Spring Boot 2.4.2`；
-- 推荐但**未启用**的配方，例如 static-analysis 配方包，或 Spring Boot 2.7 升级评估，并标注风险等级。
-
-推荐只做展示，不会自动写入配置，也不会自动执行升级迁移配方。
+- 低风险配方已自动启用；
+- 若识别到 Spring Boot 2.x（<2.7），提示可通过「升级依赖」升级到 2.7.18 后再执行代码级迁移。
 
 问题详情里还有「深度修复此规则」：只运行该条问题对应的配方（如 `UnusedImports` → 清理无用导入、`SimplifyBooleanExpression` → 简化布尔表达式），适合逐类处理，不必全量执行。
+
+需要配方库之外的自定义配方包时，把坐标填进 `openRewrite.recipeArtifacts` 即可；插件只执行设置中明确勾选的配方，不会自动加载任意来源的配方包。
 
 ## 基线 / 忽略
 
@@ -280,18 +290,7 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 忽略记录使用稳定指纹（来源 + 规则 + 文件 + 消息；CVE 用包名 + 版本），不包含行号，代码移动后仍能匹配。该文件默认位于已被 `.gitignore` 忽略的目录中，仅本机生效；如需团队共享，可自行取消忽略并提交。
 
-需要 `org.openrewrite.staticanalysis.*` 等进阶配方时，不必改项目 pom。插件已内置 `org.openrewrite.recipe:rewrite-static-analysis:2.10.0`，直接把配方加入白名单即可，插件会通过 `-Drewrite.recipeArtifactCoordinates` 临时加入类路径。例如：
-
-```json
-"qualityCenter.openRewrite.recipes": [
-  "org.openrewrite.java.RemoveUnusedImports",
-  "org.openrewrite.staticanalysis.SimplifyBooleanExpression"
-]
-```
-
-若使用其他配方包，也可以把坐标填进 `openRewrite.recipeArtifacts`，插件会合并到内置配方库一起传入。
-
-插件只执行白名单里明确列出的配方，不会自动加载任意来源的配方包。
+插件只执行设置里明确勾选的配方，不会自动加载任意来源的配方包。
 
 ## 发布
 

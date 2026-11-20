@@ -11,15 +11,11 @@ import { detectProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
 import { mavenMirrorArgs } from '../maven';
-import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText } from './deepFixPanel';
-import { applyUpgrade, planUpgrades, UpgradeCandidate } from '../upgrader';
+import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, UpgradePreviewEntry } from './deepFixPanel';
+import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '../upgrader';
+import { indexBomManagement, localRepository, parseBomRefs, parseDependencyTree } from '../dependencies';
+import { artifactsForRecipes, AUTO_RECIPES, recipeLabel, requiredPluginVersion } from '../recipes';
 import { getHtml, Snapshot, SnapshotIssue } from './html';
-
-const RECIPE_LABELS: Record<string, string> = {
-  'org.openrewrite.java.RemoveUnusedImports': '清理无用导入',
-  'org.openrewrite.java.RemoveObjectsIsNull': 'Objects.isNull 改为 == null',
-  'org.openrewrite.java.ShortenFullyQualifiedTypeReferences': '缩短全限定类名'
-};
 
 interface RuleRecipe {
   recipe: string;
@@ -55,10 +51,24 @@ interface ScanSettingsInput {
   trivy?: boolean;
   spotbugs?: boolean;
   scanOnSave?: boolean;
+  recipes?: string[];
+  autoRecipes?: boolean;
 }
 
-/** 插件内置的配方库，用户无需手动配置坐标 */
-const BUILTIN_RECIPE_ARTIFACTS = ['org.openrewrite.recipe:rewrite-static-analysis:2.10.0'];
+/** 同一 GA 只保留一个坐标，避免内置配方包与用户配置重复加载 */
+function dedupeArtifacts(items: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of items) {
+    const ga = item.split(':').slice(0, 2).join(':');
+    if (!ga || seen.has(ga)) {
+      continue;
+    }
+    seen.add(ga);
+    result.push(item);
+  }
+  return result;
+}
 
 /** 读取项目源码编码，缺失时按 UTF-8 处理 */
 function sourceEncoding(root: string): string {
@@ -90,26 +100,6 @@ function encodingEnv(encoding: string): NodeJS.ProcessEnv {
     ? current.replace(/-Dfile\.encoding=\S+/g, option)
     : `${current} ${option}`.trim();
   return { MAVEN_OPTS: merged };
-}
-
-/** 提取两段文本之间变化的最小行区间，用于升级预览里的局部 diff */
-function changedLines(before: string, after: string): { oldLine: string; newLine: string } {
-  const oldLines = before.split(/\r?\n/);
-  const newLines = after.split(/\r?\n/);
-  let start = 0;
-  while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) {
-    start += 1;
-  }
-  let oldEnd = oldLines.length;
-  let newEnd = newLines.length;
-  while (oldEnd > start && newEnd > start && oldLines[oldEnd - 1] === newLines[newEnd - 1]) {
-    oldEnd -= 1;
-    newEnd -= 1;
-  }
-  return {
-    oldLine: oldLines.slice(start, oldEnd).join('\n'),
-    newLine: newLines.slice(start, newEnd).join('\n')
-  };
 }
 
 function createNonce(): string {
@@ -364,7 +354,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
    * 深度修复：调用 OpenRewrite 跑白名单配方。
    * 不改项目 pom，用全限定插件坐标临时加载；因此只支持插件内置类路径自带的配方。
    */
-  async deepFix(override?: { recipes: string[]; artifacts?: string[]; label?: string }): Promise<void> {
+  async deepFix(override?: {
+    recipes: string[];
+    artifacts?: string[];
+    label?: string;
+    pluginVersion?: string;
+  }): Promise<void> {
     const root = this.runner.root();
     if (!root) {
       return;
@@ -395,20 +390,33 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     const dirtyCount = status.stdout.split(/\r?\n/).filter(Boolean).length;
 
-    const recipes = override?.recipes ?? config.get<string[]>('openRewrite.recipes', []);
+    const configured = override?.recipes ?? config.get<string[]>('openRewrite.recipes', []);
+    // 自动启用低风险配方；显式指定配方（单规则修复、Spring 迁移）时按指定执行
+    const recipes = override
+      ? configured
+      : Array.from(
+          new Set([
+            ...configured,
+            ...(config.get<boolean>('openRewrite.autoRecipes', true) ? AUTO_RECIPES : [])
+          ])
+        );
     if (recipes.length === 0) {
-      void vscode.window.showWarningMessage('未配置 OpenRewrite 配方，请先在设置中填写白名单。');
+      void vscode.window.showWarningMessage(
+        '未启用任何 OpenRewrite 配方，请在面板「设置」中勾选深度修复配方。'
+      );
       return;
     }
-    const version = config.get<string>('openRewrite.pluginVersion', '5.44.0');
-    const recipeArtifacts = Array.from(
-      new Set([
-        ...BUILTIN_RECIPE_ARTIFACTS,
-        ...(override?.artifacts ?? config.get<string[]>('openRewrite.recipeArtifacts', []))
-          .map((item) => item.trim())
-          .filter(Boolean)
-      ])
-    );
+    // 配方对插件版本有要求时以配方为准，避免类路径冲突
+    const version =
+      override?.pluginVersion ??
+      requiredPluginVersion(recipes) ??
+      config.get<string>('openRewrite.pluginVersion', '5.44.0');
+    const recipeArtifacts = dedupeArtifacts([
+      ...artifactsForRecipes(recipes),
+      ...(override?.artifacts ?? config.get<string[]>('openRewrite.recipeArtifacts', []))
+        .map((item) => item.trim())
+        .filter(Boolean)
+    ]);
 
     const profile = detectProjectProfile(root);
     const profileParts = [
@@ -417,7 +425,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     ].filter(Boolean);
     const advice = recipeAdvice(profile);
     const recipeLines = recipes
-      .map((recipe) => `· ${RECIPE_LABELS[recipe] ?? recipe}`)
+      .map((recipe) => `· ${recipeLabel(recipe)}`)
       .join('\n');
 
     let previewPatch: string | undefined;
@@ -470,7 +478,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       const decision = await this.showFixPreview(previewPatch, previewFiles, {
         label: override?.label,
         project: profileParts.length ? profileParts.join(' · ') : 'Java 项目',
-        recipes: recipes.map((recipe) => RECIPE_LABELS[recipe] ?? recipe),
+        recipes: recipes.map((recipe) => recipeLabel(recipe)),
         advice,
         dirtyCount,
         selectable
@@ -817,7 +825,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   /**
-   * CVE 一键升级：只改 pom 中显式声明版本的直接依赖，
+   * CVE 一键升级：结合依赖树与 BOM 索引判断版本来源，
    * 升级后执行 mvn compile 门禁，失败自动还原 pom。
    */
   async upgradeDependencies(packageName?: string): Promise<void> {
@@ -841,7 +849,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
 
-    const plan = planUpgrades(root, result.issues);
+    const context = await this.loadUpgradeContext(root);
+    const plan = planUpgrades(root, result.issues, context);
     if (plan.candidates.length === 0) {
       const detail = plan.skipped.length
         ? plan.skipped
@@ -879,9 +888,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     const original = fs.readFileSync(pomFile, 'utf8');
     const entries = pool
-      .map((candidate) => {
-        const next = applyUpgrade(original, candidate);
-        if (!next) {
+      .map((candidate): UpgradePreviewEntry | undefined => {
+        const applied = applyUpgrade(original, candidate);
+        if (!applied) {
           return undefined;
         }
         return {
@@ -890,10 +899,15 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           to: candidate.to,
           cveCount: candidate.cveCount,
           mode: candidate.mode,
-          ...changedLines(original, next)
+          source: candidate.source,
+          affects: candidate.affects,
+          conflicts: candidate.conflicts,
+          note: candidate.note,
+          alternatives: candidate.alternatives,
+          changes: applied.changes
         };
       })
-      .filter((entry): entry is NonNullable<typeof entry> => !!entry);
+      .filter((entry): entry is UpgradePreviewEntry => !!entry);
     if (entries.length === 0) {
       void vscode.window.showInformationMessage('没有可在 pom.xml 中定位到的升级项。');
       return;
@@ -916,20 +930,25 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     let text = original;
     for (const item of chosen) {
-      const next = applyUpgrade(text, item);
-      if (!next) {
+      const target = decision.versions[item.packageName] || item.to;
+      const applied = applyUpgrade(text, item, target);
+      if (!applied) {
         void vscode.window.showErrorMessage(
           `未在 pom.xml 中找到 ${item.packageName} ${item.from}，已取消本次升级。`
         );
         return;
       }
-      text = next;
+      text = applied.text;
     }
     this.fixCache = undefined;
 
     this.deepFixState = { stage: '升级依赖并校验编译', startedAt: Date.now() };
     this.push();
-    this.log(`开始升级依赖：${chosen.map((item) => `${item.packageName} ${item.from}→${item.to}`).join(', ')}`);
+    this.log(
+      `开始升级依赖：${chosen
+        .map((item) => `${item.packageName} ${item.from}→${decision.versions[item.packageName] || item.to}`)
+        .join(', ')}`
+    );
     let compiled = false;
     try {
       fs.writeFileSync(pomFile, text, 'utf8');
@@ -970,7 +989,88 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       void vscode.window.showInformationMessage(
         `已升级 ${chosen.length} 个依赖并通过编译校验，已重新扫描。`
       );
+      const spring = chosen.find(
+        (item) =>
+          item.groupId === 'org.springframework.boot' && (item.mode === 'parent' || item.mode === 'bom')
+      );
+      if (spring) {
+        const bootVersion = decision.versions[spring.packageName] || spring.to;
+        const answer = await vscode.window.showInformationMessage(
+          `Spring Boot 已升级到 ${bootVersion} 并通过编译。是否继续执行代码级迁移？` +
+            '（rewrite-spring，会改动业务代码，执行前可预览 diff）',
+          '执行代码迁移',
+          '稍后'
+        );
+        if (answer === '执行代码迁移') {
+          await this.deepFix({
+            recipes: ['org.openrewrite.java.spring.boot2.UpgradeSpringBoot_2_7'],
+            label: `Spring Boot ${bootVersion} 代码迁移`
+          });
+        }
+      }
     }
+  }
+
+  /**
+   * 依赖树 + BOM 索引，用于判断版本来源与联动关系。
+   * 按 pom 内容哈希缓存，避免每次打开预览都重新跑 Maven。
+   */
+  private depContextCache?: { key: string; context: UpgradeContext };
+
+  private async loadUpgradeContext(root: string): Promise<UpgradeContext> {
+    const pomFile = path.join(root, 'pom.xml');
+    let pom = '';
+    try {
+      pom = fs.readFileSync(pomFile, 'utf8');
+    } catch {
+      return {};
+    }
+    const key = createHash('sha1').update(pom).digest('hex');
+    if (this.depContextCache?.key === key) {
+      return this.depContextCache.context;
+    }
+
+    const context: UpgradeContext = {};
+    try {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: '质量中心：解析依赖树与 BOM 版本…',
+          cancellable: false
+        },
+        async (progress) => {
+          progress.report({ message: 'mvn dependency:tree' });
+          const outDir = path.join(os.tmpdir(), 'quality-center');
+          fs.mkdirSync(outDir, { recursive: true });
+          const outFile = path.join(outDir, `dependency-tree-${key.slice(0, 8)}.txt`);
+          fs.rmSync(outFile, { force: true });
+          const outcome = await run(
+            'mvn',
+            ['-B', '-q', ...mavenMirrorArgs(), 'dependency:tree', '-Dverbose', `-DoutputFile=${outFile}`],
+            root,
+            10 * 60_000
+          );
+          const text = fs.existsSync(outFile)
+            ? fs.readFileSync(outFile, 'utf8')
+            : `${outcome.stdout}\n${outcome.stderr}`;
+          if (outcome.code !== 0 && !text.trim()) {
+            this.log('解析依赖树失败，升级预览将只依据扫描结果');
+          }
+          context.nodes = parseDependencyTree(text);
+
+          progress.report({ message: '读取 BOM 管理版本' });
+          const repo = await localRepository(root);
+          context.managed = await indexBomManagement(parseBomRefs(pom), repo);
+          this.log(
+            `依赖树 ${context.nodes.size} 个组件；BOM 索引 ${context.managed.size} 个受管版本`
+          );
+        }
+      );
+    } catch (error) {
+      this.log(`解析依赖信息失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.depContextCache = { key, context };
+    return context;
   }
 
   /** 面板内设置：写入工作区配置后立即重新扫描 */
@@ -994,11 +1094,22 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         await config.update(key, value, target);
       }
     }
+    if (Array.isArray(options.recipes)) {
+      await config.update('openRewrite.recipes', options.recipes, target);
+    }
+    if (typeof options.autoRecipes === 'boolean') {
+      await config.update('openRewrite.autoRecipes', options.autoRecipes, target);
+    }
+    // 配方变化后，预演缓存不再可信
+    this.fixCache = undefined;
     this.log(
       `扫描设置已更新：${updates
         .filter(([, value]) => typeof value === 'boolean')
         .map(([key, value]) => `${key}=${value}`)
-        .join(', ')}`
+        .join(', ')}` +
+        (Array.isArray(options.recipes)
+          ? `；配方=${options.recipes.length} 个，自动低风险=${options.autoRecipes !== false}`
+          : '')
     );
     this.push();
     void vscode.window.showInformationMessage('扫描设置已保存，下次扫描生效。');
@@ -1088,20 +1199,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     });
   }
 
-  /** 依赖升级预览页：展示每个依赖在 pom 中的局部 diff，勾选后执行 */
+  /** 依赖升级预览页：展示版本来源、冲突与 pom 改动，勾选后执行 */
   private showUpgradePreview(
-    entries: Array<{
-      packageName: string;
-      from: string;
-      to: string;
-      cveCount: number;
-      mode: 'property' | 'pin' | 'manage';
-      oldLine: string;
-      newLine: string;
-    }>,
+    entries: UpgradePreviewEntry[],
     skipped: Array<{ packageName: string; reason: string }>,
     project: string
-  ): Promise<{ packages: string[] } | null> {
+  ): Promise<{ packages: string[]; versions: Record<string, string> } | null> {
     const panel = vscode.window.createWebviewPanel(
       'qualityCenter.upgradePreview',
       '依赖升级预览',
@@ -1118,7 +1221,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const known = new Set(entries.map((entry) => entry.packageName));
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (value: { packages: string[] } | null): void => {
+      const finish = (value: { packages: string[]; versions: Record<string, string> } | null): void => {
         if (settled) {
           return;
         }
@@ -1129,26 +1232,35 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         resolve(value);
       };
       panel.onDidDispose(() => finish(null));
-      panel.webview.onDidReceiveMessage((message: { type?: string; packages?: string[] }) => {
-        if (message.type === 'cancel') {
-          finish(null);
+      panel.webview.onDidReceiveMessage(
+        (message: { type?: string; packages?: string[]; versions?: Record<string, string> }) => {
+          if (message.type === 'cancel') {
+            finish(null);
+            panel.dispose();
+            return;
+          }
+          if (message.type !== 'apply') {
+            return;
+          }
+          const picks = (message.packages ?? []).filter((name) => known.has(name));
+          if (!picks.length) {
+            return;
+          }
+          if (this.runner.isRunning) {
+            void vscode.window.showInformationMessage('扫描进行中，请稍后再执行依赖升级。');
+            return;
+          }
+          const versions: Record<string, string> = {};
+          for (const name of picks) {
+            const version = message.versions?.[name];
+            if (version) {
+              versions[name] = version;
+            }
+          }
+          finish({ packages: picks, versions });
           panel.dispose();
-          return;
         }
-        if (message.type !== 'apply') {
-          return;
-        }
-        const picks = (message.packages ?? []).filter((name) => known.has(name));
-        if (!picks.length) {
-          return;
-        }
-        if (this.runner.isRunning) {
-          void vscode.window.showInformationMessage('扫描进行中，请稍后再执行依赖升级。');
-          return;
-        }
-        finish({ packages: picks });
-        panel.dispose();
-      });
+      );
     });
   }
 
@@ -1373,7 +1485,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         gitleaks: config.get<boolean>('gitleaks.enabled', true),
         trivy: config.get<boolean>('trivy.enabled', true),
         spotbugs: config.get<boolean>('spotbugs.enabled', true),
-        scanOnSave: config.get<boolean>('scanOnSave', true)
+        scanOnSave: config.get<boolean>('scanOnSave', true),
+        recipes: config.get<string[]>('openRewrite.recipes', []),
+        autoRecipes: config.get<boolean>('openRewrite.autoRecipes', true)
       }
     };
     void this.view.webview.postMessage(snapshot);

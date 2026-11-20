@@ -1,15 +1,32 @@
 import * as fs from 'fs';
 
+export type UpgradePreviewMode = 'parent' | 'bom' | 'plugin' | 'property' | 'extract' | 'manage';
+
+export interface UpgradePreviewChange {
+  label: string;
+  old: string;
+  new: string;
+}
+
 export interface UpgradePreviewEntry {
   packageName: string;
   from: string;
   to: string;
   cveCount: number;
   /** 写回 pom 的方式，用于界面标注 */
-  mode: 'property' | 'pin' | 'manage';
-  /** pom 中受影响的行（删除 / 新增），用于展示局部 diff */
-  oldLine: string;
-  newLine: string;
+  mode: UpgradePreviewMode;
+  /** 当前版本来源（父 POM / BOM / pom 声明 / 传递依赖） */
+  source: string;
+  /** 本次升级一并解决的依赖 */
+  affects?: string[];
+  /** 版本冲突说明 */
+  conflicts?: string[];
+  /** 附加说明，如插件版本对齐 */
+  note?: string;
+  /** 可选目标版本，多个时让用户确认 */
+  alternatives?: string[];
+  /** pom 中的逐条改动 */
+  changes: UpgradePreviewChange[];
 }
 
 export interface UpgradePreviewInfo {
@@ -19,36 +36,84 @@ export interface UpgradePreviewInfo {
 }
 
 export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo): string {
-  const MODE_LABEL: Record<UpgradePreviewEntry['mode'], string> = {
+  const MODE_LABEL: Record<UpgradePreviewMode, string> = {
+    parent: '父 POM',
+    bom: 'BOM',
+    plugin: '构建插件',
     property: '属性',
-    pin: '固定版本',
+    extract: '版本抽离',
     manage: '版本覆盖'
   };
   const renderCard = (entry: UpgradePreviewEntry, index: number): string => {
-    const oldLines = entry.oldLine
-      .split(/\r?\n/)
-      .map((line) => `<div class="ln del">${escapeHtml(line) || '&nbsp;'}</div>`)
+    const lines = (value: string, kind: 'del' | 'add'): string =>
+      value
+        .split(/\r?\n/)
+        .map((line) => `<div class="ln ${kind}">${escapeHtml(line) || '&nbsp;'}</div>`)
+        .join('');
+    const changes = entry.changes
+      .map(
+        (change) =>
+          `<div class="change"><div class="change-label">${escapeHtml(change.label)}</div>`
+          + `<pre class="code">${change.old ? lines(change.old, 'del') : ''}${
+            change.new ? lines(change.new, 'add') : ''
+          }</pre></div>`
+      )
       .join('');
-    const newLines = entry.newLine
-      .split(/\r?\n/)
-      .map((line) => `<div class="ln add">${escapeHtml(line) || '&nbsp;'}</div>`)
-      .join('');
+    const alternatives =
+      entry.alternatives && entry.alternatives.length > 1
+        ? `<div class="row"><span class="row-key">目标版本</span>`
+          + `<select class="ver-pick" data-pkg="${escapeHtml(entry.packageName)}">`
+          + entry.alternatives
+            .map(
+              (version) =>
+                `<option value="${escapeHtml(version)}"${version === entry.to ? ' selected' : ''}>${escapeHtml(
+                  version
+                )}</option>`
+            )
+            .join('')
+          + '</select><span class="row-hint">多个可用版本，请确认后升级</span></div>'
+        : '';
+    const affects =
+      entry.affects && entry.affects.length
+        ? `<div class="row"><span class="row-key">一并解决</span><span class="row-val">${escapeHtml(
+            entry.affects.slice(0, 8).join('、')
+          )}${entry.affects.length > 8 ? ` 等 ${entry.affects.length} 项` : ''}</span></div>`
+        : '';
+    const conflicts =
+      entry.conflicts && entry.conflicts.length
+        ? `<div class="row warn"><span class="row-key">版本冲突</span><span class="row-val">${entry.conflicts
+            .map((item) => escapeHtml(item))
+            .join('<br>')}</span></div>`
+        : '';
+    const note = entry.note ? `<div class="row"><span class="row-key">说明</span><span class="row-val">${escapeHtml(entry.note)}</span></div>` : '';
     return `<section class="card" id="u-${index}">
   <label class="card-head">
     <input type="checkbox" class="pick" data-pkg="${escapeHtml(entry.packageName)}" checked />
     <span class="pkg">${escapeHtml(entry.packageName)}</span>
-    <span class="ver">${escapeHtml(entry.from)} → ${escapeHtml(entry.to)}</span>
+    <span class="ver">${escapeHtml(entry.from)} → <b class="target">${escapeHtml(entry.to)}</b></span>
     <span class="kind">${MODE_LABEL[entry.mode] ?? ''}</span>
-    <span class="cve">${entry.cveCount} 条漏洞</span>
+    <span class="cve">${entry.cveCount ? entry.cveCount + ' 条漏洞' : '配套升级'}</span>
   </label>
-  <pre class="code">${entry.oldLine ? oldLines : ''}${entry.newLine ? newLines : ''}</pre>
+  <div class="row"><span class="row-key">版本来源</span><span class="row-val">${escapeHtml(entry.source)}</span></div>
+  ${alternatives}
+  ${affects}
+  ${conflicts}
+  ${changes}
+  ${note}
 </section>`;
   };
-  const direct = info.entries.filter((entry) => entry.mode !== 'manage');
+  const framework = info.entries.filter(
+    (entry) => entry.mode === 'parent' || entry.mode === 'bom' || entry.mode === 'plugin'
+  );
+  const direct = info.entries.filter((entry) => entry.mode === 'property' || entry.mode === 'extract');
   const managed = info.entries.filter((entry) => entry.mode === 'manage');
   const cards =
-    (direct.length
-      ? `<h2>直接依赖（${direct.length}）</h2>`
+    (framework.length
+      ? `<h2>框架 / BOM 升级（${framework.length}）<span class="hint">一次升级整组版本，子依赖不再逐个固定</span></h2>`
+        + framework.map((entry) => renderCard(entry, info.entries.indexOf(entry))).join('')
+      : '')
+    + (direct.length
+      ? `<h2>直接依赖（${direct.length}）<span class="hint">版本号统一抽离到 &lt;properties&gt;</span></h2>`
         + direct.map((entry) => renderCard(entry, info.entries.indexOf(entry))).join('')
       : '')
     + (managed.length
@@ -105,9 +170,24 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
   .card-head .pick { accent-color: var(--vscode-button-background); }
   .pkg { font-weight: 600; font-family: var(--vscode-editor-font-family, monospace); }
   .ver { color: var(--vscode-descriptionForeground); }
+  .ver .target { color: var(--vscode-foreground); }
   .cve { margin-left: auto; font-size: 11px; color: var(--vscode-editorWarning-foreground, #d7a35f); }
+  .row { display: flex; gap: 8px; padding: 3px 8px 0; font-size: 11px; line-height: 1.5; }
+  .row.warn .row-val { color: var(--vscode-editorWarning-foreground, #d7a35f); }
+  .row-key { flex: 0 0 58px; color: var(--vscode-descriptionForeground); }
+  .row-val { flex: 1 1 auto; word-break: break-word; }
+  .row-hint { flex: 0 0 auto; color: var(--vscode-descriptionForeground); }
+  select.ver-pick {
+    flex: 0 0 auto; padding: 1px 4px; font-size: 11px;
+    background: var(--vscode-dropdown-background, var(--vscode-input-background));
+    color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
+    border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+    border-radius: 3px;
+  }
+  .change { margin-top: 4px; }
+  .change-label { padding-left: 8px; font-size: 10px; color: var(--vscode-descriptionForeground); }
   pre.code {
-    margin: 4px 0 0; padding: 4px 0; overflow-x: auto;
+    margin: 2px 0 0; padding: 2px 0; overflow-x: auto;
     font-family: var(--vscode-editor-font-family, monospace);
     font-size: 11px; line-height: 1.45;
   }
@@ -145,7 +225,7 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
 <body>
 <header>
   <div class="title">依赖升级预览</div>
-  <div class="sub">${escapeHtml(info.project)} · ${info.entries.length} 个可升级依赖 · 勾选后执行升级并校验编译</div>
+  <div class="sub">${escapeHtml(info.project)} · ${info.entries.length} 个可升级项 · 勾选后执行升级并校验编译</div>
 </header>
 <main>${cards}${skipped}</main>
 <footer>
@@ -166,11 +246,21 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
 
   function sync() {
     const selected = picked().length;
-    countEl.textContent = '已选 ' + selected + ' / ' + boxes.length + ' 个依赖';
+    countEl.textContent = '已选 ' + selected + ' / ' + boxes.length + ' 项';
     applyBtn.disabled = selected === 0;
   }
 
   boxes.forEach(function (box) { box.addEventListener('change', sync); });
+
+  document.querySelectorAll('select.ver-pick').forEach(function (select) {
+    select.addEventListener('change', function () {
+      const card = select.closest('.card');
+      const target = card ? card.querySelector('.target') : null;
+      if (target) {
+        target.textContent = select.value;
+      }
+    });
+  });
 
   document.getElementById('cancel').addEventListener('click', function () {
     vscode.postMessage({ type: 'cancel' });
@@ -181,7 +271,14 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
     if (!selected.length) {
       return;
     }
-    vscode.postMessage({ type: 'apply', packages: selected });
+    const versions = {};
+    selected.forEach(function (name) {
+      const select = document.querySelector('select.ver-pick[data-pkg="' + name + '"]');
+      if (select) {
+        versions[name] = select.value;
+      }
+    });
+    vscode.postMessage({ type: 'apply', packages: selected, versions: versions });
   });
 
   document.addEventListener('keydown', function (event) {
@@ -341,7 +438,7 @@ export function buildDeepFixPreviewHtml(nonce: string, info: DeepFixPreviewInfo)
 
   const recipeLines = info.recipes.map((recipe) => `<span class="chip">${escapeHtml(recipe)}</span>`).join('');
   const advice = info.advice.length
-    ? `<div class="meta-line">推荐但未启用：${info.advice.map((item) => escapeHtml(item)).join('、')}</div>`
+    ? `<div class="meta-line">配方建议：${info.advice.map((item) => escapeHtml(item)).join('、')}</div>`
     : '';
   const dirty =
     info.dirtyCount > 0

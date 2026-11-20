@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)与字节码级静态缺陷的统一面板，支持一键导出给 AI 修复",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -182,18 +182,19 @@
         "qualityCenter.openRewrite.recipes": {
           "type": "array",
           "items": { "type": "string" },
-          "default": [
-            "org.openrewrite.java.RemoveUnusedImports",
-            "org.openrewrite.java.RemoveObjectsIsNull",
-            "org.openrewrite.java.ShortenFullyQualifiedTypeReferences"
-          ],
-          "description": "允许运行的 OpenRewrite 配方白名单"
+          "default": [],
+          "description": "手动启用的 OpenRewrite 配方（低风险配方由 qualityCenter.openRewrite.autoRecipes 自动启用）；面板「设置」中可直接勾选"
+        },
+        "qualityCenter.openRewrite.autoRecipes": {
+          "type": "boolean",
+          "default": true,
+          "description": "自动启用低风险配方（清理无用导入、简化布尔表达式、去除多余括号等），配方库由插件内置，无需配置 Maven 坐标"
         },
         "qualityCenter.openRewrite.recipeArtifacts": {
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "description": "额外配方包的 Maven 坐标，通过 -Drewrite.recipeArtifactCoordinates 传入，无需修改项目 pom。插件已内置 org.openrewrite.recipe:rewrite-static-analysis，通常无需手动填写"
+          "description": "额外配方包的 Maven 坐标，通过 -Drewrite.recipeArtifactCoordinates 传入，无需修改项目 pom。插件已内置配方库所需的包，通常无需手动填写"
         },
         "qualityCenter.openRewrite.pluginVersion": {
           "type": "string",
