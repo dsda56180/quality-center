@@ -687,6 +687,7 @@ export function getHtml(nonce: string): string {
 
   // 任务结束时让剩余猫咪逐只淡出，而不是整条进度条瞬间消失
   var catHideTimer = null;
+  var catDoneTimer = null;
   var catbarVisible = false;
   function dismissCats() {
     if (catHideTimer) {
@@ -751,26 +752,6 @@ export function getHtml(nonce: string): string {
         button.disabled = busy;
       }
     });
-    // 任务结束时让剩余猫咪逐只淡出，而不是整条进度条瞬间消失
-    var catbar = document.getElementById('catbar');
-    if (busy) {
-      if (!catbarVisible) {
-        startCatRun();
-      }
-      clearTimeout(catHideTimer);
-      catHideTimer = null;
-      catbar.classList.add('on');
-      catbarVisible = true;
-    } else if (catbarVisible) {
-      dismissCats();
-    }
-    document.getElementById('cattip').textContent = catTipText();
-    var scanning = !!state.scanning;
-    var paused = !!state.paused;
-    document.getElementById('scan').style.display = scanning || paused ? 'none' : '';
-    document.getElementById('resume').style.display = paused ? '' : 'none';
-    document.getElementById('pause').style.display = scanning && !paused ? '' : 'none';
-    document.getElementById('stop').style.display = scanning ? '' : 'none';
     var fill = document.querySelector('.cat-fill');
     var progress = state.scanProgress || { done: 0, total: 0 };
     // 进度条填充使用当前任务的真实进度：扫描按扫描器、修复/升级按阶段
@@ -781,11 +762,41 @@ export function getHtml(nonce: string): string {
       // 按当前步骤号展示：第 1/3 步 = 1/3
       ratio = Math.min(1, ((deep.done || 0) + 1) / deep.total);
     }
-    if (fill) {
-      fill.style.width = ratio === null
-        ? '34%'
-        : Math.max(8, Math.round(ratio * 100)) + '%';
+    // 任务结束时让进度条先补满 100%，停留片刻再收起
+    var catbar = document.getElementById('catbar');
+    if (busy) {
+      clearTimeout(catDoneTimer);
+      catDoneTimer = null;
+      if (!catbarVisible) {
+        startCatRun();
+      }
+      clearTimeout(catHideTimer);
+      catHideTimer = null;
+      catbar.classList.add('on');
+      catbarVisible = true;
+      if (fill) {
+        fill.style.width = ratio === null
+          ? '34%'
+          : Math.max(8, Math.round(ratio * 100)) + '%';
+      }
+    } else if (catbarVisible) {
+      if (fill) {
+        fill.style.width = '100%';
+      }
+      if (!catDoneTimer && !catHideTimer) {
+        catDoneTimer = setTimeout(function () {
+          catDoneTimer = null;
+          dismissCats();
+        }, 700);
+      }
     }
+    document.getElementById('cattip').textContent = catTipText();
+    var scanning = !!state.scanning;
+    var paused = !!state.paused;
+    document.getElementById('scan').style.display = scanning || paused ? 'none' : '';
+    document.getElementById('resume').style.display = paused ? '' : 'none';
+    document.getElementById('pause').style.display = scanning && !paused ? '' : 'none';
+    document.getElementById('stop').style.display = scanning ? '' : 'none';
     // 扫描按扫描器数量、深度修复/依赖升级按阶段数展示猫咪
     var catTotal = 0;
     var catDone = 0;
