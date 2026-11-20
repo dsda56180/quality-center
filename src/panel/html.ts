@@ -183,12 +183,10 @@ export function getHtml(nonce: string): string {
   }
   .cat-tip::after { content: ''; animation: catDots 1.4s steps(4, end) infinite; }
   @keyframes catRun {
-    0% { left: 0; opacity: 1; }
-    80% { left: 86%; opacity: 1; }
-    86% { left: 94%; opacity: 0; }
-    87% { left: 0; opacity: 0; }
-    94% { left: 0; opacity: 1; }
-    100% { left: 0; opacity: 1; }
+    0% { left: -120px; }
+    82% { left: 100%; }
+    84% { left: -120px; }
+    100% { left: -120px; }
   }
   @keyframes catJump {
     0% { transform: translate(0, 0) rotate(-5deg); }
@@ -755,7 +753,8 @@ export function getHtml(nonce: string): string {
     if (state.scanning && progress.total) {
       ratio = progress.done / progress.total;
     } else if (deep && deep.total) {
-      ratio = (deep.done || 0) / deep.total;
+      // 按当前步骤号展示：第 1/3 步 = 1/3
+      ratio = Math.min(1, ((deep.done || 0) + 1) / deep.total);
     }
     if (fill) {
       fill.style.width = ratio === null
