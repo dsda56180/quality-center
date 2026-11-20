@@ -138,10 +138,10 @@ export function getHtml(nonce: string): string {
   }
   .catbar { display: none; margin: 0 0 10px; }
   .catbar.on { display: block; }
-  .cat-stage { position: relative; height: 36px; overflow: hidden; }
+  .cat-stage { position: relative; height: 40px; overflow: hidden; }
   .cat-track {
-    position: absolute; left: 0; right: 0; bottom: 3px; height: 10px;
-    border-radius: 10px; overflow: hidden;
+    position: absolute; left: 0; right: 0; bottom: 3px; height: 11px;
+    border-radius: 11px; overflow: hidden;
     background: var(--vscode-input-background, rgba(128,128,128,.15));
     border: 1px solid var(--vscode-panel-border);
   }
@@ -158,14 +158,14 @@ export function getHtml(nonce: string): string {
     animation: catFill 3.2s linear infinite;
   }
   .cat-runner {
-    position: absolute; left: -280px; bottom: 14px; height: 20px;
+    position: absolute; left: 0; bottom: 14px; height: 24px;
     display: flex; gap: 6px; align-items: flex-end;
-    animation: catRun 4.8s linear infinite;
+    transition: left .35s ease;
     pointer-events: none;
   }
   .cat-runner .cat {
     display: inline-block;
-    width: 20px; height: 20px;
+    width: 24px; height: 24px;
     transform-origin: 50% 90%;
     animation: catJump 1s ease-in-out infinite alternate;
     transition: opacity .28s ease, transform .28s ease;
@@ -183,10 +183,6 @@ export function getHtml(nonce: string): string {
     font-size: 10px; color: var(--vscode-descriptionForeground);
   }
   .cat-tip::after { content: ''; animation: catDots 1.4s steps(4, end) infinite; }
-  @keyframes catRun {
-    from { left: -280px; }
-    to { left: 100%; }
-  }
   @keyframes catJump {
     0% { transform: translateY(0) rotate(-6deg); }
     50% { transform: translateY(-7px) rotate(0deg); }
@@ -684,6 +680,20 @@ export function getHtml(nonce: string): string {
     }, 340 + cats.length * 100);
   }
 
+  /** 猫队右边缘对齐蓝色填充的推进前沿，随进度一起向右移动 */
+  function positionCats(ratio) {
+    var stage = document.querySelector('.cat-stage');
+    var runner = document.getElementById('catrunner');
+    if (!stage || !runner) {
+      return;
+    }
+    var width = stage.clientWidth;
+    var pack = runner.scrollWidth || 0;
+    var value = ratio === null || ratio === undefined ? 0.34 : ratio;
+    var left = Math.max(0, Math.min(width - pack, width * value - pack));
+    runner.style.left = left + 'px';
+  }
+
   function renderCats(total, done) {
     var runner = document.getElementById('catrunner');
     if (!runner) {
@@ -764,6 +774,7 @@ export function getHtml(nonce: string): string {
     }
     if (busy) {
       renderCats(catTotal, catDone);
+      positionCats(ratio);
     }
     var stage = document.querySelector('.cat-stage');
     if (stage) {
