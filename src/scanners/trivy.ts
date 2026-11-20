@@ -9,6 +9,8 @@ export interface TrivyOptions {
   scanTarget?: string;
   dbRepository?: string;
   javaDbRepository?: string;
+  /** 未显式配置仓库时优先使用国内镜像，默认 true */
+  preferMirror?: boolean;
   /** 低于该等级的漏洞不显示，默认 low（全部显示） */
   minSeverity?: Severity;
   /** 只显示有修复版本的漏洞，默认 true */
@@ -44,9 +46,30 @@ interface TrivyReport {
   Results?: { Target?: string; Vulnerabilities?: TrivyVulnerability[] }[];
 }
 
-/** 国内网络下官方 ghcr.io 常不可达，失败时自动回退到 daocloud 镜像 */
+/** 国内网络下官方 ghcr.io 常不可达，默认改用 daocloud 镜像 */
 const FALLBACK_DB = 'ghcr.m.daocloud.io/aquasecurity/trivy-db';
 const FALLBACK_JAVA_DB = 'ghcr.m.daocloud.io/aquasecurity/trivy-java-db';
+/** 漏洞库在这个时间内视为新鲜，直接跳过更新检查，避免联网阻塞 */
+const DB_FRESH_MS = 12 * 3600 * 1000;
+
+/** 从 `trivy --version` 输出中解析某个库的本地下载时间 */
+function dbDownloadedAt(text: string, block: string): number | undefined {
+  const start = text.indexOf(block);
+  if (start < 0) {
+    return undefined;
+  }
+  const match = /DownloadedAt:\s*(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})/.exec(text.slice(start));
+  if (!match) {
+    return undefined;
+  }
+  const timestamp = Date.parse(`${match[1]}T${match[2]}Z`);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function isFreshDb(text: string, block: string): boolean {
+  const timestamp = dbDownloadedAt(text, block);
+  return timestamp !== undefined && Date.now() - timestamp < DB_FRESH_MS;
+}
 
 function toSeverity(severity: string | undefined): Severity {
   switch ((severity || '').toUpperCase()) {
@@ -212,9 +235,17 @@ async function invoke(
   target: string,
   root: string,
   dbRepository?: string,
-  javaDbRepository?: string
+  javaDbRepository?: string,
+  skip?: { vuln: boolean; java: boolean }
 ) {
-  const args = [mode, '--format', 'json', '--quiet', '--scanners', 'vuln', '--timeout', '15m'];
+  const args = [mode, '--format', 'json', '--quiet', '--scanners', 'vuln', '--timeout', '4m'];
+  // 本地漏洞库还新鲜时不要检查更新：连不上 ghcr.io 会让扫描阻塞数分钟
+  if (skip?.vuln) {
+    args.push('--skip-db-update');
+  }
+  if (skip?.java) {
+    args.push('--skip-java-db-update');
+  }
   if (dbRepository) {
     args.push('--db-repository', dbRepository);
   }
@@ -229,7 +260,7 @@ async function invoke(
   }
   args.push(target);
   // cwd 设为项目根目录：trivy 自动加载根目录的 .trivyignore 忽略清单
-  return run(exe, args, root, 900_000);
+  return run(exe, args, root, 300_000);
 }
 
 export async function scanTrivy(root: string, options: TrivyOptions): Promise<TrivyResult> {
@@ -243,15 +274,25 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
     return { issues: [], missing: true };
   }
 
+  // 本地库 12 小时内下载过就直接跳过更新检查，避免 ghcr.io 不可达时长时间等待
+  const versionText = `${version.stdout}\n${version.stderr}`;
+  const skip = {
+    vuln: isFreshDb(versionText, 'Vulnerability DB'),
+    java: isFreshDb(versionText, 'Java DB')
+  };
+
   const { target, mode } = pickTarget(root, options.scanTarget);
+  const useMirror = options.preferMirror !== false;
+  const dbRepository = options.dbRepository || (useMirror ? FALLBACK_DB : undefined);
+  const javaDbRepository = options.javaDbRepository || (useMirror ? FALLBACK_JAVA_DB : undefined);
 
-  let result = await invoke(exe, mode, target, root, options.dbRepository, options.javaDbRepository);
+  let result = await invoke(exe, mode, target, root, dbRepository, javaDbRepository, skip);
 
-  // 未显式配置仓库且首次失败时，自动回退到国内镜像；429 属于仓库限流，换镜像重试无意义
+  // 未显式配置仓库且未走镜像时，失败后自动回退到国内镜像；429 属于仓库限流，换镜像重试无意义
   const throttled = /429|too many requests/i.test(`${result.stderr}\n${result.stdout}`);
-  const dbDownloadFailed = result.code !== 0 && !options.dbRepository && !throttled;
+  const dbDownloadFailed = result.code !== 0 && !options.dbRepository && !throttled && !useMirror;
   if (dbDownloadFailed) {
-    const retry = await invoke(exe, mode, target, root, FALLBACK_DB, FALLBACK_JAVA_DB);
+    const retry = await invoke(exe, mode, target, root, FALLBACK_DB, FALLBACK_JAVA_DB, skip);
     if (retry.code === 0) {
       result = retry;
     }
@@ -269,8 +310,15 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
       };
     }
     const detail = result.stderr.split(/\r?\n/).filter(Boolean).slice(-4).join('\n');
-    const hint =
-      mode === 'fs' ? '\n提示：先在项目里执行 mvn package 生成 target 目录，可避免联网解析依赖。' : '';
+    const networkIssue = /download|connect|timeout|deadline|no such host/i.test(
+      `${result.stderr}\n${result.stdout}`
+    );
+    const hint = networkIssue
+      ? '\n提示：漏洞库下载/更新失败，通常是网络无法访问 ghcr.io。可保持 trivy.preferMirror 开启，' +
+        '或在终端执行 trivy --download-db-only --db-repository ghcr.m.daocloud.io/aquasecurity/trivy-db 预热本地库。'
+      : mode === 'fs'
+        ? '\n提示：先在项目里执行 mvn package 生成 target 目录，可避免联网解析依赖。'
+        : '';
     return {
       issues: [],
       error: (detail || `trivy 退出码 ${result.code}`) + hint,

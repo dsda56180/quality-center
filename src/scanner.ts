@@ -262,6 +262,7 @@ export class ScanRunner {
           scanTarget: config.get<string>('trivy.scanTarget', ''),
           dbRepository: config.get<string>('trivy.dbRepository', ''),
           javaDbRepository: config.get<string>('trivy.javaDbRepository', ''),
+          preferMirror: config.get<boolean>('trivy.preferMirror', true),
           minSeverity: config.get<string>('trivy.minSeverity', 'low') as never,
           onlyFixed: config.get<boolean>('trivy.onlyFixed', true)
         };
@@ -271,7 +272,7 @@ export class ScanRunner {
             ...statFile(path.join(root, 'pom.xml')),
             ...collectStats(path.join(root, 'target'), (name) => /\.(jar|pom)$/i.test(name))
           ],
-          ['trivy-v1', JSON.stringify(trivyOptions)]
+          ['trivy-v1', JSON.stringify(trivyOptions), new Date().toISOString().slice(0, 10)]
         );
         const hit = this.cached<TrivyResult>('trivy', sig);
         if (hit) {

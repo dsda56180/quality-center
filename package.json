@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)与字节码级静态缺陷的统一面板，支持一键导出给 AI 修复",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -136,7 +136,12 @@
         "qualityCenter.trivy.dbRepository": {
           "type": "string",
           "default": "",
-          "description": "漏洞库 OCI 仓库地址，留空使用官方源，失败时自动回退国内镜像"
+          "description": "漏洞库 OCI 仓库地址；留空时默认使用国内镜像，避免 ghcr.io 不可达导致扫描长时间卡住"
+        },
+        "qualityCenter.trivy.preferMirror": {
+          "type": "boolean",
+          "default": true,
+          "description": "未显式配置仓库时优先使用 daocloud 镜像下载漏洞库；关闭后使用 trivy 官方 ghcr.io"
         },
         "qualityCenter.trivy.javaDbRepository": {
           "type": "string",

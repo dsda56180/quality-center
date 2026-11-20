@@ -72,6 +72,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.trivy.javaDbRepository` | `""` | Java 依赖索引库 OCI 仓库，同上 |
 | `qualityCenter.trivy.minSeverity` | `low` | 低于该等级的 CVE 不显示（low/medium/high/critical） |
 | `qualityCenter.trivy.onlyFixed` | `true` | 只显示有修复版本的 CVE |
+| `qualityCenter.trivy.preferMirror` | `true` | 未配置仓库时优先走 daocloud 镜像，避免 ghcr.io 不可达导致长时间等待 |
 | `qualityCenter.spotbugs.enabled` | `true` | 启用 SpotBugs + FindSecBugs 字节码检测 |
 | `qualityCenter.dependencyUpgrade.enabled` | `true` | 显示「升级依赖」按钮，允许一键改写 pom 版本 |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
@@ -120,7 +121,7 @@ code --install-extension dsda56180.quality-center
 | --- | --- | --- | --- |
 | SpotBugs | `target/classes/**/*.class` + pom | 不执行 Maven | 约 33 秒 |
 | Checkstyle | `src/**/*.java` + 规则文件 + pom | 不执行 Maven | 约 14 秒 |
-| Trivy | pom + `target/**/*.jar|pom` | 不执行 trivy | 约 3 秒 |
+| Trivy | pom + `target/**/*.jar|pom` | 不执行 trivy | 约 3 秒（漏洞库 12 小时内更新过） |
 | Gitleaks | 每次执行（本身约 1 秒） | 1 秒 | 1 秒 |
 
 因此：
@@ -130,6 +131,8 @@ code --install-extension dsda56180.quality-center
 - 执行过 `mvn compile` 后字节码变化，下一次扫描会重新运行 SpotBugs。
 
 上次扫描结果与各扫描器缓存持久化在扩展存储目录，重开 IDE 后打开面板即可秒出结果，后台再刷新。
+
+Trivy 的耗时主要在漏洞库更新：本地库 12 小时内下载过时会直接跳过更新检查（约 3 秒）；超过 12 小时后首次扫描会先更新漏洞库（国内镜像下约 90 秒），之后恢复 3 秒。
 
 ### 面板内设置
 
