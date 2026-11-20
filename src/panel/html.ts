@@ -59,9 +59,13 @@ export interface Snapshot {
     recipes: string[];
     /** 自动启用低风险配方 */
     autoRecipes: boolean;
+    /** 显示 discover 列表中的全部配方 */
+    showAllRecipes?: boolean;
   };
   /** 内置配方库：由前端按项目画像过滤后渲染 */
   recipeLibrary?: RecipeDefinition[];
+  /** discover 是否正在后台加载 */
+  recipesDiscovering?: boolean;
   /** 项目画像，用于决定哪些配方适用 */
   projectProfile?: {
     javaVersion?: number;
@@ -350,6 +354,15 @@ export function getHtml(nonce: string): string {
   }
   .dlg-row input { accent-color: var(--vscode-button-background); }
   .dlg-hint { color: var(--vscode-descriptionForeground); font-size: 11px; margin: 8px 0 4px; line-height: 1.5; }
+  .dlg-input {
+    width: 100%; margin: 6px 0 2px; padding: 3px 6px; font-size: 11px;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 3px;
+  }
+  .recipe-src {
+    margin-left: 6px; padding: 0 5px; border-radius: 8px; font-size: 9px;
+    background: rgba(128,128,128,.2); color: var(--vscode-descriptionForeground);
+  }
   .dlg-actions { display: flex; gap: 6px; margin-top: 10px; }
 </style>
 </head>
@@ -411,8 +424,10 @@ export function getHtml(nonce: string): string {
       <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。保存后下次扫描生效。</div>
       <div class="dlg-sec">深度修复配方</div>
       <label class="dlg-row"><input type="checkbox" id="opt-autorecipes" /> 自动启用低风险配方（推荐）</label>
-      <div class="dlg-hint">配方库由插件内置并按当前项目过滤，无需填写 Maven 坐标；低风险配方只做等价改写。</div>
+      <label class="dlg-row"><input type="checkbox" id="opt-allrecipes" /> 显示全部可用配方（discover，首次加载约 10 秒）</label>
+      <div class="dlg-hint">配方库由插件内置并按当前项目过滤，无需填写 Maven 坐标；低风险配方只做等价改写。开启全部配方后，新增配方无需升级插件。</div>
       <div class="dlg-hint" id="recipe-profile"></div>
+      <input id="recipe-filter" class="dlg-input" type="search" placeholder="筛选配方（中文名或 id）" />
       <div id="recipe-groups"></div>
       <div class="dlg-actions">
         <button id="set-cancel" class="secondary">取消</button>
@@ -435,7 +450,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, paused: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true, recipes: [], autoRecipes: true }, recipeLibrary: [], projectProfile: {} };
+  let state = { scanning: false, paused: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
   let activeTab = 'all';
   /** 各来源分组的折叠状态，跨渲染保留 */
   let collapsed = {};
@@ -829,23 +844,47 @@ export function getHtml(nonce: string): string {
       if (!items || !items.length) return;
       html += '<div class="recipe-group"><div class="recipe-group-title">' + RISK_LABEL[risk] + '</div>';
       items.forEach(function (def) {
-        html += '<label class="dlg-row recipe-row">'
+        var search = (def.label + ' ' + def.id).toLowerCase();
+        html += '<label class="dlg-row recipe-row" data-search="' + esc(search) + '">'
           + '<input type="checkbox" class="recipe-box" data-recipe="' + esc(def.id) + '" data-risk="' + esc(def.risk) + '" />'
           + '<span class="recipe-name">' + esc(def.label) + '</span>'
-          + '<span class="recipe-desc">' + esc(def.description) + '</span></label>';
+          + (def.discovered ? '<span class="recipe-src">discover</span>' : '')
+          + '<span class="recipe-desc" title="' + esc(def.id) + '">' + esc(def.description) + '</span></label>';
       });
       html += '</div>';
     });
     document.getElementById('recipe-groups').innerHTML = html
       || '<div class="dlg-hint">当前项目未检测到适用的进阶配方，低风险配方按项目自动启用。</div>';
+    RECIPE_BOXES = Array.from(document.querySelectorAll('.recipe-box'));
+    applyRecipeFilter();
     var profileText = [];
     if (profile.javaVersion) profileText.push('Java ' + profile.javaVersion);
     if (profile.springBootVersion) profileText.push('Spring Boot ' + profile.springBootVersion);
     if (profile.junit) profileText.push(profile.junit === 'junit4' ? 'JUnit 4' : 'JUnit 5');
+    if (state.recipesDiscovering) {
+      profileText.push('正在加载全部配方…');
+    } else if ((state.recipeLibrary || []).some(function (def) { return def.discovered; })) {
+      profileText.push('已加载全部可选配方');
+    }
     document.getElementById('recipe-profile').textContent = profileText.length
       ? '已按当前项目过滤：' + profileText.join(' · ')
       : '未识别到项目画像，带条件的高级配方已隐藏';
-    RECIPE_BOXES = Array.from(document.querySelectorAll('.recipe-box'));
+  }
+  // 只隐藏不匹配的行，保持已勾选状态不丢失
+  function applyRecipeFilter() {
+    var input = document.getElementById('recipe-filter');
+    var keyword = input ? input.value.trim().toLowerCase() : '';
+    Array.from(document.querySelectorAll('.recipe-group')).forEach(function (group) {
+      var visible = 0;
+      Array.from(group.querySelectorAll('.recipe-row')).forEach(function (row) {
+        var hit = !keyword || (row.getAttribute('data-search') || '').indexOf(keyword) >= 0;
+        row.style.display = hit ? '' : 'none';
+        if (hit) {
+          visible += 1;
+        }
+      });
+      group.style.display = visible ? '' : 'none';
+    });
   }
   function syncRecipeUI() {
     var auto = document.getElementById('opt-autorecipes').checked;
@@ -866,6 +905,8 @@ export function getHtml(nonce: string): string {
     });
     document.getElementById('opt-scansave').checked = options.scanOnSave !== false;
     document.getElementById('opt-autorecipes').checked = options.autoRecipes !== false;
+    document.getElementById('opt-allrecipes').checked = options.showAllRecipes === true;
+    document.getElementById('recipe-filter').value = '';
     renderRecipes();
     var recipes = options.recipes || [];
     RECIPE_BOXES.forEach(function (box) {
@@ -905,6 +946,7 @@ export function getHtml(nonce: string): string {
   });
   document.getElementById('settings').addEventListener('click', openSettings);
   document.getElementById('opt-autorecipes').addEventListener('change', syncRecipeUI);
+  document.getElementById('recipe-filter').addEventListener('input', applyRecipeFilter);
   document.getElementById('set-cancel').addEventListener('click', closeSettings);
   document.getElementById('mask').addEventListener('click', function (event) {
     if (event.target === document.getElementById('mask')) {
@@ -923,6 +965,7 @@ export function getHtml(nonce: string): string {
       options[key] = settingBox(key).checked;
     });
     options.autoRecipes = document.getElementById('opt-autorecipes').checked;
+    options.showAllRecipes = document.getElementById('opt-allrecipes').checked;
     options.recipes = RECIPE_BOXES.filter(function (box) {
       return !box.disabled && box.checked;
     }).map(function (box) {

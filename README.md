@@ -81,6 +81,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
 | `qualityCenter.openRewrite.recipes` | `[]` | 手动启用的进阶配方；面板「设置」里按风险分组勾选，且只展示当前项目适用的配方 |
 | `qualityCenter.openRewrite.autoRecipes` | `true` | 自动启用当前项目适用的低风险配方（8 个等价改写） |
+| `qualityCenter.openRewrite.showAllRecipes` | `false` | 设置中显示 discover 列出的全部配方（含官方描述），新增配方无需升级插件 |
 | `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标；配方库所需的包已内置，通常无需填写 |
 | `qualityCenter.openRewrite.pluginVersion` | `5.44.0` | `rewrite-maven-plugin` 版本 |
 | `qualityCenter.openRewrite.compileGate` | `true` | 修复后自动编译校验，失败提示回滚 |
@@ -278,6 +279,7 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 - 关闭「自动启用低风险配方」，改为逐项勾选；
 - 按风险分组查看配方说明，勾选需要的高风险配方；
+- 开启「显示全部可用配方」：调用 `rewrite:discover -Ddetail=true` 列出类路径上的全部 OpenRewrite 配方（约 1400 个，含官方英文描述），新增配方无需升级插件；首次加载约 10 秒，可用搜索框筛选；
 - 配方所需的依赖包由插件按选择自动带入，`rewrite-maven-plugin` 版本也会按配方兼容性自动选择（当前配方库统一为 6.0.5）。
 
 执行前会解析项目根 `pom.xml`（parent、`dependencyManagement`、compiler 配置），识别 Java 与 Spring Boot 版本，并给出提示：

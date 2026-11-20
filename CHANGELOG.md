@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.0
+
+- 新增「显示全部可用配方」：通过 `rewrite-maven-plugin:discover -Ddetail=true` 列出类路径上的全部 OpenRewrite 配方（约 1400 个），并带上官方 displayName 与 description
+  - 新增配方不再需要升级插件；开启后可在设置里搜索、按风险分组勾选
+  - 风险按 id 启发式分级：迁移、测试、删除/依赖变更类为高风险，其余为需确认的中风险
+  - discover 结果按插件生命周期缓存，首次约 10 秒，可在设置中关闭
+  - 设置面板新增配方搜索框，勾选状态在筛选时不会丢失
+- 配置新增 `qualityCenter.openRewrite.showAllRecipes`（默认关闭）
+
 ## 0.16.1
 
 - 深度修复配方按项目画像动态过滤，避免展示不适用配方：

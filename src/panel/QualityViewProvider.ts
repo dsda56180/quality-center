@@ -17,7 +17,13 @@ import { indexBomManagement, localRepository, parseBomRefs, parseDependencyTree 
 import {
   artifactsForRecipes,
   autoRecipeIds,
+  classifyDiscoveredRecipes,
+  DEFAULT_RECIPE_ARTIFACTS,
+  mergeRecipeLibrary,
+  parseDiscoverOutput,
   RECIPE_LIBRARY,
+  RECIPE_PLUGIN_VERSION,
+  RecipeDefinition,
   recipeLabel,
   requiredPluginVersion
 } from '../recipes';
@@ -59,6 +65,7 @@ interface ScanSettingsInput {
   scanOnSave?: boolean;
   recipes?: string[];
   autoRecipes?: boolean;
+  showAllRecipes?: boolean;
 }
 
 /** 同一 GA 只保留一个坐标，避免内置配方包与用户配置重复加载 */
@@ -166,6 +173,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       this.view = undefined;
     });
     this.push();
+    this.maybeDiscover();
   }
 
   private async handleMessage(message: {
@@ -1097,6 +1105,61 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
+  /** discover 结果与项目无关，缓存一次即可 */
+  private discoverCache?: RecipeDefinition[];
+  private discoverInFlight?: Promise<RecipeDefinition[]>;
+
+  /** 通过 rewrite:discover 列出类路径上的全部配方，作为精选清单之外的扩展 */
+  private async discoverRecipes(root: string): Promise<RecipeDefinition[]> {
+    if (this.discoverCache) {
+      return this.discoverCache;
+    }
+    if (this.discoverInFlight) {
+      return this.discoverInFlight;
+    }
+    this.discoverInFlight = (async () => {
+      const outcome = await run(
+        'mvn',
+        [
+          '-B',
+          ...mavenMirrorArgs(),
+          '-Dfile.encoding=UTF-8',
+          '-Ddetail=true',
+          `-Drewrite.recipeArtifactCoordinates=${DEFAULT_RECIPE_ARTIFACTS.join(',')}`,
+          `org.openrewrite.maven:rewrite-maven-plugin:${RECIPE_PLUGIN_VERSION}:discover`
+        ],
+        root,
+        5 * 60_000
+      );
+      const items = parseDiscoverOutput(`${outcome.stdout}\n${outcome.stderr}`);
+      if (outcome.code !== 0 && items.length === 0) {
+        throw new Error('rewrite:discover 执行失败');
+      }
+      const recipes = classifyDiscoveredRecipes(items);
+      this.discoverCache = recipes;
+      this.log(`discover 发现 ${items.length} 个配方，新增 ${recipes.length} 个可选配方（含官方描述）`);
+      return recipes;
+    })();
+    try {
+      return await this.discoverInFlight;
+    } finally {
+      this.discoverInFlight = undefined;
+    }
+  }
+
+  /** 开启「显示全部配方」时，后台加载一次 discover 结果并刷新面板 */
+  private maybeDiscover(): void {
+    const root = this.runner.root();
+    const config = vscode.workspace.getConfiguration('qualityCenter');
+    if (!root || !config.get<boolean>('openRewrite.showAllRecipes', false) || this.discoverCache) {
+      return;
+    }
+    void this.discoverRecipes(root).then(
+      () => this.push(),
+      (error) => this.log(`加载全部配方失败：${error instanceof Error ? error.message : String(error)}`)
+    );
+  }
+
   /** 面板内设置：写入工作区配置后立即重新扫描 */
   private async saveScanSettings(options?: ScanSettingsInput): Promise<void> {
     if (!options) {
@@ -1124,6 +1187,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     if (typeof options.autoRecipes === 'boolean') {
       await config.update('openRewrite.autoRecipes', options.autoRecipes, target);
     }
+    if (typeof options.showAllRecipes === 'boolean') {
+      await config.update('openRewrite.showAllRecipes', options.showAllRecipes, target);
+    }
     // 配方变化后，预演缓存不再可信
     this.fixCache = undefined;
     this.log(
@@ -1136,6 +1202,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           : '')
     );
     this.push();
+    this.maybeDiscover();
     void vscode.window.showInformationMessage('扫描设置已保存，下次扫描生效。');
   }
 
@@ -1511,9 +1578,14 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         spotbugs: config.get<boolean>('spotbugs.enabled', true),
         scanOnSave: config.get<boolean>('scanOnSave', true),
         recipes: config.get<string[]>('openRewrite.recipes', []),
-        autoRecipes: config.get<boolean>('openRewrite.autoRecipes', true)
+        autoRecipes: config.get<boolean>('openRewrite.autoRecipes', true),
+        showAllRecipes: config.get<boolean>('openRewrite.showAllRecipes', false)
       },
-      recipeLibrary: RECIPE_LIBRARY,
+      recipeLibrary:
+        config.get<boolean>('openRewrite.showAllRecipes', false) && this.discoverCache
+          ? mergeRecipeLibrary(this.discoverCache)
+          : RECIPE_LIBRARY,
+      recipesDiscovering: this.discoverInFlight !== undefined,
       projectProfile: root ? this.projectProfile(root) : {}
     };
     void this.view.webview.postMessage(snapshot);

@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)与字节码级静态缺陷的统一面板，支持一键导出给 AI 修复",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -188,7 +188,12 @@
         "qualityCenter.openRewrite.autoRecipes": {
           "type": "boolean",
           "default": true,
-          "description": "自动启用当前项目适用的低风险配方（清理无用导入、简化布尔表达式、去除多余括号等 8 个等价改写），配方库由插件内置，无需配置 Maven 坐标"
+          "description": "自动启用当前项目适用的低风险配方（8 个等价改写），配方库由插件内置，无需配置 Maven 坐标"
+        },
+        "qualityCenter.openRewrite.showAllRecipes": {
+          "type": "boolean",
+          "default": false,
+          "description": "在设置中显示 rewrite:discover 列出的全部可用配方（含 OpenRewrite 官方描述）。新增配方无需升级插件，首次加载约 10 秒"
         },
         "qualityCenter.openRewrite.recipeArtifacts": {
           "type": "array",

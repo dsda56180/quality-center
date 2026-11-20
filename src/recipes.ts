@@ -31,6 +31,8 @@ export interface RecipeDefinition {
   pluginVersion?: string;
   /** 项目满足条件时才在设置里展示 */
   appliesTo?: RecipeCondition;
+  /** 来自 discover 动态发现，而非内置精选清单 */
+  discovered?: boolean;
 }
 
 const STATIC_ANALYSIS = 'org.openrewrite.recipe:rewrite-static-analysis:2.1.0';
@@ -39,6 +41,17 @@ const MIGRATE_JAVA = 'org.openrewrite.recipe:rewrite-migrate-java:3.1.0';
 const TESTING_FRAMEWORKS = 'org.openrewrite.recipe:rewrite-testing-frameworks:3.1.0';
 /** 以上配方包都基于 rewrite 8.44.1，对应插件 6.0.5，混用不会出现类路径冲突 */
 const PLUGIN_FOR_LIBRARY = '6.0.5';
+
+/** discover 时加载的配方包；也是配方库覆盖的官方包范围 */
+export const DEFAULT_RECIPE_ARTIFACTS = [
+  STATIC_ANALYSIS,
+  REWRITE_SPRING,
+  MIGRATE_JAVA,
+  TESTING_FRAMEWORKS
+];
+
+/** 配方库统一使用的插件版本 */
+export const RECIPE_PLUGIN_VERSION = PLUGIN_FOR_LIBRARY;
 
 /**
  * 插件内置配方库。
@@ -267,7 +280,7 @@ export function recipeLabel(id: string): string {
 export function requiredPluginVersion(recipeIds: string[]): string | undefined {
   let required: string | undefined;
   for (const id of recipeIds) {
-    const version = recipeDefinition(id)?.pluginVersion;
+    const version = recipeDefinition(id)?.pluginVersion ?? (artifactForRecipeId(id) ? PLUGIN_FOR_LIBRARY : undefined);
     if (!version) {
       continue;
     }
@@ -282,10 +295,119 @@ export function requiredPluginVersion(recipeIds: string[]): string | undefined {
 export function artifactsForRecipes(recipeIds: string[]): string[] {
   const artifacts: string[] = [];
   for (const id of recipeIds) {
-    const artifact = recipeDefinition(id)?.artifact;
+    const artifact = recipeDefinition(id)?.artifact ?? artifactForRecipeId(id);
     if (artifact && !artifacts.includes(artifact)) {
       artifacts.push(artifact);
     }
   }
   return artifacts;
+}
+
+/** 按配方包名前缀判断它来自哪个官方配方包；核心配方返回 undefined */
+export function artifactForRecipeId(id: string): string | undefined {
+  if (id.startsWith('org.openrewrite.staticanalysis.') || id.startsWith('org.openrewrite.analysis.')) {
+    return STATIC_ANALYSIS;
+  }
+  if (id.startsWith('org.openrewrite.java.spring.')) {
+    return REWRITE_SPRING;
+  }
+  if (id.startsWith('org.openrewrite.java.migrate.')) {
+    return MIGRATE_JAVA;
+  }
+  if (id.startsWith('org.openrewrite.java.testing.')) {
+    return TESTING_FRAMEWORKS;
+  }
+  return undefined;
+}
+
+export interface DiscoveredRecipe {
+  id: string;
+  /** OpenRewrite 官方 displayName（英文） */
+  displayName?: string;
+  /** OpenRewrite 官方 description（英文） */
+  description?: string;
+}
+
+const RECIPE_ID = /^org\.openrewrite\.[\w.$]+$/;
+
+/**
+ * 解析 `rewrite-maven-plugin:discover` 的输出。
+ * 带 -Ddetail=true 时会得到「显示名 / id / 描述 / options」，不带时只有 id 列表。
+ */
+export function parseDiscoverOutput(output: string): DiscoveredRecipe[] {
+  const lines: string[] = [];
+  let collecting = false;
+  for (const raw of output.split(/\r?\n/)) {
+    const line = raw.replace(/^\[INFO\]\s?/, '').trimEnd();
+    if (/Available Recipes:/i.test(line)) {
+      collecting = true;
+      continue;
+    }
+    if (!collecting) {
+      continue;
+    }
+    const trimmed = line.trim();
+    if (/^Found \d+ available recipes/i.test(trimmed) || /^---/.test(trimmed) || /^BUILD /.test(trimmed)) {
+      break;
+    }
+    lines.push(trimmed);
+  }
+
+  const items: DiscoveredRecipe[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!RECIPE_ID.test(line) || seen.has(line)) {
+      continue;
+    }
+    seen.add(line);
+    const previous = lines[index - 1] ?? '';
+    const next = lines[index + 1] ?? '';
+    const isMeta = (value: string): boolean =>
+      !value || RECIPE_ID.test(value) || /^options:/.test(value) || /:\s+\S/.test(value) || /^Available Recipes:/.test(value);
+    items.push({
+      id: line,
+      displayName: isMeta(previous) ? undefined : previous,
+      description: isMeta(next) ? undefined : next
+    });
+  }
+  return items;
+}
+
+const HIGH_RISK_DISCOVERED =
+  /(\.migrate\.|UpgradeSpringBoot|\.boot3\.|\.testing\.|(^|\.)junit|mockito|DeleteSourceFiles|RemoveSourceFiles|ChangeType|ChangePackage|AddManagedDependency|UpgradeDependencyVersion|RemoveDependency|AddDependency|AddCommentToMethod|ReplaceMethod)/i;
+
+/** 对 discover 出来的配方做启发式分级：迁移/测试/删除类为高风险，其余为需要确认的中风险 */
+function inferRisk(id: string): RecipeRisk {
+  return HIGH_RISK_DISCOVERED.test(id) ? 'high' : 'medium';
+}
+
+/**
+ * 把 discover 得到的配方转成可展示的配方定义。
+ * 显示名与描述来自 OpenRewrite 官方 descriptor，风险等级按 id 启发式判断。
+ */
+export function classifyDiscoveredRecipes(items: DiscoveredRecipe[]): RecipeDefinition[] {
+  const known = new Set(RECIPE_LIBRARY.map((recipe) => recipe.id));
+  return items
+    .filter((item) => !known.has(item.id) && item.id.includes('.'))
+    .map((item) => {
+      const artifact = artifactForRecipeId(item.id);
+      return {
+        id: item.id,
+        label: item.displayName || item.id.split('.').pop() || item.id,
+        risk: inferRisk(item.id),
+        description: item.description
+          ? `${item.description}（OpenRewrite 官方描述）`
+          : 'OpenRewrite 官方配方；未内置中文说明与适用条件，应用前请先预览 diff',
+        artifact,
+        pluginVersion: artifact ? PLUGIN_FOR_LIBRARY : undefined,
+        discovered: true
+      };
+    });
+}
+
+/** 精选清单 + discover 结果，按 id 去重 */
+export function mergeRecipeLibrary(discovered: RecipeDefinition[]): RecipeDefinition[] {
+  const seen = new Set(RECIPE_LIBRARY.map((recipe) => recipe.id));
+  return [...RECIPE_LIBRARY, ...discovered.filter((recipe) => !seen.has(recipe.id))];
 }
