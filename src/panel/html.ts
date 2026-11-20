@@ -157,10 +157,9 @@ export function getHtml(nonce: string): string {
     animation: catShimmer 1.6s linear infinite;
   }
   .cat-runner {
-    position: absolute; left: 0; bottom: 14px; height: 24px;
+    position: absolute; left: -300px; bottom: 14px; height: 24px;
     display: flex; gap: 6px; align-items: flex-end;
-    transition: left .35s ease;
-    animation: catPace 1.2s ease-in-out infinite alternate;
+    animation: catRun 5.2s linear infinite;
     pointer-events: none;
   }
   .cat-runner .cat {
@@ -183,9 +182,9 @@ export function getHtml(nonce: string): string {
     font-size: 10px; color: var(--vscode-descriptionForeground);
   }
   .cat-tip::after { content: ''; animation: catDots 1.4s steps(4, end) infinite; }
-  @keyframes catPace {
-    from { transform: translateX(0); }
-    to { transform: translateX(5px); }
+  @keyframes catRun {
+    from { left: -300px; }
+    to { left: 100%; }
   }
   @keyframes catJump {
     0% { transform: translate(0, 0) rotate(-5deg); }
@@ -684,20 +683,6 @@ export function getHtml(nonce: string): string {
     }, 340 + cats.length * 100);
   }
 
-  /** 猫队右边缘对齐蓝色填充的推进前沿，随进度一起向右移动 */
-  function positionCats(ratio) {
-    var stage = document.querySelector('.cat-stage');
-    var runner = document.getElementById('catrunner');
-    if (!stage || !runner) {
-      return;
-    }
-    var width = stage.clientWidth;
-    var pack = runner.scrollWidth || 0;
-    var value = ratio === null || ratio === undefined ? 0.34 : ratio;
-    var left = Math.max(0, Math.min(width - pack, width * value - pack));
-    runner.style.left = left + 'px';
-  }
-
   function renderCats(total, done) {
     var runner = document.getElementById('catrunner');
     if (!runner) {
@@ -778,7 +763,6 @@ export function getHtml(nonce: string): string {
     }
     if (busy) {
       renderCats(catTotal, catDone);
-      positionCats(ratio);
     }
     var stage = document.querySelector('.cat-stage');
     if (stage) {
