@@ -138,10 +138,10 @@ export function getHtml(nonce: string): string {
   }
   .catbar { display: none; margin: 0 0 10px; }
   .catbar.on { display: block; }
-  .cat-stage { position: relative; height: 26px; overflow: hidden; }
+  .cat-stage { position: relative; height: 36px; overflow: hidden; }
   .cat-track {
-    position: absolute; left: 0; right: 0; bottom: 2px; height: 9px;
-    border-radius: 9px; overflow: hidden;
+    position: absolute; left: 0; right: 0; bottom: 3px; height: 10px;
+    border-radius: 10px; overflow: hidden;
     background: var(--vscode-input-background, rgba(128,128,128,.15));
     border: 1px solid var(--vscode-panel-border);
   }
@@ -158,19 +158,19 @@ export function getHtml(nonce: string): string {
     animation: catFill 3.2s linear infinite;
   }
   .cat-runner {
-    position: absolute; left: -280px; bottom: 3px; height: 22px;
+    position: absolute; left: -280px; bottom: 14px; height: 20px;
     display: flex; gap: 6px; align-items: flex-end;
     animation: catRun 4.8s linear infinite;
     pointer-events: none;
   }
   .cat-runner .cat {
     display: inline-block;
-    width: 22px; height: 22px;
+    width: 20px; height: 20px;
     transform-origin: 50% 90%;
     animation: catJump 1s ease-in-out infinite alternate;
     transition: opacity .28s ease, transform .28s ease;
   }
-  .cat-runner .cat svg { display: block; }
+  .cat-runner .cat svg { display: block; width: 100%; height: 100%; }
   .cat-runner .cat.gone {
     opacity: 0;
     transform: translateY(-8px) scale(.45);
@@ -702,10 +702,17 @@ export function getHtml(nonce: string): string {
     document.getElementById('stop').style.display = scanning ? '' : 'none';
     var fill = document.querySelector('.cat-fill');
     var progress = state.scanProgress || { done: 0, total: 0 };
+    // 进度条填充使用当前任务的真实进度：扫描按扫描器、修复/升级按阶段
+    var ratio = null;
+    if (state.scanning && progress.total) {
+      ratio = progress.done / progress.total;
+    } else if (deep && deep.total) {
+      ratio = (deep.done || 0) / deep.total;
+    }
     if (fill) {
-      fill.style.width = progress.total
-        ? Math.max(8, Math.round((progress.done / progress.total) * 100)) + '%'
-        : '34%';
+      fill.style.width = ratio === null
+        ? '34%'
+        : Math.max(8, Math.round(ratio * 100)) + '%';
     }
     // 扫描按扫描器数量、深度修复/依赖升级按阶段数展示猫咪
     var catTotal = 0;
