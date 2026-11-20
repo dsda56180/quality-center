@@ -7,14 +7,20 @@ import { exportForAgent, formatIssueForCopy } from '../agentExport';
 import { run } from '../exec';
 import { applyAutoFixes, isFixable } from '../fixer';
 import { Issue, SOURCE_LABEL } from '../model';
-import { detectProjectProfile, recipeAdvice } from '../projectProfile';
+import { detectProjectProfile, ProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
 import { mavenMirrorArgs } from '../maven';
 import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, UpgradePreviewEntry } from './deepFixPanel';
 import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '../upgrader';
 import { indexBomManagement, localRepository, parseBomRefs, parseDependencyTree } from '../dependencies';
-import { artifactsForRecipes, AUTO_RECIPES, recipeLabel, requiredPluginVersion } from '../recipes';
+import {
+  artifactsForRecipes,
+  autoRecipeIds,
+  RECIPE_LIBRARY,
+  recipeLabel,
+  requiredPluginVersion
+} from '../recipes';
 import { getHtml, Snapshot, SnapshotIssue } from './html';
 
 interface RuleRecipe {
@@ -390,19 +396,20 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     const dirtyCount = status.stdout.split(/\r?\n/).filter(Boolean).length;
 
+    const profile = this.projectProfile(root);
     const configured = override?.recipes ?? config.get<string[]>('openRewrite.recipes', []);
-    // 自动启用低风险配方；显式指定配方（单规则修复、Spring 迁移）时按指定执行
+    // 自动启用「当前项目适用」的低风险配方；显式指定配方（单规则修复、Spring 迁移）时按指定执行
     const recipes = override
       ? configured
       : Array.from(
           new Set([
             ...configured,
-            ...(config.get<boolean>('openRewrite.autoRecipes', true) ? AUTO_RECIPES : [])
+            ...(config.get<boolean>('openRewrite.autoRecipes', true) ? autoRecipeIds(profile) : [])
           ])
         );
     if (recipes.length === 0) {
       void vscode.window.showWarningMessage(
-        '未启用任何 OpenRewrite 配方，请在面板「设置」中勾选深度修复配方。'
+        '当前项目没有可用的 OpenRewrite 配方，请在面板「设置」中勾选深度修复配方。'
       );
       return;
     }
@@ -418,7 +425,6 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         .filter(Boolean)
     ]);
 
-    const profile = detectProjectProfile(root);
     const profileParts = [
       profile.javaVersion ? `Java ${profile.javaVersion}` : '',
       profile.springBootVersion ? `Spring Boot ${profile.springBootVersion}` : ''
@@ -1073,6 +1079,24 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     return context;
   }
 
+  /** 项目画像（Java / Spring Boot / JUnit），按 pom 修改时间缓存，避免每次 push 都重新解析 */
+  private profileCache?: { key: string; profile: ProjectProfile };
+
+  private projectProfile(root: string): ProjectProfile {
+    try {
+      const stat = fs.statSync(path.join(root, 'pom.xml'));
+      const key = `${stat.mtimeMs}:${stat.size}`;
+      if (this.profileCache?.key === key) {
+        return this.profileCache.profile;
+      }
+      const profile = detectProjectProfile(root);
+      this.profileCache = { key, profile };
+      return profile;
+    } catch {
+      return {};
+    }
+  }
+
   /** 面板内设置：写入工作区配置后立即重新扫描 */
   private async saveScanSettings(options?: ScanSettingsInput): Promise<void> {
     if (!options) {
@@ -1488,7 +1512,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         scanOnSave: config.get<boolean>('scanOnSave', true),
         recipes: config.get<string[]>('openRewrite.recipes', []),
         autoRecipes: config.get<boolean>('openRewrite.autoRecipes', true)
-      }
+      },
+      recipeLibrary: RECIPE_LIBRARY,
+      projectProfile: root ? this.projectProfile(root) : {}
     };
     void this.view.webview.postMessage(snapshot);
   }

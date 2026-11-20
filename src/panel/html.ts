@@ -1,4 +1,4 @@
-import { RECIPE_LIBRARY, RecipeRisk, RISK_LABEL } from '../recipes';
+import { RecipeDefinition } from '../recipes';
 
 export interface SnapshotIssue {
   id: number;
@@ -60,29 +60,14 @@ export interface Snapshot {
     /** 自动启用低风险配方 */
     autoRecipes: boolean;
   };
-}
-
-/** 设置面板中的深度修复配方勾选列表，按风险分组 */
-function recipeGroupsHtml(): string {
-  const risks: RecipeRisk[] = ['low', 'medium', 'high'];
-  return risks
-    .map((risk) => {
-      const items = RECIPE_LIBRARY.filter((recipe) => recipe.risk === risk);
-      if (!items.length) {
-        return '';
-      }
-      const rows = items
-        .map(
-          (recipe) =>
-            `<label class="dlg-row recipe-row">`
-            + `<input type="checkbox" class="recipe-box" data-recipe="${recipe.id}" data-risk="${recipe.risk}" />`
-            + `<span class="recipe-name">${recipe.label}</span>`
-            + `<span class="recipe-desc">${recipe.description}</span></label>`
-        )
-        .join('');
-      return `<div class="recipe-group"><div class="recipe-group-title">${RISK_LABEL[risk]}</div>${rows}</div>`;
-    })
-    .join('');
+  /** 内置配方库：由前端按项目画像过滤后渲染 */
+  recipeLibrary?: RecipeDefinition[];
+  /** 项目画像，用于决定哪些配方适用 */
+  projectProfile?: {
+    javaVersion?: number;
+    springBootVersion?: string;
+    junit?: 'junit4' | 'junit5';
+  };
 }
 
 export function getHtml(nonce: string): string {
@@ -426,8 +411,9 @@ export function getHtml(nonce: string): string {
       <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。保存后下次扫描生效。</div>
       <div class="dlg-sec">深度修复配方</div>
       <label class="dlg-row"><input type="checkbox" id="opt-autorecipes" /> 自动启用低风险配方（推荐）</label>
-      <div class="dlg-hint">配方库由插件内置，无需填写 Maven 坐标。低风险配方只做等价改写，勾选后保存生效。</div>
-      <div id="recipe-groups">${recipeGroupsHtml()}</div>
+      <div class="dlg-hint">配方库由插件内置并按当前项目过滤，无需填写 Maven 坐标；低风险配方只做等价改写。</div>
+      <div class="dlg-hint" id="recipe-profile"></div>
+      <div id="recipe-groups"></div>
       <div class="dlg-actions">
         <button id="set-cancel" class="secondary">取消</button>
         <button id="set-apply">保存</button>
@@ -449,7 +435,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, paused: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true, recipes: [], autoRecipes: true } };
+  let state = { scanning: false, paused: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true, recipes: [], autoRecipes: true }, recipeLibrary: [], projectProfile: {} };
   let activeTab = 'all';
   /** 各来源分组的折叠状态，跨渲染保留 */
   let collapsed = {};
@@ -799,9 +785,67 @@ export function getHtml(nonce: string): string {
   });
 
   var SETTING_KEYS = ['checkstyle', 'gitleaks', 'trivy', 'spotbugs'];
-  var RECIPE_BOXES = Array.from(document.querySelectorAll('.recipe-box'));
+  var RECIPE_BOXES = [];
+  var RISK_LABEL = { low: '低风险', medium: '中风险', high: '高风险' };
+  var RISK_ORDER = ['low', 'medium', 'high'];
   function settingBox(key) {
     return document.getElementById('opt-' + key);
+  }
+  function compareVer(a, b) {
+    var pa = String(a).split(/[.\-]/).map(function (x) { return parseInt(x, 10) || 0; });
+    var pb = String(b).split(/[.\-]/).map(function (x) { return parseInt(x, 10) || 0; });
+    for (var i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+      var diff = (pa[i] || 0) - (pb[i] || 0);
+      if (diff !== 0) {
+        return diff;
+      }
+    }
+    return 0;
+  }
+  // 与 recipes.ts 的 recipeApplies 保持一致：按项目画像过滤配方
+  function recipeApplies(def, profile) {
+    var cond = def.appliesTo || {};
+    var java = profile.javaVersion;
+    if (cond.javaMin !== undefined && (!java || java < cond.javaMin)) return false;
+    if (cond.javaMax !== undefined && (!java || java > cond.javaMax)) return false;
+    var boot = profile.springBootVersion || '';
+    if (cond.springBootMajor !== undefined) {
+      if (!boot || parseInt(boot.split('.')[0], 10) !== cond.springBootMajor) return false;
+    }
+    if (cond.springBootBelow !== undefined) {
+      if (!boot || compareVer(boot, cond.springBootBelow) >= 0) return false;
+    }
+    if (cond.junit4 && profile.junit !== 'junit4') return false;
+    return true;
+  }
+  function renderRecipes() {
+    var profile = state.projectProfile || {};
+    var library = (state.recipeLibrary || []).filter(function (def) { return recipeApplies(def, profile); });
+    var groups = {};
+    library.forEach(function (def) { (groups[def.risk] = groups[def.risk] || []).push(def); });
+    var html = '';
+    RISK_ORDER.forEach(function (risk) {
+      var items = groups[risk];
+      if (!items || !items.length) return;
+      html += '<div class="recipe-group"><div class="recipe-group-title">' + RISK_LABEL[risk] + '</div>';
+      items.forEach(function (def) {
+        html += '<label class="dlg-row recipe-row">'
+          + '<input type="checkbox" class="recipe-box" data-recipe="' + esc(def.id) + '" data-risk="' + esc(def.risk) + '" />'
+          + '<span class="recipe-name">' + esc(def.label) + '</span>'
+          + '<span class="recipe-desc">' + esc(def.description) + '</span></label>';
+      });
+      html += '</div>';
+    });
+    document.getElementById('recipe-groups').innerHTML = html
+      || '<div class="dlg-hint">当前项目未检测到适用的进阶配方，低风险配方按项目自动启用。</div>';
+    var profileText = [];
+    if (profile.javaVersion) profileText.push('Java ' + profile.javaVersion);
+    if (profile.springBootVersion) profileText.push('Spring Boot ' + profile.springBootVersion);
+    if (profile.junit) profileText.push(profile.junit === 'junit4' ? 'JUnit 4' : 'JUnit 5');
+    document.getElementById('recipe-profile').textContent = profileText.length
+      ? '已按当前项目过滤：' + profileText.join(' · ')
+      : '未识别到项目画像，带条件的高级配方已隐藏';
+    RECIPE_BOXES = Array.from(document.querySelectorAll('.recipe-box'));
   }
   function syncRecipeUI() {
     var auto = document.getElementById('opt-autorecipes').checked;
@@ -822,6 +866,7 @@ export function getHtml(nonce: string): string {
     });
     document.getElementById('opt-scansave').checked = options.scanOnSave !== false;
     document.getElementById('opt-autorecipes').checked = options.autoRecipes !== false;
+    renderRecipes();
     var recipes = options.recipes || [];
     RECIPE_BOXES.forEach(function (box) {
       box.checked = recipes.indexOf(box.getAttribute('data-recipe')) >= 0;

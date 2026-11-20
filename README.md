@@ -79,8 +79,8 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.spotbugs.enabled` | `true` | 启用 SpotBugs + FindSecBugs 字节码检测 |
 | `qualityCenter.dependencyUpgrade.enabled` | `true` | 显示「升级依赖」按钮，允许一键改写 pom 版本 |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
-| `qualityCenter.openRewrite.recipes` | `[]` | 手动启用的进阶配方；面板「设置」里按风险分组勾选，低风险配方默认自动启用 |
-| `qualityCenter.openRewrite.autoRecipes` | `true` | 自动启用低风险配方（清理无用导入、简化布尔表达式、去除多余括号等） |
+| `qualityCenter.openRewrite.recipes` | `[]` | 手动启用的进阶配方；面板「设置」里按风险分组勾选，且只展示当前项目适用的配方 |
+| `qualityCenter.openRewrite.autoRecipes` | `true` | 自动启用当前项目适用的低风险配方（8 个等价改写） |
 | `qualityCenter.openRewrite.recipeArtifacts` | `[]` | 额外配方包的 Maven 坐标；配方库所需的包已内置，通常无需填写 |
 | `qualityCenter.openRewrite.pluginVersion` | `5.44.0` | `rewrite-maven-plugin` 版本 |
 | `qualityCenter.openRewrite.compileGate` | `true` | 修复后自动编译校验，失败提示回滚 |
@@ -268,11 +268,17 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 执行过程中，面板顶部的猫咪进度条会显示当前阶段（备份改动 / 运行配方 / 校验编译 / 恢复改动）和已用秒数；详细日志写入「质量中心」输出面板。
 
-默认启用低风险配方（清理无用导入、`Objects.isNull` 改写、缩短全限定类名、简化布尔表达式、去除多余括号），无需配置 Maven 坐标。在面板「设置 → 深度修复配方」里可以：
+内置 19 个常用配方，并**按当前项目画像过滤**，不需要自己查 Maven 坐标：
+
+- 低风险（自动启用，8 个）：清理无用导入、`Objects.isNull` 改写、缩短全限定类名、整理 import 顺序、简化布尔表达式、去除多余括号、去除多余分号、使用菱形泛型；
+- 中风险（手动勾选，6 个）：统一代码格式、equals 常量左置、简化布尔返回、Lambda 改方法引用、使用 `StandardCharsets`、简化常量条件分支；
+- 高风险（手动勾选，5 个，带项目条件）：Spring Boot 2.7 代码迁移（仅 Spring Boot 2.x < 2.7）、Spring Boot 3.0 代码迁移（仅 Spring Boot 2.x 且 Java ≥ 17）、Java 8 → 11 迁移（仅 Java ≤ 8）、升级到 Java 17（仅 Java 11–16）、JUnit 4 → JUnit 5 迁移（仅检测到 JUnit 4）。
+
+设置弹窗顶部会显示「已按当前项目过滤：Java 8 · Spring Boot 2.4.2 · JUnit 4」；不适用的配方直接隐藏，切换项目后重新打开设置即按新项目过滤。在「设置 → 深度修复配方」里可以：
 
 - 关闭「自动启用低风险配方」，改为逐项勾选；
-- 按风险分组查看配方说明，手动勾选高风险配方（如 Spring Boot 2.7 代码迁移）；
-- 配方所需的依赖包由插件按选择自动带入，`rewrite-maven-plugin` 版本也会按配方兼容性自动选择。
+- 按风险分组查看配方说明，勾选需要的高风险配方；
+- 配方所需的依赖包由插件按选择自动带入，`rewrite-maven-plugin` 版本也会按配方兼容性自动选择（当前配方库统一为 6.0.5）。
 
 执行前会解析项目根 `pom.xml`（parent、`dependencyManagement`、compiler 配置），识别 Java 与 Spring Boot 版本，并给出提示：
 

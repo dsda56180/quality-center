@@ -4,6 +4,8 @@ import * as path from 'path';
 export interface ProjectProfile {
   javaVersion?: number;
   springBootVersion?: string;
+  /** 测试框架倾向；junit4 时才会推荐 JUnit 4 → 5 迁移 */
+  junit?: 'junit4' | 'junit5';
 }
 
 function firstMatch(text: string, patterns: RegExp[]): string | undefined {
@@ -26,6 +28,19 @@ function normalizeJava(raw?: string): number | undefined {
   }
   const major = Number(value.replace(/[^\d]/g, ''));
   return major || undefined;
+}
+
+/** 识别 JUnit 版本倾向：优先 JUnit 4，便于提示迁移 */
+function detectJunit(text: string): ProjectProfile['junit'] {
+  const vintage = /junit-vintage-engine/.test(text);
+  const junit4 = /<artifactId>\s*junit\s*<\/artifactId>/.test(text) || vintage;
+  if (junit4) {
+    return 'junit4';
+  }
+  if (/junit-jupiter|org\.junit\.jupiter/.test(text)) {
+    return 'junit5';
+  }
+  return undefined;
 }
 
 /** 解析项目根 pom，识别 Java 与 Spring Boot 版本；失败时返回空画像 */
@@ -58,7 +73,8 @@ export function detectProjectProfile(root: string): ProjectProfile {
 
   return {
     javaVersion: normalizeJava(javaRaw),
-    springBootVersion
+    springBootVersion,
+    junit: detectJunit(text)
   };
 }
 
@@ -67,7 +83,7 @@ export function recipeAdvice(profile: ProjectProfile): string[] {
   const advice: string[] = [];
   if (profile.javaVersion && profile.javaVersion >= 8) {
     advice.push(
-      '低风险配方已自动启用（清理无用导入、简化布尔表达式、去除多余括号等），无需手动配置 Maven 坐标，可在面板「设置」中调整'
+      '低风险配方已按当前项目自动启用（等价改写），配方库内置于插件、无需配置 Maven 坐标，可在面板「设置」中调整'
     );
   }
   const [major, minor] = (profile.springBootVersion ?? '').split('.').map((part) => Number(part));
