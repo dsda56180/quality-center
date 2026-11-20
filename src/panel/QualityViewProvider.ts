@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import * as vscode from 'vscode';
 import { exportForAgent, formatIssueForCopy } from '../agentExport';
 import { run } from '../exec';
@@ -10,7 +11,7 @@ import { detectProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
 import { mavenMirrorArgs } from '../maven';
-import { buildDeepFixPreviewHtml } from './deepFixPanel';
+import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml } from './deepFixPanel';
 import { applyUpgrade, planUpgrades, UpgradeCandidate } from '../upgrader';
 import { getHtml, Snapshot, SnapshotIssue } from './html';
 
@@ -56,6 +57,26 @@ interface ScanSettingsInput {
   scanOnSave?: boolean;
 }
 
+/** 提取两段文本之间变化的最小行区间，用于升级预览里的局部 diff */
+function changedLines(before: string, after: string): { oldLine: string; newLine: string } {
+  const oldLines = before.split(/\r?\n/);
+  const newLines = after.split(/\r?\n/);
+  let start = 0;
+  while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) {
+    start += 1;
+  }
+  let oldEnd = oldLines.length;
+  let newEnd = newLines.length;
+  while (oldEnd > start && newEnd > start && oldLines[oldEnd - 1] === newLines[newEnd - 1]) {
+    oldEnd -= 1;
+    newEnd -= 1;
+  }
+  return {
+    oldLine: oldLines.slice(start, oldEnd).join('\n') || '（无变化）',
+    newLine: newLines.slice(start, newEnd).join('\n') || '（无变化）'
+  };
+}
+
 function createNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let text = '';
@@ -72,6 +93,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   private agentFile?: string;
   private deepFixState: { stage: string; startedAt: number } | null = null;
   private previewPanel?: vscode.WebviewPanel;
+  /** 上一次 dry-run 的结果，工作区未变化时直接复用，避免重复预演 */
+  private fixCache?: { key: string; patchFile?: string; files: string[] };
   private scanStartedAt: number | null = null;
   private scanProgress: { done: number; total: number; active: string[] } = {
     done: 0,
@@ -363,23 +386,32 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     let selectedFiles: Set<string> | undefined;
     let previewFailed = false;
     if (config.get<boolean>('openRewrite.dryRunPreview', true)) {
-      this.deepFixState = { stage: '预演修复（不会改动代码）', startedAt: Date.now() };
-      this.push();
-      this.log('开始 dry-run 预演');
-      try {
-        const preview = await this.previewDeepFix(root, recipes, recipeArtifacts, version);
-        if (!preview) {
-          previewFailed = true;
-        } else if (preview.files.length === 0) {
-          void vscode.window.showInformationMessage('预演未发现需要改动的代码，已跳过深度修复。');
-          return;
-        } else {
-          previewPatch = preview.patchFile;
-          previewFiles = preview.files;
-        }
-      } finally {
-        this.deepFixState = null;
+      const cacheKey = await this.fixPreviewKey(root, status.stdout, recipes, recipeArtifacts, version);
+      const cached = this.fixCache;
+      if (cached && cached.key === cacheKey && (!cached.patchFile || fs.existsSync(cached.patchFile))) {
+        previewPatch = cached.patchFile;
+        previewFiles = cached.files;
+        this.log(`复用上次预演结果（${previewFiles.length} 个文件），跳过 dry-run`);
+      } else {
+        this.deepFixState = { stage: '预演修复（不会改动代码）', startedAt: Date.now() };
         this.push();
+        this.log('开始 dry-run 预演');
+        try {
+          const preview = await this.previewDeepFix(root, recipes, recipeArtifacts, version);
+          if (!preview) {
+            previewFailed = true;
+          } else if (preview.files.length === 0) {
+            void vscode.window.showInformationMessage('预演未发现需要改动的代码，已跳过深度修复。');
+            return;
+          } else {
+            previewPatch = preview.patchFile;
+            previewFiles = preview.files;
+            this.fixCache = { key: cacheKey, patchFile: preview.patchFile, files: preview.files };
+          }
+        } finally {
+          this.deepFixState = null;
+          this.push();
+        }
       }
     }
 
@@ -425,6 +457,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         return;
       }
     }
+
+    // 一旦执行修复，工作区就变了，缓存失效
+    this.fixCache = undefined;
 
     // 不 stash：先备份改动，再直接在现有代码上跑配方，从根本上避免 stash 恢复冲突
     interface Backup {
@@ -746,6 +781,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       void vscode.window.showInformationMessage('当前有修复任务在执行，请稍后再试。');
       return;
     }
+    if (this.previewPanel) {
+      this.previewPanel.reveal();
+      void vscode.window.showInformationMessage('已有预览窗口打开，请先应用或取消。');
+      return;
+    }
 
     const plan = planUpgrades(root, result.issues);
     if (plan.candidates.length === 0) {
@@ -759,7 +799,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
 
-    let chosen: UpgradeCandidate[];
+    let pool: UpgradeCandidate[];
     if (packageName) {
       const matched = plan.candidates.find((item) => item.packageName === packageName);
       if (!matched) {
@@ -769,37 +809,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         );
         return;
       }
-      chosen = [matched];
+      pool = [matched];
     } else {
-      const picks = await vscode.window.showQuickPick(
-        plan.candidates.map((item) => ({
-          label: `${item.packageName}  ${item.from} → ${item.to}`,
-          description: `${item.cveCount} 条漏洞`,
-          picked: true,
-          candidate: item
-        })),
-        {
-          canPickMany: true,
-          title: '选择要升级的依赖（仅 pom 中显式声明版本的直接依赖）',
-          placeHolder: '默认全选，回车执行升级'
-        }
-      );
-      if (!picks || picks.length === 0) {
-        return;
-      }
-      chosen = picks.map((item) => item.candidate);
-    }
-
-    const lines = chosen
-      .map((item) => `· ${item.packageName} ${item.from} → ${item.to}（覆盖 ${item.cveCount} 条漏洞）`)
-      .join('\n');
-    const answer = await vscode.window.showWarningMessage(
-      `将修改 pom.xml，并执行 mvn -DskipTests compile 校验；编译失败会自动还原 pom。\n\n${lines}\n\n是否继续？`,
-      { modal: true },
-      '升级'
-    );
-    if (answer !== '升级') {
-      return;
+      pool = plan.candidates;
     }
 
     const pomFile = path.join(root, 'pom.xml');
@@ -810,7 +822,43 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       void vscode.window.showWarningMessage('pom.xml 有未保存的修改，请先保存后再执行依赖升级。');
       return;
     }
+
     const original = fs.readFileSync(pomFile, 'utf8');
+    const entries = pool
+      .map((candidate) => {
+        const next = applyUpgrade(original, candidate);
+        if (!next) {
+          return undefined;
+        }
+        return {
+          packageName: candidate.packageName,
+          from: candidate.from,
+          to: candidate.to,
+          cveCount: candidate.cveCount,
+          ...changedLines(original, next)
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => !!entry);
+    if (entries.length === 0) {
+      void vscode.window.showInformationMessage('没有可在 pom.xml 中定位到的升级项。');
+      return;
+    }
+
+    const profile = detectProjectProfile(root);
+    const projectParts = [
+      profile.javaVersion ? `Java ${profile.javaVersion}` : '',
+      profile.springBootVersion ? `Spring Boot ${profile.springBootVersion}` : ''
+    ].filter(Boolean);
+    const decision = await this.showUpgradePreview(entries, plan.skipped, projectParts.join(' · '));
+    if (!decision) {
+      this.log('用户取消了依赖升级预览');
+      return;
+    }
+    const chosen = pool.filter((item) => decision.packages.includes(item.packageName));
+    if (chosen.length === 0) {
+      return;
+    }
+
     let text = original;
     for (const item of chosen) {
       const next = applyUpgrade(text, item);
@@ -822,6 +870,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       }
       text = next;
     }
+    this.fixCache = undefined;
 
     this.deepFixState = { stage: '升级依赖并校验编译', startedAt: Date.now() };
     this.push();
@@ -900,6 +949,28 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     void vscode.window.showInformationMessage('扫描设置已保存，下次扫描生效。');
   }
 
+  /** 预演缓存键：HEAD + 工作区改动 + 配方配置，任一变化都会重新 dry-run */
+  private async fixPreviewKey(
+    root: string,
+    statusText: string,
+    recipes: string[],
+    artifacts: string[],
+    version: string
+  ): Promise<string> {
+    const [head, diff] = await Promise.all([
+      run('git', ['rev-parse', 'HEAD'], root, 15_000),
+      run('git', ['diff'], root, 30_000)
+    ]);
+    return createHash('sha1')
+      .update(head.stdout.trim())
+      .update(statusText)
+      .update(diff.stdout)
+      .update(recipes.join(','))
+      .update(artifacts.join(','))
+      .update(version)
+      .digest('hex');
+  }
+
   /** 在编辑器区域打开修复预览面板，返回用户勾选的文件；关闭面板视为取消 */
   private showFixPreview(
     patchFile: string | undefined,
@@ -957,6 +1028,69 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           return;
         }
         finish({ files: picks });
+        panel.dispose();
+      });
+    });
+  }
+
+  /** 依赖升级预览页：展示每个依赖在 pom 中的局部 diff，勾选后执行 */
+  private showUpgradePreview(
+    entries: Array<{
+      packageName: string;
+      from: string;
+      to: string;
+      cveCount: number;
+      oldLine: string;
+      newLine: string;
+    }>,
+    skipped: Array<{ packageName: string; reason: string }>,
+    project: string
+  ): Promise<{ packages: string[] } | null> {
+    const panel = vscode.window.createWebviewPanel(
+      'qualityCenter.upgradePreview',
+      '依赖升级预览',
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    this.previewPanel = panel;
+    panel.webview.html = buildUpgradePreviewHtml(createNonce(), {
+      project: project || 'Maven 项目',
+      entries,
+      skipped
+    });
+
+    const known = new Set(entries.map((entry) => entry.packageName));
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value: { packages: string[] } | null): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.previewPanel === panel) {
+          this.previewPanel = undefined;
+        }
+        resolve(value);
+      };
+      panel.onDidDispose(() => finish(null));
+      panel.webview.onDidReceiveMessage((message: { type?: string; packages?: string[] }) => {
+        if (message.type === 'cancel') {
+          finish(null);
+          panel.dispose();
+          return;
+        }
+        if (message.type !== 'apply') {
+          return;
+        }
+        const picks = (message.packages ?? []).filter((name) => known.has(name));
+        if (!picks.length) {
+          return;
+        }
+        if (this.runner.isRunning) {
+          void vscode.window.showInformationMessage('扫描进行中，请稍后再执行依赖升级。');
+          return;
+        }
+        finish({ packages: picks });
         panel.dispose();
       });
     });

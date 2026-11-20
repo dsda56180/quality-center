@@ -1,5 +1,160 @@
 import * as fs from 'fs';
 
+export interface UpgradePreviewEntry {
+  packageName: string;
+  from: string;
+  to: string;
+  cveCount: number;
+  /** pom 中受影响的行（删除 / 新增），用于展示局部 diff */
+  oldLine: string;
+  newLine: string;
+}
+
+export interface UpgradePreviewInfo {
+  project: string;
+  entries: UpgradePreviewEntry[];
+  skipped: Array<{ packageName: string; reason: string }>;
+}
+
+export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo): string {
+  const cards = info.entries
+    .map((entry, index) => {
+      const oldLines = entry.oldLine
+        .split(/\r?\n/)
+        .map((line) => `<div class="ln del">${escapeHtml(line) || '&nbsp;'}</div>`)
+        .join('');
+      const newLines = entry.newLine
+        .split(/\r?\n/)
+        .map((line) => `<div class="ln add">${escapeHtml(line) || '&nbsp;'}</div>`)
+        .join('');
+      return `<section class="card" id="u-${index}">
+  <label class="card-head">
+    <input type="checkbox" class="pick" data-pkg="${escapeHtml(entry.packageName)}" checked />
+    <span class="pkg">${escapeHtml(entry.packageName)}</span>
+    <span class="ver">${escapeHtml(entry.from)} → ${escapeHtml(entry.to)}</span>
+    <span class="cve">${entry.cveCount} 条漏洞</span>
+  </label>
+  <pre class="code">${oldLines}${newLines}</pre>
+</section>`;
+    })
+    .join('');
+
+  const skipped = info.skipped.length
+    ? `<div class="skipped">未纳入自动升级：${info.skipped
+        .map((item) => `${escapeHtml(item.packageName)}（${escapeHtml(item.reason)}）`)
+        .join('；')}</div>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; display: flex; flex-direction: column; overflow: hidden;
+    font-family: var(--vscode-font-family); font-size: 12px;
+    color: var(--vscode-foreground); background: var(--vscode-editor-background);
+  }
+  header { flex: none; padding: 10px 14px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
+  .title { font-size: 14px; font-weight: 600; }
+  .sub { margin-top: 4px; color: var(--vscode-descriptionForeground); }
+  main { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 14px; }
+  .card { margin-bottom: 12px; }
+  .card-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 3px;
+    background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.08));
+    cursor: pointer;
+  }
+  .card-head .pick { accent-color: var(--vscode-button-background); }
+  .pkg { font-weight: 600; font-family: var(--vscode-editor-font-family, monospace); }
+  .ver { color: var(--vscode-descriptionForeground); }
+  .cve { margin-left: auto; font-size: 11px; color: var(--vscode-editorWarning-foreground, #d7a35f); }
+  pre.code {
+    margin: 4px 0 0; padding: 4px 0; overflow-x: auto;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px; line-height: 1.45;
+  }
+  .ln { white-space: pre; padding: 0 8px; }
+  .ln.add { background: rgba(46,160,67,.18); }
+  .ln.del { background: rgba(248,81,73,.16); }
+  .skipped { margin-top: 14px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.6; }
+  footer {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px; border-top: 1px solid var(--vscode-panel-border);
+  }
+  footer .count { flex: 1 1 auto; color: var(--vscode-descriptionForeground); }
+  button {
+    flex: 0 0 auto; padding: 5px 12px; cursor: pointer; font-size: 12px;
+    border-radius: 3px; border: 1px solid transparent;
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+  }
+  button:hover { background: var(--vscode-button-hoverBackground); }
+  button.secondary {
+    background: var(--vscode-button-secondaryBackground, transparent);
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    border-color: var(--vscode-panel-border);
+  }
+  button:disabled { opacity: .45; cursor: default; }
+</style>
+</head>
+<body>
+<header>
+  <div class="title">依赖升级预览</div>
+  <div class="sub">${escapeHtml(info.project)} · ${info.entries.length} 个可升级依赖 · 勾选后执行升级并校验编译</div>
+</header>
+<main>${cards}${skipped}</main>
+<footer>
+  <span class="count" id="count"></span>
+  <button id="cancel" class="secondary">取消</button>
+  <button id="apply">升级并校验编译</button>
+</footer>
+<script nonce="${nonce}">
+  const vscode = acquireVsCodeApi();
+  const boxes = Array.from(document.querySelectorAll('input.pick'));
+  const applyBtn = document.getElementById('apply');
+  const countEl = document.getElementById('count');
+
+  function picked() {
+    return boxes.filter(function (box) { return box.checked; })
+      .map(function (box) { return box.getAttribute('data-pkg'); });
+  }
+
+  function sync() {
+    const selected = picked().length;
+    countEl.textContent = '已选 ' + selected + ' / ' + boxes.length + ' 个依赖';
+    applyBtn.disabled = selected === 0;
+  }
+
+  boxes.forEach(function (box) { box.addEventListener('change', sync); });
+
+  document.getElementById('cancel').addEventListener('click', function () {
+    vscode.postMessage({ type: 'cancel' });
+  });
+
+  applyBtn.addEventListener('click', function () {
+    const selected = picked();
+    if (!selected.length) {
+      return;
+    }
+    vscode.postMessage({ type: 'apply', packages: selected });
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') {
+      vscode.postMessage({ type: 'cancel' });
+    }
+  });
+
+  sync();
+</script>
+</body>
+</html>`;
+}
+
 export interface DeepFixPreviewInfo {
   label?: string;
   project: string;
