@@ -146,21 +146,21 @@ export function getHtml(nonce: string): string {
     border: 1px solid var(--vscode-panel-border);
   }
   .cat-fill {
-    position: absolute; top: 0; bottom: 0; width: 34%;
-    border-radius: 9px; transition: width .3s ease;
-    background: linear-gradient(90deg,
-      transparent 0%,
-      var(--vscode-progressBar-background, #3794ff) 30%,
-      #8fd3ff 50%,
-      var(--vscode-progressBar-background, #3794ff) 70%,
-      transparent 100%);
-    filter: blur(.3px);
-    animation: catFill 3.2s linear infinite;
+    position: absolute; top: 0; bottom: 0; left: 0; width: 34%;
+    border-radius: 11px; overflow: hidden;
+    transition: width .35s ease;
+    background: var(--vscode-progressBar-background, #3794ff);
+  }
+  .cat-fill::after {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 45%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.5), transparent);
+    animation: catShimmer 1.6s linear infinite;
   }
   .cat-runner {
     position: absolute; left: 0; bottom: 14px; height: 24px;
     display: flex; gap: 6px; align-items: flex-end;
     transition: left .35s ease;
+    animation: catPace 1.2s ease-in-out infinite alternate;
     pointer-events: none;
   }
   .cat-runner .cat {
@@ -183,13 +183,17 @@ export function getHtml(nonce: string): string {
     font-size: 10px; color: var(--vscode-descriptionForeground);
   }
   .cat-tip::after { content: ''; animation: catDots 1.4s steps(4, end) infinite; }
-  @keyframes catJump {
-    0% { transform: translateY(0) rotate(-6deg); }
-    50% { transform: translateY(-7px) rotate(0deg); }
-    100% { transform: translateY(0) rotate(6deg); }
+  @keyframes catPace {
+    from { transform: translateX(0); }
+    to { transform: translateX(5px); }
   }
-  @keyframes catFill {
-    from { left: -38%; }
+  @keyframes catJump {
+    0% { transform: translate(0, 0) rotate(-5deg); }
+    50% { transform: translate(3px, -6px) rotate(0deg); }
+    100% { transform: translate(0, 0) rotate(5deg); }
+  }
+  @keyframes catShimmer {
+    from { left: -45%; }
     to { left: 100%; }
   }
   @keyframes catDots {
