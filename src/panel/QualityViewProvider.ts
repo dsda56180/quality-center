@@ -463,11 +463,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         previewFiles = cached.files;
         this.log(`复用上次预演结果（${previewFiles.length} 个文件），跳过 dry-run`);
       } else {
-        this.beginDeepFix('预演修复（不会改动代码）', 3);
+        this.beginDeepFix('运行 OpenRewrite 配方（预演）', 3);
         this.log('开始 dry-run 预演');
         try {
           const preview = await this.previewDeepFix(root, recipes, recipeArtifacts, version);
           this.setDeepFixStage('生成修复补丁');
+          this.setDeepFixStage('整理预览');
           if (!preview) {
             previewFailed = true;
           } else if (preview.files.length === 0) {
@@ -636,7 +637,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return ok;
     };
 
-    this.beginDeepFix('准备执行', 4);
+    this.beginDeepFix('备份改动', 4);
     this.log(`项目画像：${profileParts.join(' · ') || '未识别'}`);
     if (advice.length > 0) {
       this.log(`配方推荐（未启用）：\n${advice.join('\n')}`);

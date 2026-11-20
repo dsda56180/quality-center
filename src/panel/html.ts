@@ -656,6 +656,34 @@ export function getHtml(nonce: string): string {
       + '<path d="M12 15.1v1.05M12 16.15q-1.1.95-2.05.05M12 16.15q1.1.95 2.05.05" stroke="#6d4c4c" stroke-width=".55" fill="none" stroke-linecap="round"/>'
       + '</svg></span>';
   }
+  // 任务结束时让剩余猫咪逐只淡出，而不是整条进度条瞬间消失
+  var catHideTimer = null;
+  var catbarVisible = false;
+  function dismissCats() {
+    if (catHideTimer) {
+      return;
+    }
+    var runner = document.getElementById('catrunner');
+    var bar = document.getElementById('catbar');
+    var cats = Array.from(runner.children);
+    if (!cats.length) {
+      bar.classList.remove('on');
+      catbarVisible = false;
+      return;
+    }
+    cats.forEach(function (cat, index) {
+      cat.style.transitionDelay = (index * 0.1).toFixed(2) + 's';
+      cat.classList.add('gone');
+    });
+    catHideTimer = setTimeout(function () {
+      Array.from(runner.children).forEach(function (cat) { cat.style.transitionDelay = ''; });
+      runner.innerHTML = '';
+      bar.classList.remove('on');
+      catbarVisible = false;
+      catHideTimer = null;
+    }, 340 + cats.length * 100);
+  }
+
   function renderCats(total, done) {
     var runner = document.getElementById('catrunner');
     if (!runner) {
@@ -674,6 +702,7 @@ export function getHtml(nonce: string): string {
       ? Math.max(0, Math.round(target * (1 - Math.min(done, total) / total)))
       : target;
     Array.from(runner.children).forEach(function (cat, index) {
+      cat.style.transitionDelay = '';
       cat.classList.toggle('gone', index >= remaining);
     });
   }
@@ -692,7 +721,16 @@ export function getHtml(nonce: string): string {
         button.disabled = busy;
       }
     });
-    document.getElementById('catbar').classList.toggle('on', busy);
+    // 任务结束时让剩余猫咪逐只淡出，而不是整条进度条瞬间消失
+    var catbar = document.getElementById('catbar');
+    if (busy) {
+      clearTimeout(catHideTimer);
+      catHideTimer = null;
+      catbar.classList.add('on');
+      catbarVisible = true;
+    } else if (catbarVisible) {
+      dismissCats();
+    }
     document.getElementById('cattip').textContent = catTipText();
     var scanning = !!state.scanning;
     var paused = !!state.paused;
@@ -724,7 +762,9 @@ export function getHtml(nonce: string): string {
       catTotal = deep.total;
       catDone = deep.done || 0;
     }
-    renderCats(catTotal, catDone);
+    if (busy) {
+      renderCats(catTotal, catDone);
+    }
     var stage = document.querySelector('.cat-stage');
     if (stage) {
       stage.classList.toggle('paused', !!state.paused);
