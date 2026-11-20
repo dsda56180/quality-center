@@ -157,9 +157,9 @@ export function getHtml(nonce: string): string {
     animation: catShimmer 1.6s linear infinite;
   }
   .cat-runner {
-    position: absolute; left: -300px; bottom: 14px; height: 24px;
+    position: absolute; left: 0; bottom: 14px; height: 24px;
     display: flex; gap: 6px; align-items: flex-end;
-    animation: catRun 5.2s linear infinite;
+    animation: catRun 6s linear infinite;
     pointer-events: none;
   }
   .cat-runner .cat {
@@ -183,8 +183,12 @@ export function getHtml(nonce: string): string {
   }
   .cat-tip::after { content: ''; animation: catDots 1.4s steps(4, end) infinite; }
   @keyframes catRun {
-    from { left: -300px; }
-    to { left: 100%; }
+    0% { left: 0; opacity: 1; }
+    80% { left: 86%; opacity: 1; }
+    86% { left: 94%; opacity: 0; }
+    87% { left: 0; opacity: 0; }
+    94% { left: 0; opacity: 1; }
+    100% { left: 0; opacity: 1; }
   }
   @keyframes catJump {
     0% { transform: translate(0, 0) rotate(-5deg); }
@@ -723,6 +727,13 @@ export function getHtml(nonce: string): string {
     // 任务结束时让剩余猫咪逐只淡出，而不是整条进度条瞬间消失
     var catbar = document.getElementById('catbar');
     if (busy) {
+      if (!catbarVisible) {
+        // 任务刚开始时重启动画，确保猫咪立刻出现在最左侧起点
+        var runnerStart = document.getElementById('catrunner');
+        runnerStart.style.animation = 'none';
+        void runnerStart.offsetWidth;
+        runnerStart.style.animation = '';
+      }
       clearTimeout(catHideTimer);
       catHideTimer = null;
       catbar.classList.add('on');
