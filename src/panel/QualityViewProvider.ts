@@ -175,8 +175,13 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     this.push({ scanning: true });
     try {
-      await this.runner.scan();
+      const result = await this.runner.scan();
       this.writeAgentFiles();
+      if (result) {
+        this.log(
+          `扫描完成：${result.issues.length} 项问题，用时 ${((result.finishedAt - result.startedAt) / 1000).toFixed(1)} 秒`
+        );
+      }
     } finally {
       this.push();
     }

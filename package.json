@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)与字节码级静态缺陷的统一面板，支持一键导出给 AI 修复",
-  "version": "0.11.1",
+  "version": "0.12.0",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -91,7 +91,7 @@
         "qualityCenter.scanOnSave": {
           "type": "boolean",
           "default": true,
-          "description": "保存文件后自动增量触发扫描"
+          "description": "保存文件后自动扫描（仅 java/xml/properties/yml/toml/json 等文件触发，且各扫描器会按文件指纹跳过未变化的检查）"
         },
         "qualityCenter.exportForAgent": {
           "type": "boolean",

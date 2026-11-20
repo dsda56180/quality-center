@@ -1,6 +1,11 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { QualityViewProvider, openIssue } from './panel/QualityViewProvider';
 import { ScanRunner } from './scanner';
+
+/** 只有可能影响扫描结果的文件才触发保存后扫描 */
+const SAVE_SCAN_EXT = /\.(java|xml|properties|ya?ml|toml|json|gradle|kts)$/i;
+const IGNORED_DIRS = new Set(['target', 'node_modules', '.git', 'build', 'out']);
 
 export function activate(context: vscode.ExtensionContext): void {
   const runner = new ScanRunner(context);
@@ -32,9 +37,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
   let timer: NodeJS.Timeout | undefined;
   context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument(() => {
+    vscode.workspace.onDidSaveTextDocument((document) => {
       const config = vscode.workspace.getConfiguration('qualityCenter');
       if (!config.get<boolean>('scanOnSave', true)) {
+        return;
+      }
+      if (document.uri.scheme !== 'file' || !SAVE_SCAN_EXT.test(document.uri.fsPath)) {
+        return;
+      }
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!root) {
+        return;
+      }
+      const relative = path.relative(root, document.uri.fsPath);
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+        return;
+      }
+      if (relative.split(path.sep).some((segment) => IGNORED_DIRS.has(segment))) {
         return;
       }
       if (timer) {

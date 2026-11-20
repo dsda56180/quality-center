@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.0
+
+- 扫描提速：SpotBugs / Checkstyle / Trivy 按文件指纹复用结果，源码或字节码未变化时不再启动 Maven 或 trivy
+  - 只改 Java 时保存后约 14 秒（原先约 35 秒）
+  - 只改配置时约 1~2 秒
+- 上次扫描结果与扫描器缓存持久化，重开 IDE 后打开面板立即显示旧结果，后台再刷新
+- 保存文件触发扫描时只响应 java/xml/properties/yml/toml/json 等可能影响结果的文件，并忽略 target、node_modules 等目录
+
 ## 0.11.1
 
 - 修复 Tab 栏在窄侧边栏下最右侧被裁剪：改为自动换行，全部页签始终可见
