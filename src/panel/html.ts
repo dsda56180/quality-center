@@ -92,13 +92,25 @@ export function getHtml(nonce: string): string {
     color: var(--vscode-button-foreground);
     cursor: pointer;
     font-size: 12px;
+    transition: background-color .12s ease, border-color .12s ease, transform .06s ease;
   }
   button:hover { background: var(--vscode-button-hoverBackground); }
-  button:disabled { opacity: .45; cursor: default; filter: none; }
+  button:active { transform: translateY(1px); filter: brightness(.92); }
+  button:focus-visible { outline: 1px solid var(--vscode-focusBorder, #007acc); outline-offset: 1px; }
+  button:disabled { opacity: .45; cursor: default; filter: none; transform: none; }
   button.secondary {
     background: var(--vscode-button-secondaryBackground, transparent);
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
     border-color: var(--vscode-panel-border);
+  }
+  button.secondary:hover {
+    background: var(--vscode-button-secondaryHoverBackground, rgba(90, 93, 94, .45));
+    border-color: var(--vscode-focusBorder, #007acc);
+  }
+  button.preset-on {
+    background: var(--vscode-button-background) !important;
+    color: var(--vscode-button-foreground) !important;
+    border-color: var(--vscode-focusBorder, #007acc) !important;
   }
   .summary {
     display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
@@ -202,7 +214,13 @@ export function getHtml(nonce: string): string {
     margin: 12px 0 6px; font-weight: 600; font-size: 11px;
     text-transform: uppercase; letter-spacing: .04em;
     color: var(--vscode-descriptionForeground);
+    display: flex; align-items: center; gap: 4px;
+    cursor: pointer; user-select: none;
   }
+  .group-title:hover { color: var(--vscode-foreground); }
+  .group-title .chev { display: inline-block; transition: transform .12s ease; font-size: 10px; }
+  .group.collapsed .chev { transform: rotate(-90deg); }
+  .group.collapsed .item { display: none; }
   .item {
     padding: 6px 8px; margin-bottom: 4px;
     border-left: 3px solid var(--vscode-panel-border);
@@ -315,8 +333,8 @@ export function getHtml(nonce: string): string {
     <button id="pause" class="icon-btn secondary" title="暂停扫描：当前扫描器结束后不再启动新的扫描器" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 2h3v10H3zM8 2h3v10H8z"/></svg></button>
     <button id="stop" class="icon-btn secondary" title="终止扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 3h8v8H3z"/></svg></button>
     <span class="spacer"></span>
-    <button id="deepfix" class="icon-btn secondary" title="深度修复"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M9.6 1l1.2 2.2L13 4.4l-2.2 1.2L9.6 8 8.4 5.6 6.2 4.4l2.2-1.2zM2.5 8.5l3 3-1.4 1.4-3-3z"/></svg></button>
-    <button id="upgrade" class="icon-btn secondary" title="升级依赖"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M6 2l4 4H7.5v4h-3V6H2zM2 12h10v1.5H2z"/></svg></button>
+    <button id="deepfix" class="icon-btn secondary" title="深度修复"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg></button>
+    <button id="upgrade" class="icon-btn secondary" title="升级依赖"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M5 4v2h14V4H5zm0 10h4v6h6v-6h4l-7-7-7 7z"/></svg></button>
     <button id="copy" class="icon-btn secondary" title="复制给 AI"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 1h6l2 2v8H4zM2 4h1.5v9h7v1.5H2z"/></svg></button>
     <button id="save" class="icon-btn secondary" title="导出报告"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M6 1h2v6h2.5L7 12 3.5 7H6zM2 12.5h10V14H2z"/></svg></button>
     <button id="settings" class="icon-btn secondary" title="扫描设置"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M1 3h12v1.5H1zM1 9h12v1.5H1zM4 1.5h2v4.5H4zM8 7.5h2v4.5H8z"/></svg></button>
@@ -362,10 +380,10 @@ export function getHtml(nonce: string): string {
       <label class="dlg-row"><input type="checkbox" id="opt-trivy" /> 依赖漏洞（Trivy）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-spotbugs" /> 静态缺陷（SpotBugs，较慢）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-scansave" /> 保存文件后自动扫描</label>
-      <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。已缓存的结果不会重复执行。</div>
+      <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。保存后下次扫描生效。</div>
       <div class="dlg-actions">
         <button id="set-cancel" class="secondary">取消</button>
-        <button id="set-apply">应用并扫描</button>
+        <button id="set-apply">保存</button>
       </div>
     </div>
   </div>
@@ -386,6 +404,8 @@ export function getHtml(nonce: string): string {
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
   let state = { scanning: false, paused: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true } };
   let activeTab = 'all';
+  /** 各来源分组的折叠状态，跨渲染保留 */
+  let collapsed = {};
   let severityFilter = [];
   let query = '';
 
@@ -626,6 +646,7 @@ export function getHtml(nonce: string): string {
               : '')
           + '</div>';
       } else {
+        const savedScroll = list.scrollTop;
         list.innerHTML = ['checkstyle', 'gitleaks', 'spotbugs', 'trivy'].map(function (source) {
           const group = filtered.filter(function (i) { return i.source === source; });
           if (!group.length) return '';
@@ -656,8 +677,12 @@ export function getHtml(nonce: string): string {
               + '<div class="detail" id="d-' + issue.id + '"></div>'
               + '</div>';
           }).join('');
-          return '<div class="group-title">' + SRC_LABEL[source] + ' (' + group.length + ')</div>' + items;
+          return '<div class="group' + (collapsed[source] ? ' collapsed' : '')
+            + '" data-group="' + source + '">'
+            + '<div class="group-title"><span class="chev">▾</span>' + SRC_LABEL[source] + ' (' + group.length + ')</div>'
+            + items + '</div>';
         }).join('');
+        list.scrollTop = savedScroll;
       }
     }
 
@@ -736,16 +761,37 @@ export function getHtml(nonce: string): string {
       settingBox(key).checked = options[key] !== false;
     });
     document.getElementById('opt-scansave').checked = options.scanOnSave !== false;
+    markPreset(currentPreset());
     document.getElementById('mask').classList.add('on');
   }
   function closeSettings() {
     document.getElementById('mask').classList.remove('on');
   }
+  function currentPreset() {
+    var on = SETTING_KEYS.filter(function (key) { return settingBox(key).checked; });
+    if (on.length === SETTING_KEYS.length) {
+      return 'full';
+    }
+    if (!settingBox('spotbugs').checked && on.length === SETTING_KEYS.length - 1) {
+      return 'fast';
+    }
+    return '';
+  }
+  function markPreset(kind) {
+    document.getElementById('preset-fast').classList.toggle('preset-on', kind === 'fast');
+    document.getElementById('preset-full').classList.toggle('preset-on', kind === 'full');
+  }
   function applyPreset(fast) {
     SETTING_KEYS.forEach(function (key) {
       settingBox(key).checked = fast ? key !== 'spotbugs' : true;
     });
+    markPreset(fast ? 'fast' : 'full');
   }
+  SETTING_KEYS.forEach(function (key) {
+    settingBox(key).addEventListener('change', function () {
+      markPreset(currentPreset());
+    });
+  });
   document.getElementById('settings').addEventListener('click', openSettings);
   document.getElementById('set-cancel').addEventListener('click', closeSettings);
   document.getElementById('mask').addEventListener('click', function (event) {
@@ -790,6 +836,14 @@ export function getHtml(nonce: string): string {
     vscode.postMessage({ type: 'buildAndScan' });
   });
   document.getElementById('list').addEventListener('click', function (e) {
+    const title = e.target.closest ? e.target.closest('.group-title') : null;
+    if (title) {
+      const groupEl = title.parentElement;
+      const key = groupEl.getAttribute('data-group') || '';
+      groupEl.classList.toggle('collapsed');
+      collapsed[key] = groupEl.classList.contains('collapsed');
+      return;
+    }
     if (e.target.classList && e.target.classList.contains('copy-sug')) {
       vscode.postMessage({ type: 'copySuggestion', id: Number(e.target.getAttribute('data-sug')) });
       e.stopPropagation();

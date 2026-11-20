@@ -915,12 +915,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         .map(([key, value]) => `${key}=${value}`)
         .join(', ')}`
     );
-    if (this.runner.isRunning || this.deepFixState) {
-      this.push();
-      void vscode.window.showInformationMessage('扫描设置已保存，将在当前任务结束后生效。');
-      return;
-    }
-    await this.scanAndPush();
+    this.push();
+    void vscode.window.showInformationMessage('扫描设置已保存，下次扫描生效。');
   }
 
   /** 针对单条问题所属规则执行深度修复 */
