@@ -164,11 +164,12 @@ export function getHtml(nonce: string): string {
   }
   .cat-runner .cat {
     display: inline-block;
-    font-size: 19px; line-height: 1;
+    width: 22px; height: 22px;
     transform-origin: 50% 90%;
     animation: catJump 1s ease-in-out infinite alternate;
     transition: opacity .28s ease, transform .28s ease;
   }
+  .cat-runner .cat svg { display: block; }
   .cat-runner .cat.gone {
     opacity: 0;
     transform: translateY(-8px) scale(.45);
@@ -598,23 +599,66 @@ export function getHtml(nonce: string): string {
     return '';
   }
 
-  // 每只猫对应一个待执行项目：不同品种用 emoji 区分，颜色用 hue-rotate 区分
-  var CAT_EMOJI = ['🐱', '🐈', '🐈‍⬛', '😺', '😸', '😻', '😼', '🐆', '🙀', '🐾'];
-  var CAT_HUE = [0, 28, 190, 320, 90, 260, 45, 140, 210, 75];
+  // 每只猫对应一个待执行项目：用内联 SVG 画出不同品种，避免 emoji 风格不统一
+  var CAT_BREEDS = [
+    { name: '橘猫', base: '#f0a04b', ear: '#dd8a37', eye: '#4a3726', pattern: 'tabby', stripe: '#c97a2b' },
+    { name: '狸花猫', base: '#9a8f7d', ear: '#847966', eye: '#2f2a22', pattern: 'tabby', stripe: '#6f6555' },
+    { name: '奶牛猫', base: '#f8f8f8', ear: '#3a3a40', eye: '#2c6e49', pattern: 'tuxedo' },
+    { name: '黑猫', base: '#43434d', ear: '#3a3a43', eye: '#e8c547', pattern: 'plain' },
+    { name: '白猫', base: '#fbfbfb', ear: '#f0dcdc', eye: '#5aa9e6', pattern: 'plain' },
+    { name: '三花猫', base: '#fbfbfb', ear: '#dd8a37', eye: '#4a3b2a', pattern: 'calico' },
+    { name: '暹罗猫', base: '#f3e7d3', ear: '#5c4a42', eye: '#4b8fd1', pattern: 'siamese' },
+    { name: '蓝猫', base: '#8e9aa8', ear: '#7d8896', eye: '#c98b3a', pattern: 'plain' },
+    { name: '银渐层', base: '#d9dde3', ear: '#c3c8d0', eye: '#6fb3a8', pattern: 'tabby', stripe: '#aeb4be' },
+    { name: '玳瑁猫', base: '#4a3f3a', ear: '#3d332f', eye: '#d9a441', pattern: 'tortie' }
+  ];
+  function catSvg(index) {
+    var breed = CAT_BREEDS[index % CAT_BREEDS.length];
+    var clip = 'catclip' + index;
+    var pattern = '';
+    if (breed.pattern === 'tabby') {
+      pattern = '<path d="M9 5.6v3.2M12 5.2v3.6M15 5.6v3.2" stroke="' + breed.stripe + '" stroke-width="1.1" stroke-linecap="round"/>'
+        + '<path d="M4.2 13.2h2.3M4.6 15.8h2.1M19.8 13.2h-2.3M19.4 15.8h-2.1" stroke="' + breed.stripe + '" stroke-width=".9" stroke-linecap="round"/>';
+    } else if (breed.pattern === 'tuxedo') {
+      pattern = '<path d="M3.9 13.2a8.1 8.1 0 0 1 16.2 0z" fill="#34343c"/>';
+    } else if (breed.pattern === 'calico') {
+      pattern = '<circle cx="16.8" cy="8.2" r="3.3" fill="#e8933c"/><circle cx="7.2" cy="17" r="2.4" fill="#2f2f36"/>';
+    } else if (breed.pattern === 'siamese') {
+      pattern = '<ellipse cx="12" cy="14.8" rx="3.7" ry="2.7" fill="#6b574e"/>';
+    } else if (breed.pattern === 'tortie') {
+      pattern = '<circle cx="7.4" cy="8.6" r="2.2" fill="#b5642f"/><circle cx="16.4" cy="16.4" r="2.2" fill="#8a5230"/>';
+    }
+    return '<span class="cat" style="animation-delay:' + (index * 0.12).toFixed(2) + 's;">'
+      + '<svg viewBox="0 0 24 24" width="22" height="22" role="img" aria-label="' + breed.name + '">'
+      + '<title>' + breed.name + '</title>'
+      + '<defs><clipPath id="' + clip + '"><circle cx="12" cy="13" r="8"/></clipPath></defs>'
+      + '<path d="M4.3 8.4 5.1 2.1 10.2 5.9Z" fill="' + breed.base + '"/>'
+      + '<path d="M19.7 8.4 18.9 2.1 13.8 5.9Z" fill="' + breed.base + '"/>'
+      + '<path d="M6 6.9 6.4 4 8.6 6.1Z" fill="' + breed.ear + '"/>'
+      + '<path d="M18 6.9 17.6 4 15.4 6.1Z" fill="' + breed.ear + '"/>'
+      + '<circle cx="12" cy="13" r="8" fill="' + breed.base + '"/>'
+      + '<g clip-path="url(#' + clip + ')">' + pattern + '</g>'
+      + '<ellipse cx="9.05" cy="12.2" rx="1.5" ry="1.9" fill="' + breed.eye + '"/>'
+      + '<ellipse cx="14.95" cy="12.2" rx="1.5" ry="1.9" fill="' + breed.eye + '"/>'
+      + '<ellipse cx="9.05" cy="12.1" rx=".55" ry="1" fill="#16161a"/>'
+      + '<ellipse cx="14.95" cy="12.1" rx=".55" ry="1" fill="#16161a"/>'
+      + '<circle cx="8.82" cy="11.5" r=".42" fill="#fff" opacity=".9"/>'
+      + '<circle cx="14.72" cy="11.5" r=".42" fill="#fff" opacity=".9"/>'
+      + '<path d="M12 14.9 10.85 14.05h2.3Z" fill="#e2788c"/>'
+      + '<path d="M12 15.1v1.05M12 16.15q-1.1.95-2.05.05M12 16.15q1.1.95 2.05.05" stroke="#6d4c4c" stroke-width=".55" fill="none" stroke-linecap="round"/>'
+      + '</svg></span>';
+  }
   function renderCats(total, done) {
     var runner = document.getElementById('catrunner');
     if (!runner) {
       return;
     }
     // 扫描器数量即项目数；深度修复没有分项时保留一只猫
-    var target = total > 0 ? Math.min(total, CAT_EMOJI.length) : 1;
+    var target = total > 0 ? Math.min(total, CAT_BREEDS.length) : 1;
     if (runner.children.length !== target) {
       var html = '';
       for (var index = 0; index < target; index += 1) {
-        html += '<span class="cat" style="'
-          + 'filter:hue-rotate(' + CAT_HUE[index % CAT_HUE.length] + 'deg) drop-shadow(0 1px 1px rgba(0,0,0,.25));'
-          + 'animation-delay:' + (index * 0.12).toFixed(2) + 's;">'
-          + CAT_EMOJI[index % CAT_EMOJI.length] + '</span>';
+        html += catSvg(index);
       }
       runner.innerHTML = html;
     }
