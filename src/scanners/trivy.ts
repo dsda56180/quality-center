@@ -263,6 +263,27 @@ async function invoke(
   return run(exe, args, root, 300_000);
 }
 
+/**
+ * 限时更新漏洞库。更新失败（常见于 ghcr.io / 镜像不可达）就直接用现有库继续，
+ * 绝不把正式扫描阻塞在联网上。
+ */
+async function refreshDb(
+  exe: string,
+  root: string,
+  repository: string | undefined,
+  flag: '--download-db-only' | '--download-java-db-only'
+): Promise<void> {
+  const args = ['rootfs', flag, '--quiet'];
+  if (repository) {
+    args.push(flag === '--download-db-only' ? '--db-repository' : '--java-db-repository', repository);
+  }
+  await run(exe, args, root, 90_000);
+}
+
+/** 本进程内最近一次尝试更新漏洞库的时间：更新失败后 6 小时内不再重试，避免每次扫描都卡在网络上 */
+let lastDbRefresh = 0;
+const DB_REFRESH_RETRY_MS = 6 * 3600 * 1000;
+
 export async function scanTrivy(root: string, options: TrivyOptions): Promise<TrivyResult> {
   const exe = resolveBinary('trivy', options.executable);
   if (!exe) {
@@ -276,9 +297,9 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
 
   // 本地库 12 小时内下载过就直接跳过更新检查，避免 ghcr.io 不可达时长时间等待
   const versionText = `${version.stdout}\n${version.stderr}`;
-  const skip = {
-    vuln: isFreshDb(versionText, 'Vulnerability DB'),
-    java: isFreshDb(versionText, 'Java DB')
+  const stale = {
+    vuln: !isFreshDb(versionText, 'Vulnerability DB'),
+    java: !isFreshDb(versionText, 'Java DB')
   };
 
   const { target, mode } = pickTarget(root, options.scanTarget);
@@ -286,18 +307,25 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
   const dbRepository = options.dbRepository || (useMirror ? FALLBACK_DB : undefined);
   const javaDbRepository = options.javaDbRepository || (useMirror ? FALLBACK_JAVA_DB : undefined);
 
-  let result = await invoke(exe, mode, target, root, dbRepository, javaDbRepository, skip);
-
-  // 未显式配置仓库且未走镜像时，失败后自动回退到国内镜像；429 属于仓库限流，换镜像重试无意义
-  const throttled = /429|too many requests/i.test(`${result.stderr}\n${result.stdout}`);
-  const dbDownloadFailed = result.code !== 0 && !options.dbRepository && !throttled && !useMirror;
-  if (dbDownloadFailed) {
-    const retry = await invoke(exe, mode, target, root, FALLBACK_DB, FALLBACK_JAVA_DB, skip);
-    if (retry.code === 0) {
-      result = retry;
+  // 先在后台限时更新本地库，正式扫描阶段一律离线，避免被数据库下载拖住
+  const shouldRefresh =
+    (stale.vuln || stale.java) && Date.now() - lastDbRefresh > DB_REFRESH_RETRY_MS;
+  if (shouldRefresh) {
+    lastDbRefresh = Date.now();
+    if (stale.vuln) {
+      await refreshDb(exe, root, dbRepository, '--download-db-only');
+    }
+    if (stale.java) {
+      await refreshDb(exe, root, javaDbRepository, '--download-java-db-only');
     }
   }
 
+  const result = await invoke(exe, mode, target, root, dbRepository, javaDbRepository, {
+    vuln: true,
+    java: true
+  });
+
+  const throttled = /429|too many requests/i.test(`${result.stderr}\n${result.stdout}`);
   if (result.code !== 0) {
     if (throttled) {
       return {

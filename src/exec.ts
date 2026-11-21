@@ -1,30 +1,34 @@
-import { exec, execSync, ChildProcess } from 'child_process';
+import { execSync, spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
 /** 正在运行的子进程，用于「终止扫描」时把它们连同子进程一起杀掉 */
 const running = new Set<ChildProcess>();
 
+/** 结束整棵进程树：Windows 用 taskkill /T，类 Unix 杀进程组 */
+function killTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (!pid) {
+    return;
+  }
+  try {
+    if (process.platform === 'win32') {
+      execSync(`taskkill /T /F /PID ${pid}`, { stdio: 'ignore', windowsHide: true });
+    } else {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        process.kill(pid, 'SIGKILL');
+      }
+    }
+  } catch {
+    // 进程已自行退出
+  }
+}
+
 export function killRunningCommands(): void {
   for (const child of running) {
-    const pid = child.pid;
-    if (!pid) {
-      continue;
-    }
-    try {
-      if (process.platform === 'win32') {
-        // /T 连同 JVM 等子进程一起结束
-        execSync(`taskkill /T /F /PID ${pid}`, { stdio: 'ignore', windowsHide: true });
-      } else {
-        try {
-          process.kill(-pid, 'SIGKILL');
-        } catch {
-          process.kill(pid, 'SIGKILL');
-        }
-      }
-    } catch {
-      // 进程已自行退出
-    }
+    killTree(child);
   }
   running.clear();
 }
@@ -96,26 +100,50 @@ export function run(
 ): Promise<RunResult> {
   const line = [command, ...args.map(quote)].join(' ');
   return new Promise((resolve) => {
-    const child = exec(
-      line,
-      {
-        cwd,
-        timeout,
-        windowsHide: true,
-        encoding: 'utf8',
-        maxBuffer: 64 * 1024 * 1024,
-        env: { ...process.env, ...env }
-      },
-      (err, stdout, stderr) => {
-        running.delete(child);
-        const code = err && typeof (err as { code?: number }).code === 'number'
-          ? (err as unknown as { code: number }).code
-          : err
-            ? 1
-            : 0;
-        resolve({ code, stdout: stdout ?? '', stderr: stderr ?? '' });
-      }
-    );
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    let stdout = '';
+    let stderr = '';
+    const child = spawn(line, {
+      cwd,
+      shell: true,
+      windowsHide: true,
+      env: { ...process.env, ...env }
+    });
     running.add(child);
+
+    const finish = (code: number, extra?: string): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      running.delete(child);
+      resolve({
+        code,
+        stdout,
+        stderr: extra ? `${stderr}${stderr ? '\n' : ''}${extra}` : stderr
+      });
+    };
+
+    // exec 的 timeout 只结束外层 shell，mvn / trivy 等子进程仍会存活并占住输出流，
+    // 导致调用方永远等不到结果。这里到点直接结束整棵进程树并立即返回。
+    timer = setTimeout(() => {
+      killTree(child);
+      finish(124, `命令执行超过 ${Math.round(timeout / 1000)} 秒，已终止`);
+    }, timeout);
+
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on('error', (error) => finish(1, error.message));
+    child.on('close', (code) => finish(code ?? 1));
   });
 }
