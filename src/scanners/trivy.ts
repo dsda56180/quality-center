@@ -264,8 +264,8 @@ async function invoke(
 }
 
 /**
- * 限时更新漏洞库。更新失败（常见于 ghcr.io / 镜像不可达）就直接用现有库继续，
- * 绝不把正式扫描阻塞在联网上。
+ * 后台更新漏洞库（不阻塞扫描）。国内镜像本身可达，但漏洞库体积很大（解压后约 1.8GB），
+ * 下载通常需要数分钟，只能放到扫描结束后在后台做。
  */
 async function refreshDb(
   exe: string,
@@ -277,10 +277,10 @@ async function refreshDb(
   if (repository) {
     args.push(flag === '--download-db-only' ? '--db-repository' : '--java-db-repository', repository);
   }
-  await run(exe, args, root, 90_000);
+  await run(exe, args, root, 10 * 60_000);
 }
 
-/** 本进程内最近一次尝试更新漏洞库的时间：更新失败后 6 小时内不再重试，避免每次扫描都卡在网络上 */
+/** 本进程内最近一次尝试更新漏洞库的时间：6 小时内不再重试，避免每次扫描都触发一次大文件下载 */
 let lastDbRefresh = 0;
 const DB_REFRESH_RETRY_MS = 6 * 3600 * 1000;
 
@@ -307,23 +307,22 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
   const dbRepository = options.dbRepository || (useMirror ? FALLBACK_DB : undefined);
   const javaDbRepository = options.javaDbRepository || (useMirror ? FALLBACK_JAVA_DB : undefined);
 
-  // 先在后台限时更新本地库，正式扫描阶段一律离线，避免被数据库下载拖住
-  const shouldRefresh =
-    (stale.vuln || stale.java) && Date.now() - lastDbRefresh > DB_REFRESH_RETRY_MS;
-  if (shouldRefresh) {
-    lastDbRefresh = Date.now();
-    if (stale.vuln) {
-      await refreshDb(exe, root, dbRepository, '--download-db-only');
-    }
-    if (stale.java) {
-      await refreshDb(exe, root, javaDbRepository, '--download-java-db-only');
-    }
-  }
-
+  // 扫描阶段一律离线使用本地库，绝不等待数据库下载
   const result = await invoke(exe, mode, target, root, dbRepository, javaDbRepository, {
     vuln: true,
     java: true
   });
+
+  // 扫描结束后再在后台更新过期库，下次扫描自动使用新数据
+  if ((stale.vuln || stale.java) && Date.now() - lastDbRefresh > DB_REFRESH_RETRY_MS) {
+    lastDbRefresh = Date.now();
+    if (stale.vuln) {
+      void refreshDb(exe, root, dbRepository, '--download-db-only');
+    }
+    if (stale.java) {
+      void refreshDb(exe, root, javaDbRepository, '--download-java-db-only');
+    }
+  }
 
   const throttled = /429|too many requests/i.test(`${result.stderr}\n${result.stdout}`);
   if (result.code !== 0) {
