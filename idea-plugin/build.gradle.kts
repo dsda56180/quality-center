@@ -42,13 +42,15 @@ kotlin {
 
 intellijPlatform {
     buildSearchableOptions = false
+    pluginVerification {
+        ides {
+            local("D:/Tools/IntelliJ IDEA 2026.3")
+        }
+    }
     pluginConfiguration {
         name = "Quality Center"
         version = project.version.toString()
-        description = """
-            面向 Java / Maven 项目的代码质量中心：Checkstyle 代码质量、Gitleaks 密钥泄露、
-            Trivy 依赖漏洞、SpotBugs 静态缺陷扫描，并支持 OpenRewrite 深度修复与 CVE 依赖升级。
-        """.trimIndent()
+        description = "Quality Center is a code quality dashboard for Java and Maven projects: Checkstyle, Gitleaks, Trivy, SpotBugs, OpenRewrite fixes and dependency upgrades."
         vendor {
             name = "dsda56180"
             url = "https://github.com/dsda56180/quality-center"

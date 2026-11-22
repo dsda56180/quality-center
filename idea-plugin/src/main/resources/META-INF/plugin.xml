@@ -4,11 +4,7 @@
     <name>Quality Center</name>
     <vendor url="https://github.com/dsda56180/quality-center">dsda56180</vendor>
 
-    <description><![CDATA[
-        面向 Java / Maven 项目的代码质量中心：Checkstyle 代码质量、Gitleaks 密钥泄露、
-        Trivy 依赖漏洞、SpotBugs 静态缺陷四类扫描，支持忽略基线、复制 / 导出报告、
-        OpenRewrite 深度修复与 CVE 依赖升级。
-    ]]></description>
+    <description><![CDATA[Quality Center is a code quality dashboard for Java and Maven projects: Checkstyle, Gitleaks, Trivy, SpotBugs, OpenRewrite fixes and dependency upgrades.]]></description>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
