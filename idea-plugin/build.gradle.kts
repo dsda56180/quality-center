@@ -3,7 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "2.0.21"
-    id("org.jetbrains.intellij.platform") version "2.1.0"
+    id("org.jetbrains.intellij.platform") version "2.10.5"
 }
 
 group = "com.dsda56180"
@@ -20,7 +20,7 @@ repositories {
 dependencies {
     implementation("com.google.code.gson:gson:2.11.0")
     intellijPlatform {
-        intellijIdeaCommunity("2023.3.8")
+        intellijIdeaUltimate("2026.3")
         bundledPlugin("com.intellij.java")
         instrumentationTools()
     }
@@ -35,6 +35,8 @@ kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
         freeCompilerArgs.add("-Xjvm-default=all")
+        // IntelliJ 2026.3 平台库由更新版本的 Kotlin 编译，放开元数据版本检查
+        freeCompilerArgs.add("-Xskip-metadata-version-check")
     }
 }
 
@@ -53,7 +55,7 @@ intellijPlatform {
         }
         ideaVersion {
             sinceBuild = "233"
-            untilBuild = "253.*"
+            untilBuild = "263.*"
         }
     }
 }
@@ -65,5 +67,6 @@ tasks.withType<JavaCompile> {
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
     compilerOptions {
         freeCompilerArgs.add("-Xjvm-default=all")
+        freeCompilerArgs.add("-Xskip-metadata-version-check")
     }
 }
