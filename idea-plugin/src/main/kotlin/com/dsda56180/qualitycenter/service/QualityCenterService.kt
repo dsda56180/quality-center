@@ -49,10 +49,14 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.editor.Document
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.LogicalPosition
+import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileDocumentManagerListener
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.fileEditor.TextEditor
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootManager
@@ -985,20 +989,32 @@ class QualityCenterService(val project: Project) : Disposable {
                     document.getLineStartOffset(lineIndex)
                 }
             }
+            val manager = FileEditorManager.getInstance(project)
             val descriptor = OpenFileDescriptor(project, virtualFile, offset, 0)
-            val opened = runCatching {
-                descriptor.navigate(true)
-                FileEditorManager.getInstance(project).isFileOpen(virtualFile)
-            }.getOrDefault(false)
-            if (!opened) {
-                val editor = runCatching {
-                    FileEditorManager.getInstance(project).openTextEditor(descriptor, true)
-                }.getOrNull()
-                if (editor == null) {
-                    notifyError("无法打开文件：${target.path}")
-                }
+            runCatching { descriptor.navigate(true) }
+            var editor = (manager.getSelectedEditor(virtualFile) as? TextEditor)?.editor
+                ?: manager.getAllEditors(virtualFile).filterIsInstance<TextEditor>().firstOrNull()?.editor
+            if (editor == null) {
+                editor = runCatching { manager.openTextEditor(descriptor, true) }.getOrNull()
             }
+            if (editor == null) {
+                notifyError("无法打开文件：${target.path}")
+                return@invokeLater
+            }
+            placeCaret(editor, line, column)
         }
+    }
+
+    /** 用逻辑行列定位：不依赖字符 offset，文档未加载 / 换行符差异都不会把行号算歪 */
+    private fun placeCaret(editor: Editor, line: Int, column: Int) {
+        val document = editor.document
+        if (document.lineCount <= 0) return
+        val lineIndex = (line - 1).coerceIn(0, document.lineCount - 1)
+        val lineStart = document.getLineStartOffset(lineIndex)
+        val lineEnd = document.getLineEndOffset(lineIndex)
+        val columnIndex = (column - 1).coerceIn(0, (lineEnd - lineStart).coerceAtLeast(0))
+        editor.caretModel.moveToLogicalPosition(LogicalPosition(lineIndex, columnIndex))
+        editor.scrollingModel.scrollToCaret(ScrollType.CENTER)
     }
 
     fun openLink(url: String) {

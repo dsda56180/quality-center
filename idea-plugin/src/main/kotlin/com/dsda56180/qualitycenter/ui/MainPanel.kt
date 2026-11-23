@@ -302,9 +302,8 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
                 when (val item = issueModel.itemAt(issueTable.convertRowIndexToModel(row))) {
                     is ListRow.Group -> toggleGroup(item.source)
                     is ListRow.Entry -> {
-                        // 单击「位置」列直接跳到代码行；双击整行同样跳转
-                        val clickLocation = column == LOCATION_COLUMN && item.issue.file != null
-                        if (clickLocation || e.clickCount >= 2) service.openIssue(item.issue)
+                        // 单击任意一格即定位到对应代码行；没有代码位置的依赖漏洞只选中不跳转
+                        if (item.issue.file != null) service.openIssue(item.issue)
                     }
                     null -> Unit
                 }
@@ -321,7 +320,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
                 }
                 issueTable.cursor = when {
                     item is ListRow.Group -> Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                    item is ListRow.Entry && column == LOCATION_COLUMN && item.issue.file != null ->
+                    item is ListRow.Entry && item.issue.file != null ->
                         Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                     else -> Cursor.getDefaultCursor()
                 }
