@@ -36,10 +36,12 @@ import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JList
+import com.intellij.ui.tabs.JBTabsFactory
+import com.intellij.ui.tabs.TabInfo
+import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JSplitPane
-import javax.swing.JTabbedPane
 import javax.swing.JTable
 import javax.swing.JTextArea
 import javax.swing.JToggleButton
@@ -115,7 +117,8 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     private val ruleFixButton = JButton("单规则修复")
     private val openButton = JButton("打开文件")
 
-    private val tabs = JTabbedPane()
+    // 官方 JBTabs：与 IDE 工具窗口一致的标签控件，替代裸 JTabbedPane
+    private val tabs = JBTabsFactory.createTabs(service.project)
     private val errorsArea = JTextArea()
 
     private var selectedIssue: Issue? = null
@@ -218,13 +221,17 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         top.add(buildHintPanel)
         top.add(buildSummary())
 
-        tabs.addTab("问题", buildIssueTab())
-        tabs.addTab("建议", buildSuggestionTab())
-        tabs.addTab("已忽略", buildIgnoredTab())
-        tabs.addTab("错误 / 跳过", buildErrorsTab())
+        listOf(
+            "问题" to buildIssueTab(),
+            "建议" to buildSuggestionTab(),
+            "已忽略" to buildIgnoredTab(),
+            "错误 / 跳过" to buildErrorsTab()
+        ).forEach { (title, component) ->
+            tabs.addTab(TabInfo(component as JComponent).setText(title))
+        }
 
         add(top, BorderLayout.PAGE_START)
-        add(tabs, BorderLayout.CENTER)
+        add(tabs.component, BorderLayout.CENTER)
     }
 
     private fun buildSummary(): JPanel {
@@ -966,7 +973,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
 private const val COUNT_COLUMN = 2
 private const val LOCATION_COLUMN = 3
 private const val COLUMN_WIDTHS_KEY = "quality.center.issue.columnWidths"
-private const val DETAIL_PLACEHOLDER = "选中一条问题查看完整说明。\n提示：单击「位置」列可直接跳转到代码。"
+private const val DETAIL_PLACEHOLDER = "选中一条问题查看完整说明。\n提示：单击任意一行可直接跳转到对应代码。"
 
 /** 与 VS Code 版一致的分组顺序 */
 private val SOURCE_ORDER = listOf(
