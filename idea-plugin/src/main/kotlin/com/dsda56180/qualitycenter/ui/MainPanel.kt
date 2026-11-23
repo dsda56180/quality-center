@@ -19,7 +19,9 @@ import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Graphics
 import java.awt.GridLayout
+import java.awt.Insets
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -235,7 +237,11 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         Severity.entries.forEach { severity ->
             val chip = JToggleButton("${severity.label} 0").apply {
                 isSelected = true
-                foreground = severityForeground(severity)
+                isContentAreaFilled = true
+                isOpaque = true
+                isFocusPainted = false
+                isRolloverEnabled = true
+                margin = java.awt.Insets(JBUI.scale(2), JBUI.scale(8), JBUI.scale(2), JBUI.scale(8))
                 font = font.deriveFont(font.size2D - 1f).deriveFont(Font.BOLD)
                 toolTipText = "点击切换是否显示「${severity.label}」问题"
                 addActionListener {
@@ -246,9 +252,11 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
             severityButtons[severity] = chip
             chipRow.add(chip)
         }
+        refreshSeverityChipStyles()
 
         val secondRow = JPanel(BorderLayout(JBUI.scale(8), 0))
         searchField.toolTipText = "搜索文件 / 规则 / 说明"
+        searchField.emptyText.text = "搜索文件 / 规则 / 说明"
         searchField.preferredSize = Dimension(JBUI.scale(220), JBUI.scale(26))
         searchField.document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent) = refreshIssueTable()
@@ -649,10 +657,17 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         expandAllButton.parent?.revalidate()
     }
 
-    /** 等级标签选中时用等级色，取消筛选后变灰，避免所有标签看起来一样 */
+    /** 等级标签选中时用等级色胶囊，取消筛选后变灰，避免所有标签看起来一样 */
     private fun refreshSeverityChipStyles() {
         severityButtons.forEach { (severity, chip) ->
-            chip.foreground = if (chip.isSelected) severityForeground(severity) else MUTED_FOREGROUND
+            val selected = chip.isSelected
+            chip.foreground = if (selected) severityForeground(severity) else MUTED_FOREGROUND
+            chip.background = if (selected) severityBackground(severity) else CHIP_OFF_BACKGROUND
+            chip.border = RoundedBorder(
+                if (selected) severityForeground(severity) else MUTED_FOREGROUND,
+                JBUI.scale(12),
+                JBUI.scale(1)
+            )
         }
     }
 
@@ -913,10 +928,10 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
                 }
                 is ListRow.Entry -> {
                     if (!isSelected) {
-                        component.background = if (column == 0) {
-                            severityBackground(item.issue.severity)
-                        } else {
-                            table.background
+                        component.background = when {
+                            column == 0 -> severityBackground(item.issue.severity)
+                            row % 2 == 1 -> ROW_ALT_BACKGROUND
+                            else -> table.background
                         }
                         component.foreground = when (column) {
                             0 -> severityForeground(item.issue.severity)
@@ -960,6 +975,8 @@ private val SOURCE_ORDER = listOf(
 private val GROUP_BACKGROUND = JBColor(Color(0xE8EDF3), Color(0x34373C))
 private val MUTED_FOREGROUND = JBColor(Color(0x6B7280), Color(0x9AA1A9))
 private val LINK_FOREGROUND = JBColor(Color(0x2C6BE0), Color(0x7FA8FF))
+private val CHIP_OFF_BACKGROUND = JBColor(Color(0xECEEF2), Color(0x3C3F44))
+private val ROW_ALT_BACKGROUND = JBColor(Color(0xF7F9FC), Color(0x2B2D31))
 
 private fun severityForeground(severity: Severity): Color = when (severity) {
     Severity.CRITICAL -> JBColor(Color(224, 62, 62), Color(255, 122, 122))
@@ -976,4 +993,19 @@ private fun severityBackground(severity: Severity): Color = when (severity) {
     Severity.MEDIUM -> JBColor(Color(0xFBF4DB), Color(0x453A1F))
     Severity.LOW -> JBColor(Color(0xE8F1FB), Color(0x22384A))
     Severity.INFO -> JBColor(Color(0xEFF1F4), Color(0x2F3337))
+}
+
+/** 圆角边框：让等级胶囊、分组小标签更接近 VS Code 的 chip 观感 */
+private class RoundedBorder(
+    private val color: Color,
+    private val radius: Int,
+    private val thickness: Int
+) : javax.swing.border.AbstractBorder() {
+    override fun paintBorder(c: Component, g: Graphics, x: Int, y: Int, width: Int, height: Int) {
+        g.color = color
+        g.drawRoundRect(x, y, width - 1, height - 1, radius, radius)
+    }
+
+    override fun getBorderInsets(c: Component): Insets =
+        Insets(thickness, thickness, thickness, thickness)
 }
