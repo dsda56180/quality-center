@@ -20,7 +20,6 @@ import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Graphics
-import java.awt.GridLayout
 import java.awt.Insets
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
@@ -233,7 +232,9 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         wrapper.layout = BoxLayout(wrapper, BoxLayout.Y_AXIS)
         wrapper.border = JBUI.Borders.empty(2, 8, 4, 8)
 
-        val chipRow = JPanel(GridLayout(1, Severity.entries.size, JBUI.scale(4), 0))
+        // 第一行：等级筛选按内容紧凑排列，统计信息弱化后放右侧
+        val chipRow = JPanel(BorderLayout(JBUI.scale(8), 0))
+        val chipGroup = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0))
         Severity.entries.forEach { severity ->
             val chip = JToggleButton("${severity.label} 0").apply {
                 isSelected = true
@@ -241,8 +242,8 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
                 isOpaque = true
                 isFocusPainted = false
                 isRolloverEnabled = true
-                margin = java.awt.Insets(JBUI.scale(2), JBUI.scale(8), JBUI.scale(2), JBUI.scale(8))
-                font = font.deriveFont(font.size2D - 1f).deriveFont(Font.BOLD)
+                margin = java.awt.Insets(JBUI.scale(1), JBUI.scale(7), JBUI.scale(1), JBUI.scale(7))
+                font = JBUI.Fonts.smallFont()
                 toolTipText = "点击切换是否显示「${severity.label}」问题"
                 addActionListener {
                     refreshSeverityChipStyles()
@@ -250,25 +251,28 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
                 }
             }
             severityButtons[severity] = chip
-            chipRow.add(chip)
+            chipGroup.add(chip)
         }
         refreshSeverityChipStyles()
+        chipRow.add(chipGroup, BorderLayout.CENTER)
+        statusLabel.font = JBUI.Fonts.smallFont()
+        statusLabel.foreground = MUTED_FOREGROUND
+        chipRow.add(statusLabel, BorderLayout.EAST)
 
-        val secondRow = JPanel(BorderLayout(JBUI.scale(8), 0))
+        // 第二行：搜索框整行铺满，不再被等级标签挤窄
         searchField.toolTipText = "搜索文件 / 规则 / 说明"
         searchField.emptyText.text = "搜索文件 / 规则 / 说明"
-        searchField.preferredSize = Dimension(JBUI.scale(220), JBUI.scale(26))
+        searchField.preferredSize = Dimension(0, JBUI.scale(28))
         searchField.document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent) = refreshIssueTable()
             override fun removeUpdate(e: DocumentEvent) = refreshIssueTable()
             override fun changedUpdate(e: DocumentEvent) = refreshIssueTable()
         })
-        secondRow.add(searchField, BorderLayout.CENTER)
-        // 状态放到搜索行右侧，把整行宽度让给等级标签，避免「低危 / 提示」被挤出可视区
-        secondRow.add(statusLabel, BorderLayout.EAST)
+        val searchRow = JPanel(BorderLayout())
+        searchRow.add(searchField, BorderLayout.CENTER)
 
         wrapper.add(chipRow)
-        wrapper.add(secondRow)
+        wrapper.add(searchRow)
         return wrapper
     }
 
