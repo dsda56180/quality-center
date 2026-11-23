@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Issue, Severity } from '../model';
-import { resolveBinary, run } from '../exec';
+import { resolveBinary, run, tailMessage } from '../exec';
 
 export interface TrivyOptions {
   executable: string;
@@ -292,7 +292,13 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
 
   const version = await run(exe, ['--version'], root, 30_000);
   if (version.code !== 0) {
-    return { issues: [], missing: true };
+    const detail = tailMessage(`${version.stderr}\n${version.stdout}`, 3);
+    return {
+      issues: [],
+      error:
+        `trivy 无法执行（退出码 ${version.code}）：${detail || exe}` +
+        '。请检查 qualityCenter.trivy.path 是否指向正确的可执行文件，或重新安装。'
+    };
   }
 
   // 本地库 12 小时内下载过就直接跳过更新检查，避免 ghcr.io 不可达时长时间等待
@@ -336,7 +342,7 @@ export async function scanTrivy(root: string, options: TrivyOptions): Promise<Tr
           '或等待约 30 分钟解除封禁；期间代码质量与密钥检查不受影响。'
       };
     }
-    const detail = result.stderr.split(/\r?\n/).filter(Boolean).slice(-4).join('\n');
+    const detail = tailMessage(result.stderr, 4);
     const networkIssue = /download|connect|timeout|deadline|no such host/i.test(
       `${result.stderr}\n${result.stdout}`
     );

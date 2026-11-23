@@ -4,9 +4,10 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import * as vscode from 'vscode';
 import { exportForAgent, formatIssueForCopy } from '../agentExport';
-import { run } from '../exec';
+import { resolveBinary, run, tailMessage } from '../exec';
 import { applyAutoFixes, isFixable } from '../fixer';
-import { Issue, SOURCE_LABEL } from '../model';
+import { Issue, ScanResult, SOURCE_LABEL } from '../model';
+import { EXTERNAL_TOOLS, ExternalTool, installLocation, installPlan, InstallPlan, ToolId } from '../tools';
 import { detectProjectProfile, ProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
@@ -191,9 +192,15 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     url?: string;
     id?: number;
     pkg?: string;
+    tool?: string;
     options?: ScanSettingsInput;
   }): Promise<void> {
     switch (message.type) {
+      case 'installTool':
+        if (message.tool) {
+          await this.installTool(message.tool as ToolId);
+        }
+        break;
       case 'scan':
         await this.scanAndPush(true);
         break;
@@ -301,12 +308,199 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         this.log(
           `扫描完成：${result.issues.length} 项问题，用时 ${((result.finishedAt - result.startedAt) / 1000).toFixed(1)} 秒`
         );
+        this.notifyMissingTools(result);
       }
     } finally {
       this.scanStartedAt = null;
       this.scanProgress = { done: 0, total: 0, active: [] };
       this.push();
     }
+  }
+
+  /** 本次会话已经提示过的工具，避免自动扫描（启动/保存）反复弹窗 */
+  private missingToolPrompts = new Set<ToolId>();
+
+  /**
+   * 缺失的外部工具不再静默跳过：弹一次提示，附带「去安装」。
+   * 插件本身不下载任何可执行文件，这里只是把官方安装方式接到手边。
+   */
+  private notifyMissingTools(result: ScanResult): void {
+    const config = vscode.workspace.getConfiguration('qualityCenter');
+    if (!config.get<boolean>('notifyMissingTools', true)) {
+      return;
+    }
+    for (const id of result.missingTools ?? []) {
+      if (this.missingToolPrompts.has(id) || !EXTERNAL_TOOLS[id]) {
+        continue;
+      }
+      this.missingToolPrompts.add(id);
+      void this.promptMissingTool(id);
+    }
+  }
+
+  private async promptMissingTool(id: ToolId): Promise<void> {
+    const tool = EXTERNAL_TOOLS[id];
+    const plan = installPlan(tool);
+    const installable = !!(plan.command || plan.script);
+    const message = installable
+      ? `未找到 ${tool.bin}，${tool.purpose}已跳过。是否现在安装 ${tool.label}？（${plan.describe}）`
+      : `未找到 ${tool.bin}，${tool.purpose}已跳过。该工具需要手动安装。`;
+    const actions = installable ? ['去安装', '查看文档', '不再提示'] : ['查看文档', '不再提示'];
+    const answer = await vscode.window.showWarningMessage(message, ...actions);
+    if (answer === '去安装') {
+      await this.installTool(id);
+      return;
+    }
+    if (answer === '查看文档') {
+      await vscode.env.openExternal(vscode.Uri.parse(tool.docs));
+      return;
+    }
+    if (answer === '不再提示') {
+      await vscode.workspace
+        .getConfiguration('qualityCenter')
+        .update('notifyMissingTools', false, vscode.ConfigurationTarget.Global);
+      void vscode.window.showInformationMessage(
+        '已关闭缺失工具提示，可在设置 qualityCenter.notifyMissingTools 重新开启。'
+      );
+    }
+  }
+
+  /** 把多行脚本落到临时文件，交给系统自带 shell 执行，避免逐层转义 */
+  private runInstallPlan(plan: InstallPlan, root: string): Promise<{ code: number; stdout: string; stderr: string }> {
+    const timeout = 10 * 60_000;
+    if (!plan.script) {
+      return run(plan.command ?? '', [], root, timeout);
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-center-install-'));
+    const file = path.join(dir, plan.scriptShell === 'powershell' ? 'install.ps1' : 'install.sh');
+    fs.writeFileSync(file, plan.script, 'utf8');
+    const shell =
+      plan.scriptShell === 'powershell'
+        ? `"${path.join(
+            process.env.SystemRoot || 'C:\\Windows',
+            'System32',
+            'WindowsPowerShell',
+            'v1.0',
+            'powershell.exe'
+          )}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${file}"`
+        : `bash "${file}"`;
+    return run(shell, [], root, timeout).finally(() => {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // 临时目录清理失败不影响结果
+      }
+    });
+  }
+
+  /**
+   * 一键安装：按系统自动选择安装方式。
+   * Windows: winget → Chocolatey → Scoop → 官方产物便携安装
+   * macOS:   Homebrew → 官方产物便携安装
+   * Linux:   Homebrew → 官方产物便携安装（无需 sudo）
+   */
+  async installTool(id: ToolId): Promise<void> {
+    const tool = EXTERNAL_TOOLS[id];
+    if (!tool) {
+      return;
+    }
+    const plan = installPlan(tool);
+
+    // 需要 sudo 的发行版安装不代跑，直接复制命令，避免卡在密码输入
+    if (plan.requiresRoot) {
+      await vscode.env.clipboard.writeText(plan.command ?? plan.hint);
+      void vscode.window.showInformationMessage(
+        `安装 ${tool.label} 需要管理员权限，命令已复制到剪贴板：\n${plan.command ?? plan.hint}`,
+        '打开安装文档'
+      ).then((pick) => {
+        if (pick === '打开安装文档') {
+          return vscode.env.openExternal(vscode.Uri.parse(tool.docs));
+        }
+        return undefined;
+      });
+      return;
+    }
+
+    if (!plan.command && !plan.script) {
+      void vscode.window.showInformationMessage(
+        `${tool.label} 需要手动安装：${tool.hint}`,
+        '打开安装文档'
+      ).then((pick) => {
+        if (pick === '打开安装文档') {
+          return vscode.env.openExternal(vscode.Uri.parse(tool.docs));
+        }
+        return undefined;
+      });
+      return;
+    }
+
+    if (this.runner.isRunning) {
+      void vscode.window.showInformationMessage('扫描进行中，请稍后再安装外部工具。');
+      return;
+    }
+
+    const target = installLocation(tool, plan);
+    const answer = await vscode.window.showWarningMessage(
+      `安装 ${tool.label}：${plan.describe}`,
+      {
+        modal: true,
+        detail: [
+          plan.kind === 'winget' || plan.kind === 'choco' || plan.kind === 'scoop' || plan.kind === 'brew'
+            ? '将调用系统包管理器，可能弹出一次 UAC / 权限确认。'
+            : '将下载官方产物到插件自己的工具目录，不修改系统 PATH，卸载插件后可直接删除。',
+          plan.alternative ? `也可改用系统包管理器：${plan.alternative}` : '',
+          '安装完成后会自动重新扫描。'
+        ]
+          .filter(Boolean)
+          .join('\n')
+      },
+      '开始安装'
+    );
+    if (answer !== '开始安装') {
+      return;
+    }
+
+    const root = this.runner.root() ?? process.cwd();
+    this.log(`安装 ${tool.label}（${plan.kind}）：${plan.command ?? plan.describe}`);
+    const outcome = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `质量中心：正在安装 ${tool.label}…`,
+        cancellable: false
+      },
+      () => this.runInstallPlan(plan, root)
+    );
+    const output = tailMessage(`${outcome.stdout}\n${outcome.stderr}`, 10);
+    // winget 对「已是最新 / 已安装」会返回非零码，输出里写得很清楚
+    const already = /already installed|已安装|No applicable installer|No newer package/i.test(output);
+    const configured =
+      tool.bin === 'mvn'
+        ? ''
+        : vscode.workspace.getConfiguration('qualityCenter').get<string>(`${tool.bin}.path`, '');
+    const resolved = resolveBinary(tool.bin, configured);
+    const installed = resolved !== undefined || outcome.code === 0 || already;
+    if (!installed) {
+      this.log(`安装 ${tool.label} 失败：\n${output}`);
+      const pick = await vscode.window.showErrorMessage(
+        `安装 ${tool.label} 失败（退出码 ${outcome.code}）：\n${output || plan.describe}`,
+        '查看日志',
+        '安装文档'
+      );
+      if (pick === '查看日志') {
+        this.output?.show(true);
+      } else if (pick === '安装文档') {
+        await vscode.env.openExternal(vscode.Uri.parse(tool.docs));
+      }
+      return;
+    }
+
+    this.missingToolPrompts.delete(id);
+    this.runner.resetCache();
+    this.log(`安装 ${tool.label} 完成：${resolved ?? target ?? ''}\n${output}`);
+    void vscode.window.showInformationMessage(
+      `已安装 ${tool.label}${resolved ? `（${resolved}）` : ''}，正在重新扫描…`
+    );
+    await this.scanAndPush(true);
   }
 
   /** 每轮扫描后写一份 AI 可读的结构化结果 */
@@ -1588,8 +1782,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       })),
       skipped: (result?.skipped ?? []).map((item) => ({
         source: SOURCE_LABEL[item.source],
-        reason: item.reason
+        reason: item.reason,
+        tool: item.tool
       })),
+      missingTools: result?.missingTools ?? [],
       agentFile: this.agentFile,
       buildHint: result?.buildHint,
       upgradeEnabled: config.get<boolean>('dependencyUpgrade.enabled', true),

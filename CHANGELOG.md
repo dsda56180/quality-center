@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.15
+
+- 新增 `scripts/install.mjs` 跨平台一键安装脚本（Windows / macOS / Linux）：自动识别 Trae CN、Trae、Cursor、VS Code、VSCodium 的 CLI 与安装路径（优先 Trae CN），自动挑选最新 vsix 并 `--install-extension --force` 安装，`--build` 可先编译打包
+- 外部工具的一键安装改为按系统自动选择：Windows `winget` → Chocolatey → Scoop → 官方产物便携安装；macOS `Homebrew` → 官方产物便携安装；Linux `Homebrew` → 官方产物便携安装（无需 sudo，`apt/dnf/pacman` 作为备用命令展示）
+- 便携安装不写系统 PATH：Windows 落在 `%LOCALAPPDATA%\quality-center\tools`，macOS / Linux 落在 `~/.quality-center/tools`，`resolveBinary` 会自动搜索该目录；Maven 在 winget 源里没有官方包，改为下载 `apache-maven-3.9.9` 便携版，解决「有 JDK 却没有 mvn」导致的 SpotBugs 跳过
+- 需要 sudo 的发行版安装不代跑，改为把命令复制到剪贴板并在终端手动执行，避免卡在密码输入
+- 缺失外部工具不再静默跳过：扫描结束后弹出提示，提供「去安装」，装完自动重新扫描；面板底部「已跳过」提示行增加「安装」入口
+- 新增配置 `qualityCenter.notifyMissingTools`（默认 true），提示过的工具在本次会话内不再重复弹窗，也能选「不再提示」整体关闭
+- Maven 缺失单独识别：扫描前统一用 `resolveBinary('mvn')` 解析，找不到就直接提示而不是让 Checkstyle / SpotBugs 各跑一次失败的命令；解析到的绝对路径会传给扫描器，规避 IDE 先于工具安装启动导致的 PATH 过期
+- 工具定位不再只依赖 `where` / `which`：先按 PATH 自己扫一遍（含 PATHEXT 兜底），再退回 shell 查找；`winget.exe` 这类「应用执行别名」用目录项兜底识别，避免误判为未安装
+- 过滤 JVM 噪声：`Picked up JAVA_TOOL_OPTIONS: ...`、`OpenJDK 64-Bit Server VM warning` 等日志不再顶掉真正的错误详情，Checkstyle / SpotBugs / Gitleaks / Trivy 的错误只保留最后几行有效输出
+- SpotBugs / Checkstyle 未生成报告时给出可操作的原因（超时、插件拉取失败、mvn 不在 PATH）和复现命令
+- Gitleaks / Trivy 能定位到文件但执行失败（架构不匹配、被拦截等）时按「运行错误」上报，不再误报成「未安装」
+
 ## 0.17.14
 
 - Trivy 漏洞库更新改为在扫描结束后后台进行（上限 10 分钟）：国内镜像本身可达，但漏洞库约 1.8GB、下载需数分钟，放到后台后扫描不再等待，下次扫描自动使用新库

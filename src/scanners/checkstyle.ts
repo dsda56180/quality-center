@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { run } from '../exec';
+import { isMissingCommand, run, tailMessage } from '../exec';
 import { mavenMirrorArgs } from '../maven';
 import { Issue, Severity } from '../model';
 import { localizeCheckstyle } from '../zh';
@@ -97,7 +97,8 @@ export function resolveConfig(root: string, configured: string, bundled: string)
 export async function scanCheckstyle(
   root: string,
   configPath: string,
-  outputFile: string
+  outputFile: string,
+  mvn = 'mvn'
 ): Promise<CheckstyleResult> {
   try {
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
@@ -109,7 +110,7 @@ export async function scanCheckstyle(
   }
 
   const result = await run(
-    'mvn',
+    mvn,
     [
       '-B',
       '-q',
@@ -127,8 +128,22 @@ export async function scanCheckstyle(
   );
 
   if (!fs.existsSync(outputFile)) {
-    const detail = (result.stderr || result.stdout).split(/\r?\n/).filter(Boolean).slice(-5).join('\n');
-    return { issues: [], error: detail || `Checkstyle 未生成报告（退出码 ${result.code}）` };
+    const raw = `${result.stderr}\n${result.stdout}`;
+    if (isMissingCommand(raw)) {
+      return {
+        issues: [],
+        error: '找不到 mvn 命令，无法运行 Checkstyle。请先安装 Maven 并确保它在 PATH 中。'
+      };
+    }
+    const detail = tailMessage(raw, 5);
+    const timeout = result.code === 124 ? '（执行超时）' : '';
+    return {
+      issues: [],
+      error: detail
+        ? `Checkstyle 未生成报告（退出码 ${result.code}${timeout}）：\n${detail}`
+        : `Checkstyle 未生成报告（退出码 ${result.code}${timeout}）。` +
+          `可在项目根目录执行 mvn ${PLUGIN} 复现并查看完整日志。`
+    };
   }
 
   const xml = fs.readFileSync(outputFile, 'utf8');

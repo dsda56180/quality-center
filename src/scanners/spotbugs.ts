@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Issue, Severity } from '../model';
-import { run } from '../exec';
+import { isMissingCommand, run, tailMessage } from '../exec';
 import { mavenMirrorArgs } from '../maven';
 import { localizeSpotbugs } from '../zh';
 
@@ -86,7 +86,10 @@ function resolveSourceFile(root: string, srcDirs: string[], sourcepath: string):
   return candidates.find((file) => fs.existsSync(file));
 }
 
-export async function scanSpotbugs(root: string): Promise<SpotbugsResult> {
+export async function scanSpotbugs(
+  root: string,
+  mvn = 'mvn'
+): Promise<SpotbugsResult> {
   const classesDir = path.join(root, 'target', 'classes');
   if (!fs.existsSync(classesDir) || !hasClasses(classesDir)) {
     return { issues: [], needsBuild: true };
@@ -102,7 +105,7 @@ export async function scanSpotbugs(root: string): Promise<SpotbugsResult> {
   }
 
   const result = await run(
-    'mvn',
+    mvn,
     [
       '-B',
       '-q',
@@ -121,10 +124,22 @@ export async function scanSpotbugs(root: string): Promise<SpotbugsResult> {
   );
 
   if (!fs.existsSync(reportFile)) {
-    const detail = (result.stderr || result.stdout).split(/\r?\n/).filter(Boolean).slice(-5).join('\n');
+    const raw = `${result.stderr}\n${result.stdout}`;
+    if (isMissingCommand(raw)) {
+      return {
+        issues: [],
+        error: '找不到 mvn 命令，无法启动 SpotBugs。请先安装 Maven 并确保它在 PATH 中，或在设置里配置 qualityCenter.maven.path。'
+      };
+    }
+    const detail = tailMessage(raw, 5);
+    const timeout = result.code === 124 ? '（执行超时）' : '';
     return {
       issues: [],
-      error: detail || `SpotBugs 未生成报告（退出码 ${result.code}）`
+      error: detail
+        ? `SpotBugs 未生成报告（退出码 ${result.code}${timeout}）：\n${detail}`
+        : `SpotBugs 未生成报告（退出码 ${result.code}${timeout}）。` +
+          '常见原因：Maven 拉不到 spotbugs-maven-plugin（网络/镜像问题）、pom 中已有插件版本与之冲突。' +
+          `可在项目根目录执行 mvn ${PLUGIN}:spotbugs 复现并查看完整日志。`
     };
   }
 

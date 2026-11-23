@@ -1,3 +1,6 @@
+/** 插件不会自动下载的外部工具，缺失时由 UI 引导安装 */
+import type { ToolId } from './tools';
+
 export type IssueSource = 'checkstyle' | 'gitleaks' | 'trivy' | 'spotbugs';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
@@ -56,7 +59,10 @@ export interface ScanResult {
   /** 命中本地基线、当前不展示的问题 */
   ignored: Issue[];
   errors: ScanError[];
-  skipped: { source: IssueSource; reason: string }[];
+  /** skipped.tool 有值时表示该扫描器是因为缺少外部工具而跳过，UI 可引导安装 */
+  skipped: { source: IssueSource; reason: string; tool?: ToolId }[];
+  /** 本轮缺失的外部工具（去重），用于弹「一键安装」提示 */
+  missingTools?: ToolId[];
   suggestions: Suggestion[];
   /** 未使用构建产物扫描时给出的提示，UI 据此展示「构建并扫描」按钮 */
   buildHint?: string;

@@ -45,7 +45,8 @@ export interface Snapshot {
   ignored: SnapshotIssue[];
   suggestions: SnapshotSuggestion[];
   errors: { source: string; message: string }[];
-  skipped: { source: string; reason: string }[];
+  skipped: { source: string; reason: string; tool?: string }[];
+  missingTools?: string[];
   agentFile?: string;
   buildHint?: string;
   upgradeEnabled?: boolean;
@@ -278,6 +279,11 @@ export function getHtml(nonce: string): string {
   .msg { margin-top: 2px; line-height: 1.45; word-break: break-word; }
   .empty, .hint { color: var(--vscode-descriptionForeground); padding: 8px 0; line-height: 1.6; }
   .notice { margin-top: 8px; font-size: 11px; color: var(--vscode-descriptionForeground); line-height: 1.6; }
+  .notice .tool-link {
+    margin-left: 4px; color: var(--vscode-textLink-foreground);
+    text-decoration: underline; cursor: pointer;
+  }
+  .notice .tool-link:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)); }
   .sug {
     padding: 8px 10px; margin-bottom: 8px; border-radius: 4px;
     background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.08));
@@ -926,7 +932,12 @@ export function getHtml(nonce: string): string {
 
     const notes = [];
     (state.errors || []).forEach(function (e) { notes.push('⚠ ' + (SRC_LABEL[e.source] || e.source) + ' 扫描异常：' + esc(e.message)); });
-    (state.skipped || []).forEach(function (s) { notes.push('· 已跳过 ' + (SRC_LABEL[s.source] || s.source) + '：' + esc(s.reason)); });
+    (state.skipped || []).forEach(function (s) {
+      var install = s.tool
+        ? ' <a class="tool-link" data-install="' + esc(s.tool) + '">安装</a>'
+        : '';
+      notes.push('· 已跳过 ' + (SRC_LABEL[s.source] || s.source) + '：' + esc(s.reason) + install);
+    });
     document.getElementById('notice').innerHTML = notes.join('<br>');
 
     const fixable = (state.issues || []).filter(function (i) { return i.fixable; }).length;
@@ -1185,6 +1196,13 @@ export function getHtml(nonce: string): string {
   });
   document.getElementById('build').addEventListener('click', function () {
     vscode.postMessage({ type: 'buildAndScan' });
+  });
+  document.getElementById('notice').addEventListener('click', function (e) {
+    const target = e.target;
+    const tool = target && target.getAttribute ? target.getAttribute('data-install') : null;
+    if (tool) {
+      vscode.postMessage({ type: 'installTool', tool: tool });
+    }
   });
   document.getElementById('list').addEventListener('click', function (e) {
     const title = e.target.closest ? e.target.closest('.group-title') : null;

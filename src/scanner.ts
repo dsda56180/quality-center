@@ -4,8 +4,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { addToBaseline, removeFromBaseline, splitByBaseline } from './baseline';
-import { killRunningCommands } from './exec';
-import { Issue, ScanResult, SEVERITY_ORDER } from './model';
+import { killRunningCommands, resolveBinary } from './exec';
+import { Issue, IssueSource, ScanResult, SEVERITY_ORDER } from './model';
+import type { ToolId } from './tools';
 import { CheckstyleResult, resolveConfig, scanCheckstyle } from './scanners/checkstyle';
 import { scanGitleaks } from './scanners/gitleaks';
 import { scanSpotbugs, SpotbugsResult } from './scanners/spotbugs';
@@ -195,6 +196,15 @@ export class ScanRunner {
     this.caches.set(key, { sig, value });
   }
 
+  /**
+   * 外部工具状态发生变化（例如刚用 winget 装了 trivy）后清空扫描器缓存，
+   * 否则旧的「missing」结果会一直命中，装完仍然显示已跳过。
+   */
+  resetCache(): void {
+    this.caches.clear();
+    this.persist();
+  }
+
   private outputDir(root: string): string {
     const base = this.context.storageUri?.fsPath ?? path.join(os.tmpdir(), 'quality-center');
     return path.join(base, 'reports', path.basename(root));
@@ -218,11 +228,24 @@ export class ScanRunner {
     const config = vscode.workspace.getConfiguration('qualityCenter');
     const outDir = this.outputDir(root);
     let buildHint: string | undefined;
+    /** 本轮缺失的外部工具，扫描结束后由 UI 弹「一键安装」提示 */
+    const missing = new Set<ToolId>();
+    /** 因缺少外部工具而跳过：skipped 带上 tool，面板才能给出「安装」入口 */
+    const skipForMissing = (source: IssueSource, tool: ToolId, reason: string): void => {
+      missing.add(tool);
+      skipped.push({ source, reason, tool });
+    };
+    // IDE 可能在工具安装前就已启动，PATH 会过期，统一交给 resolveBinary 兜底
+    const mvn = resolveBinary('mvn');
 
     try {
       const jobs: { label: string; run: () => Promise<void> }[] = [];
 
-      if (config.get<boolean>('checkstyle.enabled', true)) {
+      if (!config.get<boolean>('checkstyle.enabled', true)) {
+        skipped.push({ source: 'checkstyle', reason: '已在设置中关闭' });
+      } else if (!mvn) {
+        skipForMissing('checkstyle', 'mvn', '未找到 mvn 可执行文件，Checkstyle 需要 Maven 才能运行');
+      } else {
         const configured = config.get<string>('checkstyle.config', '');
         const bundled = path.join(this.context.extensionPath, 'media', 'checkstyle-default.xml');
         const configPath = resolveConfig(root, configured, bundled);
@@ -246,7 +269,7 @@ export class ScanRunner {
           } else {
             jobs.push({
               label: 'Checkstyle',
-              run: () => scanCheckstyle(root, configPath, path.join(outDir, 'checkstyle.xml')).then((res) => {
+              run: () => scanCheckstyle(root, configPath, path.join(outDir, 'checkstyle.xml'), mvn).then((res) => {
                 issues.push(...res.issues);
                 if (res.error) {
                   errors.push({ source: 'checkstyle', message: res.error });
@@ -257,8 +280,6 @@ export class ScanRunner {
             });
           }
         }
-      } else {
-        skipped.push({ source: 'checkstyle', reason: '已在设置中关闭' });
       }
 
       if (config.get<boolean>('gitleaks.enabled', true)) {
@@ -275,7 +296,7 @@ export class ScanRunner {
             gitleaksConfig
           ).then((res) => {
             if (res.missing) {
-              skipped.push({ source: 'gitleaks', reason: '未找到 gitleaks 可执行文件' });
+              skipForMissing('gitleaks', 'gitleaks', '未找到 gitleaks 可执行文件');
               return;
             }
             issues.push(...res.issues);
@@ -309,7 +330,7 @@ export class ScanRunner {
         const hit = this.cached<TrivyResult>('trivy', sig);
         if (hit) {
           if (hit.missing) {
-            skipped.push({ source: 'trivy', reason: '未找到 trivy 可执行文件' });
+            skipForMissing('trivy', 'trivy', '未找到 trivy 可执行文件');
           } else {
             issues.push(...hit.issues);
             if (hit.error) {
@@ -325,7 +346,7 @@ export class ScanRunner {
             label: 'Trivy',
             run: () => scanTrivy(root, trivyOptions).then((res) => {
               if (res.missing) {
-                skipped.push({ source: 'trivy', reason: '未找到 trivy 可执行文件' });
+                skipForMissing('trivy', 'trivy', '未找到 trivy 可执行文件');
                 return;
               }
               issues.push(...res.issues);
@@ -346,7 +367,11 @@ export class ScanRunner {
         skipped.push({ source: 'trivy', reason: '已在设置中关闭' });
       }
 
-      if (config.get<boolean>('spotbugs.enabled', true)) {
+      if (!config.get<boolean>('spotbugs.enabled', true)) {
+        skipped.push({ source: 'spotbugs', reason: '已在设置中关闭' });
+      } else if (!mvn) {
+        skipForMissing('spotbugs', 'mvn', '未找到 mvn 可执行文件，SpotBugs 需要 Maven 才能运行');
+      } else {
         // 字节码没变就不需要再启动一次 Maven + SpotBugs（单次约 30 秒）
         const sig = fingerprint(
           [
@@ -371,7 +396,7 @@ export class ScanRunner {
         } else {
           jobs.push({
             label: 'SpotBugs',
-            run: () => scanSpotbugs(root).then((res) => {
+            run: () => scanSpotbugs(root, mvn).then((res) => {
               if (res.needsBuild) {
                 skipped.push({ source: 'spotbugs', reason: '未找到 target/classes，需要先构建项目' });
                 buildHint =
@@ -388,8 +413,6 @@ export class ScanRunner {
             })
           });
         }
-      } else {
-        skipped.push({ source: 'spotbugs', reason: '已在设置中关闭' });
       }
 
       const total = jobs.length;
@@ -428,6 +451,7 @@ export class ScanRunner {
         // 终止扫描时，被杀进程会返回非零退出码，这里清掉由此产生的误报
         errors.length = 0;
         buildHint = undefined;
+        missing.clear();
       }
     } finally {
       this.running = false;
@@ -445,6 +469,7 @@ export class ScanRunner {
       ignored: split.ignored,
       errors,
       skipped,
+      missingTools: missing.size > 0 ? Array.from(missing) : undefined,
       suggestions: [],
       buildHint
     };

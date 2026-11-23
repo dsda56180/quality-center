@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Issue } from '../model';
-import { resolveBinary, run } from '../exec';
+import { resolveBinary, run, tailMessage } from '../exec';
 import { localizeGitleaks } from '../zh';
 
 export interface GitleaksResult {
@@ -31,7 +31,14 @@ export async function scanGitleaks(
 
   const version = await run(exe, ['--version'], root, 20_000);
   if (version.code !== 0) {
-    return { issues: [], missing: true };
+    // 找得到文件但跑不起来（架构不匹配、被杀软拦截等），算错误而不是“未安装”
+    const detail = tailMessage(`${version.stderr}\n${version.stdout}`, 3);
+    return {
+      issues: [],
+      error:
+        `gitleaks 无法执行（退出码 ${version.code}）：${detail || exe}` +
+        '。请检查 qualityCenter.gitleaks.path 是否指向正确的可执行文件，或重新安装。'
+    };
   }
 
   try {
@@ -62,7 +69,7 @@ export async function scanGitleaks(
 
   // gitleaks: 0 无问题，1 发现问题，其它为运行错误
   if (result.code !== 0 && result.code !== 1) {
-    const detail = result.stderr.split(/\r?\n/).filter(Boolean).slice(-3).join('\n');
+    const detail = tailMessage(result.stderr, 3);
     return { issues: [], error: detail || `gitleaks 退出码 ${result.code}` };
   }
 

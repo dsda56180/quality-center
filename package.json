@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)与字节码级静态缺陷的统一面板，支持一键导出给 AI 修复",
-  "version": "0.17.14",
+  "version": "0.17.15",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -159,6 +159,11 @@
           "default": true,
           "description": "只显示有修复版本的 CVE（无修复版本的通常只能等待上游，默认隐藏）"
         },
+        "qualityCenter.notifyMissingTools": {
+          "type": "boolean",
+          "default": true,
+          "description": "扫描时发现 gitleaks / trivy / mvn 等外部工具缺失，弹出提示并提供一键安装（winget / brew），安装完成后自动重新扫描"
+        },
         "qualityCenter.maven.useChinaMirror": {
           "type": "boolean",
           "default": true,
@@ -228,6 +233,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "vsce package --no-dependencies",
+    "install:local": "node scripts/install.mjs",
     "publish:ovsx": "ovsx publish --no-dependencies"
   },
   "devDependencies": {

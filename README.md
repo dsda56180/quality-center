@@ -17,6 +17,7 @@
 - **固定头部**：工具栏、进度、统计、Tab 与搜索框固定，只有问题列表滚动
 - **静态缺陷**：调用 SpotBugs + FindSecBugs 分析编译后的字节码，发现空指针、资源泄漏、可变对象暴露以及 SQL 注入、命令注入、XSS、路径穿越等安全 sink
 - **零手动触发**：打开项目自动扫描，保存文件后自动增量扫描
+- **工具缺失可一键安装**：外部工具缺失不再静默跳过，扫描后弹窗 + 面板「安装」入口，装完自动重扫
 - **一键交付 AI**：面板「复制给 AI」生成结构化 Markdown，或「导出报告」保存为 `.md`
 - **单条复制**：每条问题右侧有「复制」按钮，只把这一条交给 AI
 - **AI 可读接口**：每轮扫描自动写入 `.quality-center/issues.json`（结构化）与 `.quality-center/report.md`，AI agent 可直接读取该文件
@@ -31,9 +32,23 @@
 | Trivy | `trivy` 可执行文件 | `winget install aquasecurity.trivy` |
 | SpotBugs | JDK、Maven、已编译的 `target/classes` | 首次运行自动从 Maven 仓库下载分析器与 FindSecBugs 插件 |
 
-缺失的工具会自动跳过，并在面板底部提示，不影响其他检查。
+缺失的工具不会自动下载：扫描结束后会弹窗提示并提供「去安装」，按系统自动选择安装方式——Windows 走 winget → Chocolatey → Scoop → 官方产物便携安装；macOS 走 Homebrew → 官方产物便携安装；Linux 走 Homebrew → 官方产物便携安装（无需 sudo，apt/dnf/pacman 作为备用命令给出）。便携安装落在插件自己的工具目录（Windows `%LOCALAPPDATA%\quality-center\tools`，其余 `~/.quality-center/tools`），不改系统 PATH，卸载后可直接删除。装完自动重新扫描；面板底部也保留带「安装」入口的「已跳过」提示。设 `qualityCenter.notifyMissingTools` 为 `false` 可整体关闭弹窗。
 
 ## 安装
+
+### 一键安装到本机编辑器（跨平台）
+
+`scripts/install.mjs` 在 Windows / macOS / Linux 上都可用，按系统自动挑选编辑器 CLI（优先 Trae CN，其次 Trae / Cursor / VS Code / VSCodium），并把本仓库最新的 `.vsix` 装上：
+
+```bash
+npm install
+node scripts/install.mjs --list          # 先看看本机检测到哪些编辑器
+node scripts/install.mjs                 # 自动选择并安装
+node scripts/install.mjs --cli trae-cn   # 指定 CLI（也可传绝对路径）
+node scripts/install.mjs --build         # 先 tsc + vsce package，再安装
+```
+
+安装完成后重启编辑器（或用命令面板的「Developer: Reload Window」）生效。
 
 ### 本地安装（开发调试）
 
@@ -63,6 +78,7 @@ code --install-extension dsda56180.quality-center
 | --- | --- | --- |
 | `qualityCenter.scanOnStartup` | `true` | 打开项目后自动扫描一次 |
 | `qualityCenter.scanOnSave` | `true` | 保存文件后自动触发扫描 |
+| `qualityCenter.notifyMissingTools` | `true` | 外部工具（gitleaks / trivy / mvn）缺失时弹窗提示并提供一键安装 |
 | `qualityCenter.checkstyle.enabled` | `true` | 启用 Checkstyle |
 | `qualityCenter.checkstyle.config` | `""` | 规则文件路径，留空则依次尝试 `.githooks/checkstyle-config.xml`、`checkstyle.xml`、`config/checkstyle/checkstyle.xml` |
 | `qualityCenter.gitleaks.enabled` | `true` | 启用 Gitleaks |
