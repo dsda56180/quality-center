@@ -7,7 +7,8 @@ plugins {
 }
 
 group = "com.dsda56180"
-version = "0.1.4"
+// 本地默认版本；CI 发布时通过 -PpluginVersion=<tag版本> 覆盖
+version = providers.gradleProperty("pluginVersion").getOrElse("0.1.4")
 
 repositories {
     maven("https://maven.aliyun.com/repository/public")
@@ -59,6 +60,11 @@ intellijPlatform {
             sinceBuild = "233"
             untilBuild = "263.*"
         }
+    }
+    publishing {
+        // 发布 token 通过 GitHub Actions 的 PUBLISH_TOKEN secret 注入
+        token = providers.environmentVariable("PUBLISH_TOKEN")
+        channels = listOf("default")
     }
 }
 
