@@ -7,22 +7,28 @@ import com.dsda56180.qualitycenter.model.Severity
 import com.dsda56180.qualitycenter.model.Suggestion
 import com.dsda56180.qualitycenter.service.QualityCenterService
 import com.dsda56180.qualitycenter.service.RULE_RECIPES
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.GridLayout
+import java.awt.event.KeyAdapter
+import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.event.MouseMotionAdapter
 import java.text.SimpleDateFormat
 import java.util.Date
 import javax.swing.BorderFactory
 import javax.swing.BoxLayout
+import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListModel
 import javax.swing.JButton
 import javax.swing.JComboBox
@@ -71,7 +77,18 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     private val severityButtons = LinkedHashMap<Severity, JToggleButton>()
     private val statusLabel = JLabel("尚未扫描")
     private val searchField = JBTextField()
-    private val sourceFilter = JComboBox(arrayOf("全部", "代码质量", "密钥泄露", "依赖漏洞", "静态缺陷"))
+    private val sourceFilter = JComboBox<SourceFilterItem>()
+    private val expandAllButton = JButton()
+    private val collapseAllButton = JButton()
+
+    /** 当前选中的来源筛选，null 表示全部 */
+    private var selectedSource: IssueSource? = null
+    /** 重建下拉框时会触发 action 事件，用该标记避免递归刷新 */
+    private var suppressSourceEvents = false
+    /** 被折叠起来的来源分组，默认全部展开 */
+    private val collapsedSources = HashSet<IssueSource>()
+    /** 当前（等级 + 搜索）过滤后的问题，用于折叠展开时就地重建列表 */
+    private var currentIssues: List<Issue> = emptyList()
 
     private val issueModel = IssueTableModel(service)
     private val issueTable = JTable(issueModel)
@@ -97,6 +114,19 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     private var selectedIgnored: Issue? = null
 
     private val toolbar = JPanel()
+
+    /** 上一次写入下拉框的文案，避免扫描进度刷新时反复重建模型 */
+    private var lastSourceFilterLabels: List<String> = emptyList()
+
+    /** 表格行：来源分组标题，或一条具体问题 */
+    private sealed class ListRow {
+        class Group(val source: IssueSource, val count: Int, val expanded: Boolean) : ListRow()
+        class Entry(val issue: Issue) : ListRow()
+    }
+
+    private data class SourceFilterItem(val source: IssueSource?, val label: String) {
+        override fun toString(): String = label
+    }
 
     init {
         buildToolbar()
@@ -224,12 +254,28 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     }
 
     private fun buildIssueTab(): Component {
-        val sourceRow = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), JBUI.scale(2)))
+        val sourceRow = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(4), JBUI.scale(2)))
         sourceRow.add(JLabel("来源"))
+        sourceFilter.toolTipText = "按来源筛选，括号内为当前筛选条件下的条数"
+        sourceFilter.preferredSize = Dimension(JBUI.scale(136), JBUI.scale(26))
+        sourceFilter.maximumRowCount = 8
         sourceRow.add(sourceFilter)
-        sourceFilter.addActionListener { refreshIssueTable() }
+        iconButton(expandAllButton, com.intellij.icons.AllIcons.Actions.Expandall, "展开全部来源分组")
+        iconButton(collapseAllButton, com.intellij.icons.AllIcons.Actions.Collapseall, "折叠全部来源分组")
+        expandAllButton.isVisible = false
+        collapseAllButton.isVisible = false
+        sourceRow.add(expandAllButton)
+        sourceRow.add(collapseAllButton)
+        sourceFilter.addActionListener {
+            if (suppressSourceEvents) return@addActionListener
+            val next = (sourceFilter.selectedItem as? SourceFilterItem)?.source
+            if (next != selectedSource) {
+                selectedSource = next
+                refreshIssueTable()
+            }
+        }
 
-        configureTable(issueTable)
+        configureTable(issueTable, issueModel)
         issueTable.selectionModel.addListSelectionListener {
             if (!it.valueIsAdjusting) {
                 selectedIssue = issueTable.selectedRow.takeIf { row -> row >= 0 }?.let(issueModel::rowAt)
@@ -238,8 +284,46 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         }
         issueTable.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                if (e.clickCount == 2) {
-                    selectedIssue?.let(service::openIssue)
+                val row = issueTable.rowAtPoint(e.point)
+                val column = issueTable.columnAtPoint(e.point)
+                if (row < 0 || column < 0) return
+                when (val item = issueModel.itemAt(issueTable.convertRowIndexToModel(row))) {
+                    is ListRow.Group -> toggleGroup(item.source)
+                    is ListRow.Entry -> {
+                        // 单击「位置」列直接跳到代码行；双击整行同样跳转
+                        val clickLocation = column == LOCATION_COLUMN && item.issue.file != null
+                        if (clickLocation || e.clickCount >= 2) service.openIssue(item.issue)
+                    }
+                    null -> Unit
+                }
+            }
+        })
+        issueTable.addMouseMotionListener(object : MouseMotionAdapter() {
+            override fun mouseMoved(e: MouseEvent) {
+                val row = issueTable.rowAtPoint(e.point)
+                val column = issueTable.columnAtPoint(e.point)
+                val item = if (row >= 0 && column >= 0) {
+                    issueModel.itemAt(issueTable.convertRowIndexToModel(row))
+                } else {
+                    null
+                }
+                issueTable.cursor = when {
+                    item is ListRow.Group -> Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                    item is ListRow.Entry && column == LOCATION_COLUMN && item.issue.file != null ->
+                        Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                    else -> Cursor.getDefaultCursor()
+                }
+            }
+        })
+        issueTable.addKeyListener(object : KeyAdapter() {
+            override fun keyPressed(e: KeyEvent) {
+                if (e.keyCode != KeyEvent.VK_ENTER) return
+                val row = issueTable.selectedRow
+                if (row < 0) return
+                when (val item = issueModel.itemAt(issueTable.convertRowIndexToModel(row))) {
+                    is ListRow.Group -> toggleGroup(item.source)
+                    is ListRow.Entry -> service.openIssue(item.issue)
+                    null -> Unit
                 }
             }
         })
@@ -310,7 +394,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     }
 
     private fun buildIgnoredTab(): Component {
-        configureTable(ignoredTable)
+        configureTable(ignoredTable, ignoredModel)
         ignoredTable.selectionModel.addListSelectionListener {
             if (!it.valueIsAdjusting) {
                 selectedIgnored = ignoredTable.selectedRow.takeIf { row -> row >= 0 }?.let(ignoredModel::rowAt)
@@ -319,9 +403,12 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         }
         ignoredTable.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                if (e.clickCount == 2) {
-                    selectedIgnored?.let(service::openIssue)
-                }
+                val row = ignoredTable.rowAtPoint(e.point)
+                val column = ignoredTable.columnAtPoint(e.point)
+                if (row < 0 || column < 0) return
+                val issue = ignoredModel.rowAt(ignoredTable.convertRowIndexToModel(row)) ?: return
+                val clickLocation = column == LOCATION_COLUMN && issue.file != null
+                if (clickLocation || e.clickCount >= 2) service.openIssue(issue)
             }
         })
         val panel = JPanel(BorderLayout())
@@ -343,7 +430,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         return JBScrollPane(errorsArea)
     }
 
-    private fun configureTable(table: JTable) {
+    private fun configureTable(table: JTable, model: IssueTableModel) {
         table.setShowGrid(false)
         table.rowHeight = JBUI.scale(24)
         table.tableHeader.reorderingAllowed = false
@@ -359,7 +446,10 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         table.columnModel.getColumn(2).preferredWidth = JBUI.scale(180)
         table.columnModel.getColumn(3).preferredWidth = JBUI.scale(220)
         table.columnModel.getColumn(4).preferredWidth = JBUI.scale(520)
-        table.columnModel.getColumn(0).cellRenderer = SeverityCellRenderer()
+        val renderer = IssueTableRenderer(model)
+        for (column in 0 until table.columnCount) {
+            table.columnModel.getColumn(column).cellRenderer = renderer
+        }
     }
 
     // ------------------------------------------------------------ 行为
@@ -375,6 +465,8 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         exportButton.addActionListener { service.exportReport() }
         settingsButton.addActionListener { SettingsDialog(service.project, service).openAndSave() }
         buildAndScanButton.addActionListener { service.buildAndScan() }
+        expandAllButton.addActionListener { setAllGroupsCollapsed(false) }
+        collapseAllButton.addActionListener { setAllGroupsCollapsed(true) }
 
         copyIssueButton.addActionListener {
             val index = currentIssueIndex()
@@ -404,6 +496,77 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         if (row < 0) return 0
         val issue = issueModel.rowAt(row) ?: return 0
         return service.state.result?.issues?.indexOf(issue)?.plus(1) ?: 0
+    }
+
+    /** 单击来源分组行：展开 / 折叠该来源下的问题 */
+    private fun toggleGroup(source: IssueSource) {
+        if (!collapsedSources.remove(source)) {
+            collapsedSources.add(source)
+        }
+        rebuildIssueRows()
+        updateSummaryTabs()
+    }
+
+    private fun setAllGroupsCollapsed(collapsed: Boolean) {
+        val sources = visibleSources()
+        if (collapsed) {
+            collapsedSources.addAll(sources)
+        } else {
+            collapsedSources.removeAll(sources.toSet())
+        }
+        rebuildIssueRows()
+    }
+
+    private fun visibleSources(): List<IssueSource> {
+        val selected = selectedSource
+        return SOURCE_ORDER.filter { source ->
+            currentIssues.any { it.source == source } && (selected == null || selected == source)
+        }
+    }
+
+    private fun rebuildIssueRows() {
+        val rows = mutableListOf<ListRow>()
+        visibleSources().forEach { source ->
+            val group = currentIssues.filter { it.source == source }
+            val collapsed = collapsedSources.contains(source)
+            rows += ListRow.Group(source, group.size, !collapsed)
+            if (!collapsed) {
+                group.forEach { rows += ListRow.Entry(it) }
+            }
+        }
+        issueModel.setRows(rows)
+    }
+
+    /** 下拉框与分组标题同步显示各来源条数（受等级与搜索条件影响） */
+    private fun updateSourceFilter(counts: Map<IssueSource, Int>, total: Int) {
+        if (sourceFilter.isPopupVisible) return
+        val items = buildList {
+            add(SourceFilterItem(null, "全部 ($total)"))
+            SOURCE_ORDER.forEach { source ->
+                add(SourceFilterItem(source, "${source.label} (${counts[source] ?: 0})"))
+            }
+        }
+        val labels = items.map { it.label }
+        val current = sourceFilter.selectedItem as? SourceFilterItem
+        if (labels == lastSourceFilterLabels && current?.source == selectedSource) {
+            return
+        }
+        lastSourceFilterLabels = labels
+        val target = items.firstOrNull { it.source == selectedSource } ?: items.first()
+        suppressSourceEvents = true
+        try {
+            sourceFilter.model = DefaultComboBoxModel(items.toTypedArray())
+            sourceFilter.selectedItem = target
+        } finally {
+            suppressSourceEvents = false
+        }
+    }
+
+    private fun updateSummaryTabs() {
+        val hasGroups = visibleSources().isNotEmpty()
+        expandAllButton.isVisible = hasGroups
+        collapseAllButton.isVisible = hasGroups
+        expandAllButton.parent?.revalidate()
     }
 
     private fun showIssueDetail(issue: Issue?) {
@@ -501,6 +664,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         refreshIgnoredTable(result)
         refreshSuggestions(result)
         refreshErrors(result)
+        updateSummaryTabs()
         progressPanel.revalidate()
         progressPanel.repaint()
     }
@@ -522,31 +686,34 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     private fun refreshIssueTable() {
         val result = service.state.result
         if (result == null) {
+            currentIssues = emptyList()
             issueModel.setRows(emptyList())
+            updateSourceFilter(emptyMap(), 0)
             return
-        }
-        val source = when (sourceFilter.selectedIndex) {
-            1 -> IssueSource.CHECKSTYLE
-            2 -> IssueSource.GITLEAKS
-            3 -> IssueSource.TRIVY
-            4 -> IssueSource.SPOTBUGS
-            else -> null
         }
         val query = searchField.text.trim().lowercase()
         val enabledSeverities = severityButtons.filterValues { it.isSelected }.keys
-        val rows = result.issues.filter { issue ->
-            (source == null || issue.source == source) &&
-                issue.severity in enabledSeverities &&
-                (query.isEmpty() || (
-                    (issue.file ?: "") + " " + issue.rule + " " + issue.message + " " +
-                        (issue.zhSummary ?: "")
-                    ).lowercase().contains(query))
+        val base = result.issues.filter { issue ->
+            issue.severity in enabledSeverities && matchesQuery(issue, query)
         }
-        issueModel.setRows(rows)
+        val counts = IssueSource.entries.associateWith { source -> base.count { it.source == source } }
+        // 选中的来源被筛没了就回退到「全部」，避免下拉框显示与列表不一致
+        if (selectedSource != null && (counts[selectedSource] ?: 0) == 0 && base.isNotEmpty()) {
+            selectedSource = null
+        }
+        updateSourceFilter(counts, base.size)
+        currentIssues = selectedSource?.let { source -> base.filter { it.source == source } } ?: base
+        rebuildIssueRows()
+    }
+
+    private fun matchesQuery(issue: Issue, query: String): Boolean {
+        if (query.isEmpty()) return true
+        val hay = (issue.file ?: "") + " " + issue.rule + " " + issue.message + " " + (issue.zhSummary ?: "")
+        return hay.lowercase().contains(query)
     }
 
     private fun refreshIgnoredTable(result: ScanResult?) {
-        ignoredModel.setRows(result?.ignored ?: emptyList())
+        ignoredModel.setRows((result?.ignored ?: emptyList()).map { ListRow.Entry(it) })
     }
 
     private fun refreshSuggestions(result: ScanResult?) {
@@ -586,56 +753,115 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     // ------------------------------------------------------------ 表格模型
 
     private class IssueTableModel(private val service: QualityCenterService) : AbstractTableModel() {
-        private val rows = mutableListOf<Issue>()
+        private val rows = mutableListOf<ListRow>()
         private val columns = arrayOf("级别", "来源", "规则", "位置", "说明")
 
-        fun setRows(issues: List<Issue>) {
+        fun setRows(newRows: List<ListRow>) {
             rows.clear()
-            rows.addAll(issues)
+            rows.addAll(newRows)
             fireTableDataChanged()
         }
 
-        fun rowAt(index: Int): Issue? = rows.getOrNull(index)
+        fun itemAt(index: Int): ListRow? = rows.getOrNull(index)
+
+        /** 分组标题行返回 null，只有具体问题行才有 Issue */
+        fun rowAt(index: Int): Issue? = (rows.getOrNull(index) as? ListRow.Entry)?.issue
 
         override fun getRowCount(): Int = rows.size
         override fun getColumnCount(): Int = columns.size
         override fun getColumnName(column: Int): String = columns[column]
 
-        override fun getValueAt(rowIndex: Int, columnIndex: Int): Any {
-            val issue = rows[rowIndex]
-            val dir = service.root?.path ?: ""
-            return when (columnIndex) {
-                0 -> issue.severity.label
-                1 -> issue.source.label
-                2 -> issue.rule
-                3 -> {
-                    val file = issue.file
-                    val rel = if (file != null && dir.isNotEmpty() && file.startsWith(dir)) {
-                        file.substring(dir.length).trimStart('\\', '/')
-                    } else file ?: ""
-                    if (rel.isEmpty()) "" else rel + (issue.line?.let { ":$it" } ?: "")
+        override fun getValueAt(rowIndex: Int, columnIndex: Int): Any =
+            when (val item = rows[rowIndex]) {
+                is ListRow.Group -> when (columnIndex) {
+                    0 -> if (item.expanded) "▾" else "▸"
+                    1 -> item.source.label
+                    COUNT_COLUMN -> "${item.count} 项"
+                    else -> ""
                 }
-                else -> issue.zhSummary ?: issue.message
+                is ListRow.Entry -> {
+                    val issue = item.issue
+                    val dir = service.root?.path ?: ""
+                    when (columnIndex) {
+                        0 -> issue.severity.label
+                        1 -> issue.source.label
+                        2 -> issue.rule
+                        LOCATION_COLUMN -> {
+                            val file = issue.file
+                            val rel = if (file != null && dir.isNotEmpty() && file.startsWith(dir)) {
+                                file.substring(dir.length).trimStart('\\', '/')
+                            } else file ?: ""
+                            if (rel.isEmpty()) "" else rel + (issue.line?.let { ":$it" } ?: "")
+                        }
+                        else -> issue.zhSummary ?: issue.message
+                    }
+                }
             }
-        }
     }
 
-    private class SeverityCellRenderer : DefaultTableCellRenderer() {
+    /** 分组标题行加粗独占一行，问题行按等级着色的可选单元格渲染 */
+    private class IssueTableRenderer(private val model: IssueTableModel) : DefaultTableCellRenderer() {
         override fun getTableCellRendererComponent(
             table: JTable, value: Any?, isSelected: Boolean, hasFocus: Boolean, row: Int, column: Int
         ): Component {
             val component = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
-            if (!isSelected) {
-                component.foreground = when (value?.toString()) {
-                    Severity.CRITICAL.label -> Color(224, 62, 62)
-                    Severity.HIGH.label -> Color(232, 100, 40)
-                    Severity.MEDIUM.label -> Color(206, 160, 30)
-                    Severity.LOW.label -> Color(70, 150, 220)
-                    else -> Color(140, 150, 160)
+            val label = component as? JLabel
+            label?.toolTipText = null
+            when (val item = model.itemAt(table.convertRowIndexToModel(row))) {
+                is ListRow.Group -> {
+                    if (!isSelected) {
+                        component.background = GROUP_BACKGROUND
+                        component.foreground = if (column == COUNT_COLUMN) MUTED_FOREGROUND else table.foreground
+                    }
+                    component.font = component.font.deriveFont(Font.BOLD)
+                    label?.toolTipText = "单击展开或折叠「${item.source.label}」"
                 }
-                component.font = component.font.deriveFont(Font.BOLD)
+                is ListRow.Entry -> {
+                    if (!isSelected) {
+                        component.background = table.background
+                        component.foreground = when (column) {
+                            0 -> severityForeground(item.issue.severity)
+                            LOCATION_COLUMN -> LINK_FOREGROUND
+                            else -> table.foreground
+                        }
+                    }
+                    component.font = component.font.deriveFont(if (column == 0) Font.BOLD else Font.PLAIN)
+                    if (item.issue.file != null && column == LOCATION_COLUMN) {
+                        label?.toolTipText = "单击跳转到代码位置"
+                    }
+                }
+                null -> {
+                    if (!isSelected) {
+                        component.background = table.background
+                        component.foreground = table.foreground
+                    }
+                    component.font = component.font.deriveFont(Font.PLAIN)
+                }
             }
             return component
         }
     }
+}
+
+private const val COUNT_COLUMN = 2
+private const val LOCATION_COLUMN = 3
+
+/** 与 VS Code 版一致的分组顺序 */
+private val SOURCE_ORDER = listOf(
+    IssueSource.CHECKSTYLE,
+    IssueSource.GITLEAKS,
+    IssueSource.SPOTBUGS,
+    IssueSource.TRIVY
+)
+
+private val GROUP_BACKGROUND = JBColor(Color(0xE8EDF3), Color(0x34373C))
+private val MUTED_FOREGROUND = JBColor(Color(0x6B7280), Color(0x9AA1A9))
+private val LINK_FOREGROUND = JBColor(Color(0x2C6BE0), Color(0x7FA8FF))
+
+private fun severityForeground(severity: Severity): Color = when (severity) {
+    Severity.CRITICAL -> JBColor(Color(224, 62, 62), Color(255, 122, 122))
+    Severity.HIGH -> JBColor(Color(232, 100, 40), Color(255, 160, 96))
+    Severity.MEDIUM -> JBColor(Color(196, 148, 20), Color(226, 190, 84))
+    Severity.LOW -> JBColor(Color(46, 128, 210), Color(110, 178, 255))
+    Severity.INFO -> JBColor(Color(120, 132, 145), Color(140, 150, 160))
 }

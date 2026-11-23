@@ -49,13 +49,14 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.editor.Document
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileDocumentManagerListener
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.SystemProperties
 import com.google.gson.GsonBuilder
 import com.google.gson.TypeAdapter
@@ -931,15 +932,72 @@ class QualityCenterService(val project: Project) : Disposable {
     // ---------------------------------------------------------------- 打开 / 环境
 
     fun openIssue(issue: Issue) {
-        val file = issue.file ?: return
-        openFile(File(file), issue.line ?: 1)
+        val path = issue.file?.trim()
+        if (path.isNullOrEmpty()) {
+            notifyInfo("这条问题没有可跳转的代码位置。")
+            return
+        }
+        val target = resolveIssueFile(path)
+        if (target == null) {
+            notifyError("找不到文件：$path")
+            return
+        }
+        openFile(target, issue.line ?: 1, issue.column ?: 1)
     }
 
-    fun openFile(file: File, line: Int) {
+    /** 兼容绝对 / 相对路径与正反斜杠：逐个候选探测，找不到就提示而不是静默失败 */
+    private fun resolveIssueFile(path: String): File? {
+        val direct = File(path)
+        val candidates = mutableListOf<File>()
+        if (direct.isAbsolute) {
+            candidates += direct
+        } else {
+            baseDir?.let { root ->
+                candidates += File(root, path)
+                candidates += File(root, path.replace('/', File.separatorChar).replace('\\', File.separatorChar))
+            }
+        }
+        candidates.firstOrNull { it.isFile }?.let { return it.absoluteFile.normalize() }
+        candidates.firstOrNull { it.exists() }?.let { return it.absoluteFile.normalize() }
+        return null
+    }
+
+    fun openFile(file: File, line: Int) = openFile(file, line, 1)
+
+    fun openFile(file: File, line: Int, column: Int) {
         ApplicationManager.getApplication().invokeLater {
-            val virtualFile: VirtualFile =
-                LocalFileSystem.getInstance().refreshAndFindFileByIoFile(file) ?: return@invokeLater
-            OpenFileDescriptor(project, virtualFile, (line - 1).coerceAtLeast(0), 0).navigate(true)
+            val target = file.absoluteFile.normalize()
+            if (!target.isFile) {
+                notifyError("无法定位文件：${target.path}")
+                return@invokeLater
+            }
+            val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(target)
+            if (virtualFile == null || virtualFile.isDirectory) {
+                notifyError("无法在 IDE 中打开文件：${target.path}")
+                return@invokeLater
+            }
+            val offset = ApplicationManager.getApplication().runReadAction<Int> {
+                val document = FileDocumentManager.getInstance().getDocument(virtualFile)
+                if (document == null) {
+                    0
+                } else {
+                    val lineIndex = (line - 1).coerceIn(0, (document.lineCount - 1).coerceAtLeast(0))
+                    document.getLineStartOffset(lineIndex)
+                }
+            }
+            val descriptor = OpenFileDescriptor(project, virtualFile, offset, 0)
+            val opened = runCatching {
+                descriptor.navigate(true)
+                FileEditorManager.getInstance(project).isFileOpen(virtualFile)
+            }.getOrDefault(false)
+            if (!opened) {
+                val editor = runCatching {
+                    FileEditorManager.getInstance(project).openTextEditor(descriptor, true)
+                }.getOrNull()
+                if (editor == null) {
+                    notifyError("无法打开文件：${target.path}")
+                }
+            }
         }
     }
 
