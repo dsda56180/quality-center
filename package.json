@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)与字节码级静态缺陷的统一面板，支持一键导出给 AI 修复",
-  "version": "0.17.15",
+  "version": "0.17.16",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -150,7 +150,12 @@
         },
         "qualityCenter.trivy.minSeverity": {
           "type": "string",
-          "enum": ["low", "medium", "high", "critical"],
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
           "default": "low",
           "description": "低于该等级的 CVE 不显示，可选 low/medium/high/critical"
         },
@@ -186,7 +191,9 @@
         },
         "qualityCenter.openRewrite.recipes": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "手动启用的 OpenRewrite 配方（低风险配方由 qualityCenter.openRewrite.autoRecipes 自动启用）；面板「设置」中可直接勾选"
         },
@@ -202,7 +209,9 @@
         },
         "qualityCenter.openRewrite.recipeArtifacts": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "额外配方包的 Maven 坐标，通过 -Drewrite.recipeArtifactCoordinates 传入，无需修改项目 pom。插件已内置配方库所需的包，通常无需手动填写"
         },
