@@ -7,6 +7,7 @@ import com.dsda56180.qualitycenter.model.Severity
 import com.dsda56180.qualitycenter.model.Suggestion
 import com.dsda56180.qualitycenter.service.QualityCenterService
 import com.dsda56180.qualitycenter.service.RULE_RECIPES
+import com.intellij.ide.util.PropertiesComponent
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
@@ -43,8 +44,12 @@ import javax.swing.JTextArea
 import javax.swing.JToggleButton
 import javax.swing.ListSelectionModel
 import javax.swing.Timer
+import javax.swing.event.ChangeEvent
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+import javax.swing.event.ListSelectionEvent
+import javax.swing.event.TableColumnModelEvent
+import javax.swing.event.TableColumnModelListener
 import javax.swing.table.AbstractTableModel
 import javax.swing.table.DefaultTableCellRenderer
 
@@ -67,6 +72,8 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     private val hideTimer = Timer(700) {
         progressPanel.isVisible = false
         catBar.stop()
+        progressPanel.parent?.revalidate()
+        progressPanel.parent?.repaint()
     }.apply { isRepeats = false }
     private var wasBusy = false
 
@@ -224,21 +231,23 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         wrapper.layout = BoxLayout(wrapper, BoxLayout.Y_AXIS)
         wrapper.border = JBUI.Borders.empty(2, 8, 4, 8)
 
-        val firstRow = JPanel(BorderLayout(JBUI.scale(8), 0))
-        val chips = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(4), 0))
+        val chipRow = JPanel(GridLayout(1, Severity.entries.size, JBUI.scale(4), 0))
         Severity.entries.forEach { severity ->
             val chip = JToggleButton("${severity.label} 0").apply {
                 isSelected = true
-                font = font.deriveFont(font.size2D - 1f)
-                addActionListener { refreshIssueTable() }
+                foreground = severityForeground(severity)
+                font = font.deriveFont(font.size2D - 1f).deriveFont(Font.BOLD)
+                toolTipText = "点击切换是否显示「${severity.label}」问题"
+                addActionListener {
+                    refreshSeverityChipStyles()
+                    refreshIssueTable()
+                }
             }
             severityButtons[severity] = chip
-            chips.add(chip)
+            chipRow.add(chip)
         }
-        firstRow.add(chips, BorderLayout.CENTER)
-        firstRow.add(statusLabel, BorderLayout.EAST)
 
-        val secondRow = JPanel(BorderLayout())
+        val secondRow = JPanel(BorderLayout(JBUI.scale(8), 0))
         searchField.toolTipText = "搜索文件 / 规则 / 说明"
         searchField.preferredSize = Dimension(JBUI.scale(220), JBUI.scale(26))
         searchField.document.addDocumentListener(object : DocumentListener {
@@ -247,8 +256,10 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
             override fun changedUpdate(e: DocumentEvent) = refreshIssueTable()
         })
         secondRow.add(searchField, BorderLayout.CENTER)
+        // 状态放到搜索行右侧，把整行宽度让给等级标签，避免「低危 / 提示」被挤出可视区
+        secondRow.add(statusLabel, BorderLayout.EAST)
 
-        wrapper.add(firstRow)
+        wrapper.add(chipRow)
         wrapper.add(secondRow)
         return wrapper
     }
@@ -275,7 +286,8 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
             }
         }
 
-        configureTable(issueTable, issueModel)
+        configureTable(issueTable, issueModel, persistWidths = true)
+        installColumnAutoFit(issueTable)
         issueTable.selectionModel.addListSelectionListener {
             if (!it.valueIsAdjusting) {
                 selectedIssue = issueTable.selectedRow.takeIf { row -> row >= 0 }?.let(issueModel::rowAt)
@@ -346,6 +358,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
             wrapStyleWord = true
             border = JBUI.Borders.empty(6, 8)
             font = JBUI.Fonts.label()
+            text = DETAIL_PLACEHOLDER
         }
         detailButtons.add(copyIssueButton)
         detailButtons.add(ignoreButton)
@@ -430,26 +443,94 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         return JBScrollPane(errorsArea)
     }
 
-    private fun configureTable(table: JTable, model: IssueTableModel) {
+    private fun configureTable(table: JTable, model: IssueTableModel, persistWidths: Boolean = false) {
         table.setShowGrid(false)
         table.rowHeight = JBUI.scale(24)
         table.tableHeader.reorderingAllowed = false
         table.autoCreateRowSorter = false
-        table.columnModel.getColumn(0).apply {
-            preferredWidth = JBUI.scale(58)
-            maxWidth = JBUI.scale(70)
-        }
-        table.columnModel.getColumn(1).apply {
-            preferredWidth = JBUI.scale(80)
-            maxWidth = JBUI.scale(100)
-        }
-        table.columnModel.getColumn(2).preferredWidth = JBUI.scale(180)
-        table.columnModel.getColumn(3).preferredWidth = JBUI.scale(220)
-        table.columnModel.getColumn(4).preferredWidth = JBUI.scale(520)
+        // 关闭「自动压缩所有列」，列宽交给用户拖动 + 水平滚动条，避免内容被一起挤成省略号
+        table.autoResizeMode = JTable.AUTO_RESIZE_OFF
+        table.fillsViewportHeight = false
+
+        setColumn(table, 0, 50, 44, 88)
+        setColumn(table, 1, 72, 60, Int.MAX_VALUE)
+        setColumn(table, 2, 120, 80, Int.MAX_VALUE)
+        setColumn(table, 3, 170, 100, Int.MAX_VALUE)
+        setColumn(table, 4, 200, 120, Int.MAX_VALUE)
+
         val renderer = IssueTableRenderer(model)
         for (column in 0 until table.columnCount) {
             table.columnModel.getColumn(column).cellRenderer = renderer
         }
+        if (persistWidths) {
+            restoreColumnWidths(table)
+            table.columnModel.addColumnModelListener(object : TableColumnModelListener {
+                override fun columnAdded(e: TableColumnModelEvent) = Unit
+                override fun columnRemoved(e: TableColumnModelEvent) = Unit
+                override fun columnMoved(e: TableColumnModelEvent) = Unit
+                override fun columnSelectionChanged(e: ListSelectionEvent) = Unit
+                override fun columnMarginChanged(e: ChangeEvent) = persistColumnWidths(table)
+            })
+        }
+    }
+
+    private fun setColumn(table: JTable, index: Int, width: Int, min: Int, max: Int) {
+        table.columnModel.getColumn(index).apply {
+            preferredWidth = JBUI.scale(width)
+            minWidth = JBUI.scale(min)
+            if (max != Int.MAX_VALUE) maxWidth = JBUI.scale(max)
+        }
+    }
+
+    /** 记住用户拖出来的列宽，下次打开工具窗口沿用 */
+    private fun restoreColumnWidths(table: JTable) {
+        val saved = PropertiesComponent.getInstance(service.project)
+            .getValue(COLUMN_WIDTHS_KEY)
+            ?.split(',')
+            ?.mapNotNull { it.trim().toIntOrNull() }
+            ?: return
+        if (saved.size != table.columnCount) return
+        saved.forEachIndexed { index, width ->
+            val column = table.columnModel.getColumn(index)
+            column.preferredWidth = width.coerceIn(column.minWidth, column.maxWidth)
+        }
+    }
+
+    private fun persistColumnWidths(table: JTable) {
+        val widths = (0 until table.columnCount)
+            .joinToString(",") { table.columnModel.getColumn(it).width.toString() }
+        PropertiesComponent.getInstance(service.project).setValue(COLUMN_WIDTHS_KEY, widths)
+    }
+
+    /** 双击表头分隔线把该列自适应到内容宽度，省得手动拖拽慢慢试 */
+    private fun installColumnAutoFit(table: JTable) {
+        table.tableHeader.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                if (e.clickCount != 2) return
+                val header = table.tableHeader
+                val boundary = (0 until table.columnCount)
+                    .map { index -> Pair(index, header.getHeaderRect(index)) }
+                    .firstOrNull { pair ->
+                        Math.abs(e.x - (pair.second.x + pair.second.width)) <= JBUI.scale(5)
+                    }
+                    ?.first
+                    ?: return
+                autoFitColumn(table, boundary)
+            }
+        })
+    }
+
+    private fun autoFitColumn(table: JTable, index: Int) {
+        val metrics = table.getFontMetrics(table.font)
+        var width = 0
+        for (row in 0 until table.rowCount) {
+            val text = table.getValueAt(row, index)?.toString() ?: continue
+            width = maxOf(width, metrics.stringWidth(text))
+        }
+        if (width <= 0) return
+        val column = table.columnModel.getColumn(index)
+        column.preferredWidth = (width + JBUI.scale(20))
+            .coerceIn(column.minWidth, minOf(column.maxWidth, JBUI.scale(640)))
     }
 
     // ------------------------------------------------------------ 行为
@@ -569,9 +650,16 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         expandAllButton.parent?.revalidate()
     }
 
+    /** 等级标签选中时用等级色，取消筛选后变灰，避免所有标签看起来一样 */
+    private fun refreshSeverityChipStyles() {
+        severityButtons.forEach { (severity, chip) ->
+            chip.foreground = if (chip.isSelected) severityForeground(severity) else MUTED_FOREGROUND
+        }
+    }
+
     private fun showIssueDetail(issue: Issue?) {
         if (issue == null) {
-            issueDetail.text = ""
+            issueDetail.text = DETAIL_PLACEHOLDER
             copyIssueButton.isEnabled = false
             ignoreButton.isEnabled = false
             ruleFixButton.isEnabled = false
@@ -647,6 +735,14 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         } else if (wasBusy) {
             catBar.markCompleted()
             hideTimer.restart()
+        } else {
+            // 空闲态不保留进度条：隐藏后立刻让父容器重新布局，避免留下一块空白
+            catBar.stop()
+            if (progressPanel.isVisible) {
+                progressPanel.isVisible = false
+                progressPanel.parent?.revalidate()
+                progressPanel.parent?.repaint()
+            }
         }
         wasBusy = busy
 
@@ -818,7 +914,11 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
                 }
                 is ListRow.Entry -> {
                     if (!isSelected) {
-                        component.background = table.background
+                        component.background = if (column == 0) {
+                            severityBackground(item.issue.severity)
+                        } else {
+                            table.background
+                        }
                         component.foreground = when (column) {
                             0 -> severityForeground(item.issue.severity)
                             LOCATION_COLUMN -> LINK_FOREGROUND
@@ -826,8 +926,10 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
                         }
                     }
                     component.font = component.font.deriveFont(if (column == 0) Font.BOLD else Font.PLAIN)
-                    if (item.issue.file != null && column == LOCATION_COLUMN) {
-                        label?.toolTipText = "单击跳转到代码位置"
+                    label?.toolTipText = when (column) {
+                        2 -> value?.toString()
+                        LOCATION_COLUMN -> value?.toString()?.takeIf { it.isNotBlank() }?.let { "$it（单击跳转）" }
+                        else -> null
                     }
                 }
                 null -> {
@@ -845,6 +947,8 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
 
 private const val COUNT_COLUMN = 2
 private const val LOCATION_COLUMN = 3
+private const val COLUMN_WIDTHS_KEY = "quality.center.issue.columnWidths"
+private const val DETAIL_PLACEHOLDER = "选中一条问题查看完整说明。\n提示：单击「位置」列可直接跳转到代码。"
 
 /** 与 VS Code 版一致的分组顺序 */
 private val SOURCE_ORDER = listOf(
@@ -864,4 +968,13 @@ private fun severityForeground(severity: Severity): Color = when (severity) {
     Severity.MEDIUM -> JBColor(Color(196, 148, 20), Color(226, 190, 84))
     Severity.LOW -> JBColor(Color(46, 128, 210), Color(110, 178, 255))
     Severity.INFO -> JBColor(Color(120, 132, 145), Color(140, 150, 160))
+}
+
+/** 级别单元格的浅底色，让不同等级的行在缩窄的列里也能一眼区分 */
+private fun severityBackground(severity: Severity): Color = when (severity) {
+    Severity.CRITICAL -> JBColor(Color(0xFBE7E7), Color(0x4A2727))
+    Severity.HIGH -> JBColor(Color(0xFDEEE4), Color(0x4A3325))
+    Severity.MEDIUM -> JBColor(Color(0xFBF4DB), Color(0x453A1F))
+    Severity.LOW -> JBColor(Color(0xE8F1FB), Color(0x22384A))
+    Severity.INFO -> JBColor(Color(0xEFF1F4), Color(0x2F3337))
 }
