@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<!DOCTYPE module PUBLIC
+        "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+        "https://checkstyle.org/dtds/configuration_1_3.dtd">
+<!--
+  质量中心内置默认规则集。
+  当项目内没有自定义 Checkstyle 配置时使用，保证任何 Java 项目开箱即用。
+  设计原则：低噪音、聚焦真实缺陷，不检查格式风格（格式交给 IDE 处理）。
+  如需自定义，在项目根目录放置 .githooks/checkstyle-config.xml 或 checkstyle.xml 即可覆盖。
+-->
+<module name="Checker">
+    <property name="charset" value="UTF-8"/>
+    <property name="severity" value="error"/>
+
+    <module name="TreeWalker">
+        <!-- 无用/冗余导入 -->
+        <module name="UnusedImports"/>
+        <module name="RedundantImport"/>
+        <!-- 禁止导入的类（如 sun.* 内部 API） -->
+        <module name="IllegalImport"/>
+
+        <!-- 真实缺陷类 -->
+        <module name="EqualsHashCode"/>
+        <module name="DefaultComesLast"/>
+        <module name="EmptyStatement"/>
+        <module name="StringLiteralEquality"/>
+        <module name="SimplifyBooleanExpression"/>
+        <module name="ModifierOrder"/>
+        <module name="OneTopLevelClass"/>
+    </module>
+</module>

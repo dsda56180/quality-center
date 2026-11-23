@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<idea-plugin>
+    <id>com.dsda56180.qualitycenter</id>
+    <name>Quality Center</name>
+    <vendor url="https://github.com/dsda56180/quality-center">dsda56180</vendor>
+
+    <description><![CDATA[Quality Center is a code quality dashboard for Java and Maven projects: Checkstyle, Gitleaks, Trivy, SpotBugs, OpenRewrite fixes and dependency upgrades.]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.java</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Quality Center"
+                    anchor="right"
+                    factoryClass="com.dsda56180.qualitycenter.ui.QualityToolWindowFactory"/>
+        <postStartupActivity implementation="com.dsda56180.qualitycenter.service.QualityCenterStartupActivity"/>
+        <fileDocumentManagerListener implementation="com.dsda56180.qualitycenter.service.SaveScanListener"/>
+        <notificationGroup id="QualityCenter" displayType="BALLOON" isLogByDefault="false"/>
+    </extensions>
+
+    <actions>
+        <group id="QualityCenter.ToolsMenu" text="Quality Center" popup="true">
+            <action id="QualityCenter.Scan" class="com.dsda56180.qualitycenter.actions.ScanAction"
+                    text="重新扫描项目" description="运行四类代码质量扫描"/>
+            <action id="QualityCenter.DeepFix" class="com.dsda56180.qualitycenter.actions.DeepFixAction"
+                    text="深度修复" description="使用 OpenRewrite 配方做编译级修复"/>
+            <action id="QualityCenter.Upgrade" class="com.dsda56180.qualitycenter.actions.UpgradeAction"
+                    text="升级依赖" description="按 CVE 修复版本升级 Maven 依赖"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </group>
+    </actions>
+</idea-plugin>
