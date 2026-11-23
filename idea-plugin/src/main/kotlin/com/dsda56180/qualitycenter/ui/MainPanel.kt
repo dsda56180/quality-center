@@ -96,7 +96,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     private var selectedIssue: Issue? = null
     private var selectedIgnored: Issue? = null
 
-    private val toolbar = JPanel(GridLayout(0, 3, JBUI.scale(4), JBUI.scale(4)))
+    private val toolbar = JPanel()
 
     init {
         buildToolbar()
@@ -121,13 +121,35 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     // ------------------------------------------------------------ 布局
 
     private fun buildToolbar() {
-        toolbar.border = JBUI.Borders.empty(4, 8, 2, 8)
-        // 三列网格，窄侧边栏下也能完整显示全部操作
+        toolbar.layout = FlowLayout(FlowLayout.LEFT, JBUI.scale(2), JBUI.scale(2))
+        toolbar.border = JBUI.Borders.empty(4, 6, 2, 6)
+        // 与 IDEA 原生工具栏一致：图标按钮 + 悬停提示
+        iconButton(scanButton, com.intellij.icons.AllIcons.Actions.Refresh, "重新扫描项目")
+        iconButton(deepFixButton, com.intellij.icons.AllIcons.Actions.Edit, "深度修复（OpenRewrite）")
+        iconButton(upgradeButton, com.intellij.icons.AllIcons.Actions.Download, "按 CVE 升级依赖")
+        iconButton(pauseButton, com.intellij.icons.AllIcons.Actions.Pause, "暂停扫描")
+        iconButton(resumeButton, com.intellij.icons.AllIcons.Actions.Resume, "继续扫描")
+        iconButton(stopButton, com.intellij.icons.AllIcons.Actions.Suspend, "终止扫描")
+        iconButton(copyButton, com.intellij.icons.AllIcons.Actions.Copy, "复制 Markdown 报告")
+        iconButton(exportButton, com.intellij.icons.AllIcons.ToolbarDecorator.Export, "导出报告文件")
+        iconButton(settingsButton, com.intellij.icons.AllIcons.General.Settings, "质量中心设置")
         listOf(
             scanButton, deepFixButton, upgradeButton,
             pauseButton, resumeButton, stopButton,
             copyButton, exportButton, settingsButton
         ).forEach { toolbar.add(it) }
+    }
+
+    private fun iconButton(button: JButton, icon: javax.swing.Icon, tooltip: String) {
+        button.icon = icon
+        button.text = ""
+        button.toolTipText = tooltip
+        button.isFocusable = false
+        button.isContentAreaFilled = false
+        button.isBorderPainted = false
+        button.margin = java.awt.Insets(JBUI.scale(3), JBUI.scale(3), JBUI.scale(3), JBUI.scale(3))
+        button.preferredSize = Dimension(JBUI.scale(30), JBUI.scale(28))
+        button.isRolloverEnabled = true
     }
 
     private fun buildProgress() {
@@ -429,12 +451,15 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     override fun run() {
         val state = service.state
         val busy = state.scanning || state.stage != null
-        scanButton.isEnabled = !busy
+        val hasRoot = service.root != null
+        scanButton.isEnabled = !busy && hasRoot
         pauseButton.isEnabled = state.scanning && !state.paused
         resumeButton.isEnabled = state.scanning && state.paused
         stopButton.isEnabled = state.scanning
-        deepFixButton.isEnabled = !busy
-        upgradeButton.isEnabled = !busy
+        deepFixButton.isEnabled = !busy && hasRoot
+        upgradeButton.isEnabled = !busy && hasRoot
+        copyButton.isEnabled = hasRoot
+        exportButton.isEnabled = hasRoot
 
         if (busy) {
             hideTimer.stop()
@@ -459,6 +484,9 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         buildHintLabel.toolTipText = buildHint
 
         updateSummary(result)
+        if (!hasRoot) {
+            statusLabel.text = "请先打开 Maven 项目"
+        }
         refreshIssueTable()
         refreshIgnoredTable(result)
         refreshSuggestions(result)

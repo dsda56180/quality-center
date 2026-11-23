@@ -167,7 +167,10 @@ class QualityCenterService(val project: Project) : Disposable {
     // ---------------------------------------------------------------- 扫描
 
     fun scan(force: Boolean = true) {
-        val scanRunner = runner ?: return
+        val scanRunner = runner ?: run {
+            notifyInfo("请先打开一个 Maven 项目，再执行扫描。")
+            return
+        }
         if (scanRunner.isRunning || uiState.stage != null) {
             return
         }
@@ -348,7 +351,10 @@ class QualityCenterService(val project: Project) : Disposable {
     // ---------------------------------------------------------------- 构建并扫描
 
     fun buildAndScan() {
-        val dir = root ?: return
+        val dir = root ?: run {
+            notifyInfo("请先打开一个 Maven 项目，再执行构建扫描。")
+            return
+        }
         executor.execute {
             setStage("执行 mvn package 构建", 1)
             try {
@@ -384,7 +390,10 @@ class QualityCenterService(val project: Project) : Disposable {
     private data class DeepFixOverride(val recipes: List<String>, val artifacts: List<String>, val label: String?)
 
     private fun deepFixInternal(override: DeepFixOverride?) {
-        val dir = root ?: return
+        val dir = root ?: run {
+            notifyInfo("请先打开一个 Maven 项目，再执行深度修复。")
+            return
+        }
         if (!settings.openRewriteEnabled) {
             notifyInfo("深度修复已在设置中关闭。")
             return
@@ -717,7 +726,10 @@ class QualityCenterService(val project: Project) : Disposable {
     // ---------------------------------------------------------------- 依赖升级
 
     fun upgradeDependencies(packageName: String? = null) {
-        val dir = root ?: return
+        val dir = root ?: run {
+            notifyInfo("请先打开一个 Maven 项目，再执行依赖升级。")
+            return
+        }
         if (!settings.dependencyUpgradeEnabled) {
             notifyInfo("依赖升级已在设置中关闭。")
             return

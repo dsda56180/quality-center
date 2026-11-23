@@ -83,7 +83,7 @@ class QualitySettings(private val project: Project) {
         set(value) = setBool("scanOnSave", value)
 
     var scanOnStartup: Boolean
-        get() = bool("scanOnStartup", true)
+        get() = bool("scanOnStartup", false)
         set(value) = setBool("scanOnStartup", value)
 
     var exportForAgent: Boolean
