@@ -16,6 +16,7 @@ import java.awt.Component
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.GridLayout
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.text.SimpleDateFormat
@@ -95,6 +96,8 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     private var selectedIssue: Issue? = null
     private var selectedIgnored: Issue? = null
 
+    private val toolbar = JPanel(GridLayout(0, 3, JBUI.scale(4), JBUI.scale(4)))
+
     init {
         buildToolbar()
         buildProgress()
@@ -118,12 +121,13 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     // ------------------------------------------------------------ 布局
 
     private fun buildToolbar() {
-        val bar = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), JBUI.scale(4)))
+        toolbar.border = JBUI.Borders.empty(4, 8, 2, 8)
+        // 三列网格，窄侧边栏下也能完整显示全部操作
         listOf(
-            scanButton, pauseButton, resumeButton, stopButton, deepFixButton,
-            upgradeButton, copyButton, exportButton, settingsButton
-        ).forEach { bar.add(it) }
-        add(bar, BorderLayout.NORTH)
+            scanButton, deepFixButton, upgradeButton,
+            pauseButton, resumeButton, stopButton,
+            copyButton, exportButton, settingsButton
+        ).forEach { toolbar.add(it) }
     }
 
     private fun buildProgress() {
@@ -145,6 +149,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     private fun buildCenter() {
         val top = JPanel()
         top.layout = BoxLayout(top, BoxLayout.Y_AXIS)
+        top.add(toolbar)
         top.add(progressPanel)
         top.add(buildHintPanel)
         top.add(buildSummary())
@@ -159,9 +164,11 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     }
 
     private fun buildSummary(): JPanel {
-        val row = JPanel(BorderLayout(JBUI.scale(8), 0))
-        row.border = JBUI.Borders.empty(4, 8)
+        val wrapper = JPanel()
+        wrapper.layout = BoxLayout(wrapper, BoxLayout.Y_AXIS)
+        wrapper.border = JBUI.Borders.empty(2, 8, 4, 8)
 
+        val firstRow = JPanel(BorderLayout(JBUI.scale(8), 0))
         val chips = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(4), 0))
         Severity.entries.forEach { severity ->
             val chip = JToggleButton("${severity.label} 0").apply {
@@ -172,9 +179,10 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
             severityButtons[severity] = chip
             chips.add(chip)
         }
-        row.add(chips, BorderLayout.WEST)
+        firstRow.add(chips, BorderLayout.CENTER)
+        firstRow.add(statusLabel, BorderLayout.EAST)
 
-        val right = JPanel(FlowLayout(FlowLayout.RIGHT, JBUI.scale(6), 0))
+        val secondRow = JPanel(BorderLayout())
         searchField.toolTipText = "搜索文件 / 规则 / 说明"
         searchField.preferredSize = Dimension(JBUI.scale(220), JBUI.scale(26))
         searchField.document.addDocumentListener(object : DocumentListener {
@@ -182,10 +190,11 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
             override fun removeUpdate(e: DocumentEvent) = refreshIssueTable()
             override fun changedUpdate(e: DocumentEvent) = refreshIssueTable()
         })
-        right.add(searchField)
-        right.add(statusLabel)
-        row.add(right, BorderLayout.EAST)
-        return row
+        secondRow.add(searchField, BorderLayout.CENTER)
+
+        wrapper.add(firstRow)
+        wrapper.add(secondRow)
+        return wrapper
     }
 
     private fun buildIssueTab(): Component {
@@ -420,10 +429,10 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     override fun run() {
         val state = service.state
         val busy = state.scanning || state.stage != null
-        scanButton.isVisible = !state.scanning
-        pauseButton.isVisible = state.scanning && !state.paused
-        resumeButton.isVisible = state.scanning && state.paused
-        stopButton.isVisible = state.scanning
+        scanButton.isEnabled = !busy
+        pauseButton.isEnabled = state.scanning && !state.paused
+        resumeButton.isEnabled = state.scanning && state.paused
+        stopButton.isEnabled = state.scanning
         deepFixButton.isEnabled = !busy
         upgradeButton.isEnabled = !busy
 
