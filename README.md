@@ -50,6 +50,24 @@ node scripts/install.mjs --build         # 先 tsc + vsce package，再安装
 
 安装完成后重启编辑器（或用命令面板的「Developer: Reload Window」）生效。
 
+### 发版到 GitHub Release + Open VSX
+
+`.github/workflows/publish.yml` 只在「Release 被发布」或手动触发时运行，推 `main` 不会发版。用下面的脚本可以一次走完全流程：
+
+```bash
+npm run release                # 版本号自动 +1（patch），如 0.17.15 → 0.17.16
+npm run release -- 0.18.0      # 指定版本
+npm run release -- --dry-run   # 只打印计划，不改文件、不推送
+npm run release -- --no-wait   # 建完 Release 就返回，不等 Actions
+```
+
+脚本做的事：校验工作区干净 / 分支为 `main` / tag 不存在 → 更新 `package.json` 与 `package-lock.json` →
+补 `CHANGELOG.md` 段落（已有该版本段落则直接复用，否则用上个 tag 以来的提交记录生成）→ `tsc` 编译与
+`vsce package` 打包校验 → commit + tag `v<version>` + push → `gh release create` 触发 Actions →
+等发布结果并确认 Open VSX `latest` 已指向新版本。
+
+> Open VSX 不允许覆盖已发布版本号，`latest` 接口有 `max-age=600` 的缓存，脚本会自己轮询等待。
+
 ### 本地安装（开发调试）
 
 ```bash
