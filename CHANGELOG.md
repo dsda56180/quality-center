@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.17.16
+
+- 新增 `scripts/release.mjs` 一键发版（`npm run release`）：校验工作区干净 / 分支为 main / tag 未占用 → bump `package.json` 与 lock → 补 `CHANGELOG.md` 段落（已有则复用，缺则用上个 tag 以来的提交生成）→ `tsc` 与 `vsce package` 双校验 → commit + tag `v<version>` + push → `gh release create` 触发 `publish.yml` → 轮询 Actions 结果并确认 Open VSX `latest` 已指向新版本
+- 发版脚本支持 `--dry-run`（只打印计划）/ `--no-wait`（不等 Actions）/ `--no-verify`（不等线上校验）/ `--branch`，校验或编译失败即中止，不会留下半成品提交
+- 新增发版前的文档闸门：校验 README 是否覆盖 `package.json` 中全部 28 个配置项与 7 条命令、是否残留写死的 vsix 版本号、`description` 是否为空或超长，不达标直接拒绝发版（临时可 `--skip-docs`）
+- README 补齐遗漏：命令表 4 条补到 7 条，配置表补 `qualityCenter.exportForAgent`，安装示例改用 `<version>` 占位，合并重复且过期的「发布」章节
+- 明确文档与商店页的关系：`README.md` 随 vsix 一起打包，Open VSX / VS Code 市场展示的扩展介绍页正文就是该文件，因此每次发版必须同步更新
+
 ## 0.17.15
 
 - 新增 `scripts/install.mjs` 跨平台一键安装脚本（Windows / macOS / Linux）：自动识别 Trae CN、Trae、Cursor、VS Code、VSCodium 的 CLI 与安装路径（优先 Trae CN），自动挑选最新 vsix 并 `--install-extension --force` 安装，`--build` 可先编译打包
