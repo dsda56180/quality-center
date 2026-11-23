@@ -8,6 +8,7 @@ import com.dsda56180.qualitycenter.model.Suggestion
 import com.dsda56180.qualitycenter.service.QualityCenterService
 import com.dsda56180.qualitycenter.service.RULE_RECIPES
 import com.intellij.ide.util.PropertiesComponent
+import com.intellij.openapi.ui.Splitter
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
@@ -28,7 +29,6 @@ import java.awt.event.MouseEvent
 import java.awt.event.MouseMotionAdapter
 import java.text.SimpleDateFormat
 import java.util.Date
-import javax.swing.BorderFactory
 import java.awt.CardLayout
 import javax.swing.BoxLayout
 import javax.swing.DefaultListModel
@@ -38,7 +38,6 @@ import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JScrollPane
-import javax.swing.JSplitPane
 import javax.swing.JTable
 import javax.swing.JTextArea
 import javax.swing.ListSelectionModel
@@ -333,16 +332,20 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         container.add(sourceRow, BorderLayout.NORTH)
         issueEmptyLabel.font = JBUI.Fonts.label()
         issueEmptyLabel.foreground = MUTED_FOREGROUND
-        val tableCard = JBScrollPane(issueTable)
+        val tableCard = thinScrollPane(issueTable)
         val emptyCard = JPanel(BorderLayout()).apply { add(issueEmptyLabel, BorderLayout.CENTER) }
         issueCards.add(tableCard, CARD_ISSUE_TABLE)
         issueCards.add(emptyCard, CARD_ISSUE_EMPTY)
         container.add(issueCards, BorderLayout.CENTER)
 
         val detail = buildDetailPanel()
-        val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, container, detail)
-        split.resizeWeight = 0.68
-        split.border = BorderFactory.createEmptyBorder()
+        // IDEA 原生 Splitter：分界线是 1px 主题色，不再用 JSplitPane 的粗白分隔条
+        val split = Splitter(true)
+        split.proportion = 0.68f
+        split.setShowDividerControls(false)
+        split.setShowDividerIcon(false)
+        split.firstComponent = container
+        split.secondComponent = detail as JComponent
         return split
     }
 
@@ -361,7 +364,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         detailButtons.add(openButton)
 
         val panel = JPanel(BorderLayout())
-        panel.add(JBScrollPane(issueDetail), BorderLayout.CENTER)
+        panel.add(thinScrollPane(issueDetail), BorderLayout.CENTER)
         panel.add(detailButtons, BorderLayout.SOUTH)
         panel.minimumSize = Dimension(0, JBUI.scale(120))
         return panel
@@ -392,9 +395,12 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
                 if (index >= 0) service.copySuggestion(index + 1)
             }
         }
-        val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JBScrollPane(suggestionList), JBScrollPane(suggestionDetail))
-        split.resizeWeight = 0.4
-        split.border = BorderFactory.createEmptyBorder()
+        val split = Splitter(true)
+        split.proportion = 0.4f
+        split.setShowDividerControls(false)
+        split.setShowDividerIcon(false)
+        split.firstComponent = thinScrollPane(suggestionList)
+        split.secondComponent = thinScrollPane(suggestionDetail)
         val panel = JPanel(BorderLayout())
         panel.add(split, BorderLayout.CENTER)
         panel.add(JPanel(FlowLayout(FlowLayout.LEFT)).apply { add(copySuggestion) }, BorderLayout.SOUTH)
@@ -420,7 +426,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
             }
         })
         val panel = JPanel(BorderLayout())
-        panel.add(JBScrollPane(ignoredTable), BorderLayout.CENTER)
+        panel.add(thinScrollPane(ignoredTable), BorderLayout.CENTER)
         val actions = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), JBUI.scale(4)))
         actions.add(restoreButton)
         panel.add(actions, BorderLayout.SOUTH)
@@ -435,7 +441,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
             font = JBUI.Fonts.label()
             border = JBUI.Borders.empty(8)
         }
-        return JBScrollPane(errorsArea)
+        return thinScrollPane(errorsArea)
     }
 
     private fun configureTable(table: JTable, model: IssueTableModel, persistWidths: Boolean = false) {

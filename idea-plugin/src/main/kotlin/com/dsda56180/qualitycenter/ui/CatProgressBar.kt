@@ -39,8 +39,8 @@ class CatProgressBar : JComponent() {
 
     init {
         isOpaque = false
-        preferredSize = Dimension(JBUI.scale(420), JBUI.scale(30))
-        minimumSize = Dimension(JBUI.scale(120), JBUI.scale(30))
+        preferredSize = Dimension(JBUI.scale(420), JBUI.scale(40))
+        minimumSize = Dimension(JBUI.scale(120), JBUI.scale(40))
     }
 
     fun start() {
@@ -116,8 +116,8 @@ class CatProgressBar : JComponent() {
         try {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
             val scale = JBUI.scale(1f)
-            // 细线进度条：4px 高，避免读成一整条粗白条
-            val trackHeight = 4f * scale
+            // 8px 高的主题色进度条：比细线更醒目，但不至于读成一条粗白条
+            val trackHeight = 8f * scale
             val trackY = height - trackHeight - 1f * scale
             val trackWidth = width.toFloat()
 
@@ -178,9 +178,9 @@ class CatProgressBar : JComponent() {
         val total = unitCount()
         val done = if (completed) total else doneCount()
         val remaining = (total - done).coerceAtLeast(0)
-        val size = JBUI.scale(18).toFloat()
-        val gap = JBUI.scale(5).toFloat()
-        val baseY = trackY - size - JBUI.scale(1).toFloat()
+        val size = JBUI.scale(22).toFloat()
+        val gap = JBUI.scale(6).toFloat()
+        val baseY = trackY - size - JBUI.scale(2).toFloat()
         val phase = System.currentTimeMillis() / 220.0
 
         for (index in 0 until total) {
