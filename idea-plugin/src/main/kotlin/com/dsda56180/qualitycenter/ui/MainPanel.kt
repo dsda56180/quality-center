@@ -13,7 +13,6 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.tabs.JBTabsFactory
 import com.intellij.ui.tabs.TabInfo
-import com.intellij.ui.tabs.TabsListener
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Color
@@ -22,9 +21,6 @@ import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
-import java.awt.Graphics
-import java.awt.Graphics2D
-import java.awt.RenderingHints
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -33,6 +29,7 @@ import java.awt.event.MouseMotionAdapter
 import java.text.SimpleDateFormat
 import java.util.Date
 import javax.swing.BorderFactory
+import java.awt.CardLayout
 import javax.swing.BoxLayout
 import javax.swing.DefaultListModel
 import javax.swing.JButton
@@ -44,8 +41,8 @@ import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JTable
 import javax.swing.JTextArea
-import javax.swing.JToggleButton
 import javax.swing.ListSelectionModel
+import javax.swing.SwingConstants
 import javax.swing.Timer
 import javax.swing.event.ChangeEvent
 import javax.swing.event.DocumentEvent
@@ -84,19 +81,23 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     private val buildHintLabel = JLabel()
     private val buildAndScanButton = JButton("构建并扫描")
 
-    private val severityButtons = LinkedHashMap<Severity, JToggleButton>()
+    private val enabledSeverities = Severity.entries.toMutableSet()
+    private val severityStrip = SeverityChipStrip { severity ->
+        if (!enabledSeverities.remove(severity)) enabledSeverities.add(severity)
+        refreshIssueTable()
+    }
     private val statusLabel = JLabel("尚未扫描")
     private val searchField = JBTextField()
-    // 官方 JBTabs 做来源切换：全部 / 代码质量 / 密钥泄露 / 静态缺陷 / 依赖漏洞
-    private val sourceTabs = JBTabsFactory.createTabs(service.project)
-    private val sourceTabInfos = LinkedHashMap<IssueSource?, TabInfo>()
+    // 自绘的来源标签条：全部 / 代码质量 / 密钥泄露 / 静态缺陷 / 依赖漏洞
+    private val sourceStrip = SourceTabStrip { source ->
+        selectedSource = source
+        refreshIssueTable()
+    }
     private val expandAllButton = JButton()
     private val collapseAllButton = JButton()
 
     /** 当前选中的来源筛选，null 表示全部 */
     private var selectedSource: IssueSource? = null
-    /** 切换来源 tab 时会触发选中事件，用该标记避免递归刷新 */
-    private var suppressSourceEvents = false
     /** 被折叠起来的来源分组，默认全部展开 */
     private val collapsedSources = HashSet<IssueSource>()
     /** 当前（等级 + 搜索）过滤后的问题，用于折叠展开时就地重建列表 */
@@ -104,6 +105,9 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
 
     private val issueModel = IssueTableModel(service)
     private val issueTable = JTable(issueModel)
+    // 空列表时显示提示语，避免选中「0 项」的来源后只剩一块空白
+    private val issueCards = JPanel(CardLayout())
+    private val issueEmptyLabel = JLabel("", SwingConstants.CENTER)
     private val ignoredModel = IssueTableModel(service)
     private val ignoredTable = JTable(ignoredModel)
 
@@ -234,23 +238,9 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         wrapper.layout = BoxLayout(wrapper, BoxLayout.Y_AXIS)
         wrapper.border = JBUI.Borders.empty(2, 8, 4, 8)
 
-        // 第一行：等级筛选按内容紧凑排列，统计信息弱化后放右侧
+        // 第一行：等级筛选用一条自绘紧凑胶囊，统计信息弱化后放右侧
         val chipRow = JPanel(BorderLayout(JBUI.scale(8), 0))
-        val chipGroup = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0))
-        Severity.entries.forEach { severity ->
-            val chip = ChipToggle("${severity.label} 0").apply {
-                isSelected = true
-                toolTipText = "点击切换是否显示「${severity.label}」问题"
-                addActionListener {
-                    refreshSeverityChipStyles()
-                    refreshIssueTable()
-                }
-            }
-            severityButtons[severity] = chip
-            chipGroup.add(chip)
-        }
-        refreshSeverityChipStyles()
-        chipRow.add(chipGroup, BorderLayout.CENTER)
+        chipRow.add(severityStrip, BorderLayout.CENTER)
         statusLabel.font = JBUI.Fonts.smallFont()
         statusLabel.foreground = MUTED_FOREGROUND
         chipRow.add(statusLabel, BorderLayout.EAST)
@@ -273,11 +263,10 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
     }
 
     private fun buildIssueTab(): Component {
-        // 顶部来源用官方 JBTabs 切换，右侧保留展开/折叠分组按钮
+        // 顶部来源用自绘标签条切换，右侧保留展开/折叠分组按钮
         val sourceRow = JPanel(BorderLayout(JBUI.scale(6), 0))
-        sourceRow.border = JBUI.Borders.empty(0, 2, 2, 2)
-        sourceTabs.component.isOpaque = false
-        sourceRow.add(sourceTabs.component, BorderLayout.CENTER)
+        sourceRow.border = JBUI.Borders.empty(0, 2, 0, 2)
+        sourceRow.add(sourceStrip, BorderLayout.CENTER)
         val sourceActions = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(2), 0))
         iconButton(expandAllButton, com.intellij.icons.AllIcons.Actions.Expandall, "展开全部来源分组")
         iconButton(collapseAllButton, com.intellij.icons.AllIcons.Actions.Collapseall, "折叠全部来源分组")
@@ -286,16 +275,6 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         sourceActions.add(expandAllButton)
         sourceActions.add(collapseAllButton)
         sourceRow.add(sourceActions, BorderLayout.EAST)
-        sourceTabs.addListener(object : TabsListener {
-            override fun selectionChanged(oldSelection: TabInfo?, newSelection: TabInfo?) {
-                if (suppressSourceEvents) return
-                val next = sourceTabInfos.entries.firstOrNull { it.value == newSelection }?.key
-                if (next != selectedSource) {
-                    selectedSource = next
-                    refreshIssueTable()
-                }
-            }
-        })
 
         configureTable(issueTable, issueModel, persistWidths = true)
         installColumnAutoFit(issueTable)
@@ -352,7 +331,13 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
 
         val container = JPanel(BorderLayout())
         container.add(sourceRow, BorderLayout.NORTH)
-        container.add(JBScrollPane(issueTable), BorderLayout.CENTER)
+        issueEmptyLabel.font = JBUI.Fonts.label()
+        issueEmptyLabel.foreground = MUTED_FOREGROUND
+        val tableCard = JBScrollPane(issueTable)
+        val emptyCard = JPanel(BorderLayout()).apply { add(issueEmptyLabel, BorderLayout.CENTER) }
+        issueCards.add(tableCard, CARD_ISSUE_TABLE)
+        issueCards.add(emptyCard, CARD_ISSUE_EMPTY)
+        container.add(issueCards, BorderLayout.CENTER)
 
         val detail = buildDetailPanel()
         val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, container, detail)
@@ -628,42 +613,9 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         issueModel.setRows(rows)
     }
 
-    /** 来源 tab 与分组标题同步显示各来源条数（受等级与搜索条件影响） */
+    /** 来源标签条与分组标题同步显示各来源条数（受等级与搜索条件影响） */
     private fun updateSourceFilter(counts: Map<IssueSource, Int>, total: Int) {
-        val labels = LinkedHashMap<IssueSource?, String>()
-        labels[null] = "全部 ($total)"
-        SOURCE_ORDER.forEach { source ->
-            labels[source] = "${source.label} (${counts[source] ?: 0})"
-        }
-        labels.forEach { (source, label) ->
-            val info = sourceTabInfos[source] ?: run {
-                // tab 只作为筛选器，内容区给一个 0 尺寸占位组件，避免占高度
-                val holder = JPanel().apply {
-                    preferredSize = Dimension(0, 0)
-                    minimumSize = Dimension(0, 0)
-                    maximumSize = Dimension(0, 0)
-                }
-                val created = TabInfo(holder).setText(label)
-                sourceTabInfos[source] = created
-                suppressSourceEvents = true
-                try {
-                    sourceTabs.addTab(created)
-                } finally {
-                    suppressSourceEvents = false
-                }
-                created
-            }
-            info.setText(label)
-        }
-        val target = sourceTabInfos[selectedSource] ?: sourceTabInfos[null]
-        if (target != null && sourceTabs.selectedInfo != target) {
-            suppressSourceEvents = true
-            try {
-                sourceTabs.select(target, false)
-            } finally {
-                suppressSourceEvents = false
-            }
-        }
+        sourceStrip.update(counts, total, selectedSource)
     }
 
     private fun updateSummaryTabs() {
@@ -671,16 +623,6 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         expandAllButton.isVisible = hasGroups
         collapseAllButton.isVisible = hasGroups
         expandAllButton.parent?.revalidate()
-    }
-
-    /** 等级标签选中时用等级色胶囊，取消筛选后变灰，避免所有标签看起来一样 */
-    private fun refreshSeverityChipStyles() {
-        severityButtons.forEach { (severity, chip) ->
-            val selected = chip.isSelected
-            chip.foreground = if (selected) severityForeground(severity) else MUTED_FOREGROUND
-            chip.background = if (selected) severityBackground(severity) else CHIP_OFF_BACKGROUND
-            chip.repaint()
-        }
     }
 
     private fun showIssueDetail(issue: Issue?) {
@@ -793,10 +735,6 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
 
     private fun updateSummary(result: ScanResult?) {
         val issues = result?.issues ?: emptyList()
-        Severity.entries.forEach { severity ->
-            val count = issues.count { it.severity == severity }
-            severityButtons[severity]?.text = "${severity.label} $count"
-        }
         statusLabel.text = if (result == null) {
             "尚未扫描"
         } else {
@@ -810,22 +748,33 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         if (result == null) {
             currentIssues = emptyList()
             issueModel.setRows(emptyList())
+            severityStrip.update(emptyMap(), enabledSeverities)
             updateSourceFilter(emptyMap(), 0)
+            showIssueTableCard()
             return
         }
         val query = searchField.text.trim().lowercase()
-        val enabledSeverities = severityButtons.filterValues { it.isSelected }.keys
         val base = result.issues.filter { issue ->
             issue.severity in enabledSeverities && matchesQuery(issue, query)
         }
         val counts = IssueSource.entries.associateWith { source -> base.count { it.source == source } }
-        // 选中的来源被筛没了就回退到「全部」，避免下拉框显示与列表不一致
-        if (selectedSource != null && (counts[selectedSource] ?: 0) == 0 && base.isNotEmpty()) {
-            selectedSource = null
-        }
+        severityStrip.update(Severity.entries.associateWith { severity -> result.issues.count { it.severity == severity } }, enabledSeverities)
         updateSourceFilter(counts, base.size)
+        // 选中的来源即使被筛成 0 项也保持选中，只显示空列表，不偷偷跳回「全部」
         currentIssues = selectedSource?.let { source -> base.filter { it.source == source } } ?: base
         rebuildIssueRows()
+        showIssueTableCard()
+    }
+
+    private fun showIssueTableCard() {
+        if (issueCards.componentCount == 0) return
+        val empty = currentIssues.isEmpty()
+        issueEmptyLabel.text = if (empty) {
+            selectedSource?.let { "「${it.label}」在当前筛选条件下没有问题" } ?: "没有匹配的问题"
+        } else {
+            ""
+        }
+        (issueCards.layout as CardLayout).show(issueCards, if (empty) CARD_ISSUE_EMPTY else CARD_ISSUE_TABLE)
     }
 
     private fun matchesQuery(issue: Issue, query: String): Boolean {
@@ -973,11 +922,13 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
 
 private const val COUNT_COLUMN = 2
 private const val LOCATION_COLUMN = 3
+private const val CARD_ISSUE_TABLE = "issueTable"
+private const val CARD_ISSUE_EMPTY = "issueEmpty"
 private const val COLUMN_WIDTHS_KEY = "quality.center.issue.columnWidths"
 private const val DETAIL_PLACEHOLDER = "选中一条问题查看完整说明。\n提示：单击任意一行可直接跳转到对应代码。"
 
 /** 与 VS Code 版一致的分组顺序 */
-private val SOURCE_ORDER = listOf(
+internal val SOURCE_ORDER = listOf(
     IssueSource.CHECKSTYLE,
     IssueSource.GITLEAKS,
     IssueSource.SPOTBUGS,
@@ -985,12 +936,12 @@ private val SOURCE_ORDER = listOf(
 )
 
 private val GROUP_BACKGROUND = JBColor(Color(0xE8EDF3), Color(0x34373C))
-private val MUTED_FOREGROUND = JBColor(Color(0x6B7280), Color(0x9AA1A9))
+internal val MUTED_FOREGROUND = JBColor(Color(0x6B7280), Color(0x9AA1A9))
 private val LINK_FOREGROUND = JBColor(Color(0x2C6BE0), Color(0x7FA8FF))
-private val CHIP_OFF_BACKGROUND = JBColor(Color(0xECEEF2), Color(0x3C3F44))
+internal val CHIP_OFF_BACKGROUND = JBColor(Color(0xECEEF2), Color(0x3C3F44))
 private val ROW_ALT_BACKGROUND = JBColor(Color(0xF7F9FC), Color(0x2B2D31))
 
-private fun severityForeground(severity: Severity): Color = when (severity) {
+internal fun severityForeground(severity: Severity): Color = when (severity) {
     Severity.CRITICAL -> JBColor(Color(224, 62, 62), Color(255, 122, 122))
     Severity.HIGH -> JBColor(Color(232, 100, 40), Color(255, 160, 96))
     Severity.MEDIUM -> JBColor(Color(196, 148, 20), Color(226, 190, 84))
@@ -999,39 +950,10 @@ private fun severityForeground(severity: Severity): Color = when (severity) {
 }
 
 /** 级别单元格的浅底色，让不同等级的行在缩窄的列里也能一眼区分 */
-private fun severityBackground(severity: Severity): Color = when (severity) {
+internal fun severityBackground(severity: Severity): Color = when (severity) {
     Severity.CRITICAL -> JBColor(Color(0xFBE7E7), Color(0x4A2727))
     Severity.HIGH -> JBColor(Color(0xFDEEE4), Color(0x4A3325))
     Severity.MEDIUM -> JBColor(Color(0xFBF4DB), Color(0x453A1F))
     Severity.LOW -> JBColor(Color(0xE8F1FB), Color(0x22384A))
     Severity.INFO -> JBColor(Color(0xEFF1F4), Color(0x2F3337))
-}
-
-/** 紧凑的等级筛选胶囊：自己画圆角底色与描边，避免 JToggleButton 默认内边距把按钮撑大 */
-private class ChipToggle(text: String) : javax.swing.JToggleButton(text) {
-    init {
-        isContentAreaFilled = false
-        isBorderPainted = false
-        isOpaque = false
-        isFocusPainted = false
-        isRolloverEnabled = true
-        font = JBUI.Fonts.smallFont()
-        border = JBUI.Borders.empty(JBUI.scale(1), JBUI.scale(7), JBUI.scale(1), JBUI.scale(7))
-        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-    }
-
-    override fun paintComponent(g: Graphics) {
-        val g2 = g.create() as Graphics2D
-        try {
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-            val arc = JBUI.scale(10)
-            g2.color = background
-            g2.fillRoundRect(0, 0, width - 1, height - 1, arc, arc)
-            g2.color = foreground
-            g2.drawRoundRect(0, 0, width - 1, height - 1, arc, arc)
-        } finally {
-            g2.dispose()
-        }
-        super.paintComponent(g)
-    }
 }
