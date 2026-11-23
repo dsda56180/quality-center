@@ -8,8 +8,10 @@ import java.awt.Color
 import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.Graphics2D
+import java.awt.LinearGradientPaint
 import java.awt.RenderingHints
 import java.awt.geom.Path2D
+import java.awt.geom.Point2D
 import java.awt.geom.RoundRectangle2D
 import javax.swing.JComponent
 import javax.swing.Timer
@@ -29,6 +31,10 @@ class CatProgressBar : JComponent() {
     private var completed = false
     private var travel = -60.0
     private var lastTick = 0L
+    /** 填充区上的高光扫过相位 */
+    private var shimmer = 0.0
+    /** 未知进度时来回扫动的色带相位 */
+    private var sweep = 0.0
 
     init {
         isOpaque = false
@@ -88,6 +94,13 @@ class CatProgressBar : JComponent() {
         if (lastTick == 0L) lastTick = now
         val delta = (now - lastTick).coerceAtMost(64L)
         lastTick = now
+        if (!paused && !completed) {
+            // 进度未知时（例如深度修复单阶段）也要有动效，否则只是一块灰条
+            shimmer += delta * 0.0016
+            if (shimmer > 1.0) shimmer -= 1.0
+            sweep += delta * 0.0008
+            if (sweep > 1.0) sweep -= 1.0
+        }
         if (!paused && unitCount() > 0 && !completed) {
             travel += delta * 0.09
             if (travel > width + JBUI.scale(40)) {
@@ -109,10 +122,18 @@ class CatProgressBar : JComponent() {
             g2.color = trackBackground()
             g2.fill(RoundRectangle2D.Float(0f, trackY, trackWidth, trackHeight, trackHeight, trackHeight))
 
-            val minWidth = if (ratio() > 0) (8f * scale).toDouble() else 0.0
-            val fillWidth = (trackWidth.toDouble() * ratio()).coerceAtLeast(minWidth).toFloat()
-            g2.color = fillColor()
-            g2.fill(RoundRectangle2D.Float(0f, trackY, fillWidth, trackHeight, trackHeight, trackHeight))
+            val accent = fillColor()
+            val r = ratio()
+            if (r > 0) {
+                // 已知进度：按比例填充，并叠一层流动高光
+                val fillWidth = (trackWidth * r.toFloat()).coerceAtLeast(8f * scale)
+                drawFill(g2, 0f, trackY, fillWidth, trackHeight, accent)
+            } else {
+                // 未知进度（如单阶段深度修复）：用一条来回扫动的彩色光带表示进行中
+                val bandWidth = (trackWidth * 0.34f).coerceAtLeast(60f * scale)
+                val bandX = (trackWidth + bandWidth) * sweep.toFloat() - bandWidth
+                drawFill(g2, bandX, trackY, bandWidth, trackHeight, accent)
+            }
 
             if (unitCount() > 0) {
                 drawCats(g2, trackY)
@@ -120,6 +141,35 @@ class CatProgressBar : JComponent() {
         } finally {
             g2.dispose()
         }
+    }
+
+    /** 彩色渐变填充 + 高光扫过，让进度条在深色主题下也有明显的动态感 */
+    private fun drawFill(g2: Graphics2D, x: Float, y: Float, w: Float, h: Float, color: Color) {
+        if (w <= 0f) return
+        val scale = JBUI.scale(1f)
+        val end = Color(
+            (color.red + (255 - color.red) / 3),
+            (color.green + (255 - color.green) / 4),
+            (color.blue + (255 - color.blue) / 6)
+        )
+        g2.paint = LinearGradientPaint(
+            Point2D.Float(x, y),
+            Point2D.Float((x + w).coerceAtLeast(x + 1f), y),
+            floatArrayOf(0f, 1f),
+            arrayOf(color, end)
+        )
+        val shape = RoundRectangle2D.Float(x, y, w, h, h, h)
+        g2.fill(shape)
+
+        val bandWidth = (w * 0.55f).coerceAtLeast(28f * scale)
+        val bandX = x - bandWidth + (w + bandWidth) * shimmer.toFloat()
+        g2.paint = LinearGradientPaint(
+            Point2D.Float(bandX, y),
+            Point2D.Float((bandX + bandWidth).coerceAtLeast(bandX + 1f), y),
+            floatArrayOf(0f, 0.5f, 1f),
+            arrayOf(Color(255, 255, 255, 0), Color(255, 255, 255, 120), Color(255, 255, 255, 0))
+        )
+        g2.fill(shape)
     }
 
     private fun drawCats(g2: Graphics2D, trackY: Float) {
