@@ -124,7 +124,7 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         toolbar.layout = FlowLayout(FlowLayout.LEFT, JBUI.scale(2), JBUI.scale(2))
         toolbar.border = JBUI.Borders.empty(4, 6, 2, 6)
         // 与 IDEA 原生工具栏一致：图标按钮 + 悬停提示
-        iconButton(scanButton, com.intellij.icons.AllIcons.Actions.Refresh, "重新扫描项目")
+        iconButton(scanButton, com.intellij.icons.AllIcons.Actions.Execute, "开始扫描")
         iconButton(deepFixButton, com.intellij.icons.AllIcons.Actions.Edit, "深度修复（OpenRewrite）")
         iconButton(upgradeButton, com.intellij.icons.AllIcons.Actions.Download, "按 CVE 升级依赖")
         iconButton(pauseButton, com.intellij.icons.AllIcons.Actions.Pause, "暂停扫描")
@@ -133,6 +133,10 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         iconButton(copyButton, com.intellij.icons.AllIcons.Actions.Copy, "复制 Markdown 报告")
         iconButton(exportButton, com.intellij.icons.AllIcons.ToolbarDecorator.Export, "导出报告文件")
         iconButton(settingsButton, com.intellij.icons.AllIcons.General.Settings, "质量中心设置")
+        // 暂停 / 继续 / 终止 只在扫描过程中出现
+        pauseButton.isVisible = false
+        resumeButton.isVisible = false
+        stopButton.isVisible = false
         listOf(
             scanButton, deepFixButton, upgradeButton,
             pauseButton, resumeButton, stopButton,
@@ -453,9 +457,15 @@ class MainPanel(private val service: QualityCenterService) : JPanel(BorderLayout
         val busy = state.scanning || state.stage != null
         val hasRoot = service.root != null
         scanButton.isEnabled = !busy && hasRoot
+        scanButton.toolTipText = if (state.result != null) "重新扫描项目" else "开始扫描"
+        pauseButton.isVisible = state.scanning && !state.paused
+        resumeButton.isVisible = state.scanning && state.paused
+        stopButton.isVisible = state.scanning
         pauseButton.isEnabled = state.scanning && !state.paused
         resumeButton.isEnabled = state.scanning && state.paused
         stopButton.isEnabled = state.scanning
+        toolbar.revalidate()
+        toolbar.repaint()
         deepFixButton.isEnabled = !busy && hasRoot
         upgradeButton.isEnabled = !busy && hasRoot
         copyButton.isEnabled = hasRoot
