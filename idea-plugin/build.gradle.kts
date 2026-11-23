@@ -8,7 +8,7 @@ plugins {
 
 group = "com.dsda56180"
 // 本地默认版本；CI 发布时通过 -PpluginVersion=<tag版本> 覆盖
-version = providers.gradleProperty("pluginVersion").getOrElse("0.1.5")
+version = providers.gradleProperty("pluginVersion").getOrElse("0.1.6")
 
 repositories {
     maven("https://maven.aliyun.com/repository/public")
@@ -57,8 +57,8 @@ intellijPlatform {
             url = "https://github.com/dsda56180/quality-center"
         }
         ideaVersion {
-            // 按最新版 IDEA（2026.3）设计，不再兼容旧版本
-            sinceBuild = "263"
+            // 架构所用 API（ProjectActivity / @Service / ActionUpdateThread / JBTabs）自 2023.3 起可用
+            sinceBuild = "233"
         }
     }
     publishing {

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+- 标签页改用官方 JBTabs，与 IDE 工具窗口外观一致
+- Action 补齐 `getActionUpdateThread`，服务统一用 `project.service<T>()` 获取
+- 最低支持版本按所用架构 API 调整为 2023.3（233），不再只支持最新版
+
 ## 0.1.5
 
 - 等级筛选标签改为按内容宽度紧凑排列，不再整行拉伸成超大按钮
