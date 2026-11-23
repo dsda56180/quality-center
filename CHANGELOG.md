@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.17.17
+
+- 安装与构建改为流式执行：不再等命令跑完才拿结果，边跑边读输出，通知栏与面板顶部实时显示当前阶段（下载 / 解压 / 校验、模块 / 阶段）和已用时间，下载时显示百分比
+- 安装与构建都可取消：点通知栏取消会结束整棵进程树，并提示「已取消（用时 N 秒）」，不再需要等超时
+- 结束反馈补齐：安装成功提示路径与用时，失败提示退出码、用时、末尾输出并提供「查看日志 / 安装文档」；构建成功报出 `target` 下生成的 jar 与耗时，失败给出末尾 6 行原因（含超时判断）
+- 修复便携安装在这台机器上「点下去没反应」：Maven 官方源实测只有 8 KB/s，脚本改为华为云镜像优先、Maven Central 与 Apache archive 兜底；下载改用系统自带 `curl.exe`（带重试、连接超时与单文件上限），慢源失败会立刻换下一个源并说明原因，不再挂满 10 分钟
+- 修复 PowerShell 安装脚本在中文环境下解析失败：`.ps1` 以 UTF-8 BOM 写入，并在脚本内设置 `[Console]::OutputEncoding`，中文进度标记不再乱码
+- 构建前先解析 `mvn`：找不到时直接提示「去安装 Maven / 安装文档」，而不是跑来一句构建失败
+- 错误详情进一步去噪：`curl` / `winget` 的进度条与纯百分比行不再占据「失败原因」的最后几行
+- GitHub Actions 升级到 Node 24 运行时：`checkout@v5`、`setup-node@v5`（Node 22）、`upload-artifact@v6`、`softprops/action-gh-release@v3`，消除 `Node.js 20 actions are deprecated` 警告
+
 ## 0.17.16
 
 - 新增 `scripts/release.mjs` 一键发版（`npm run release`）：校验工作区干净 / 分支为 main / tag 未占用 → bump `package.json` 与 lock → 补 `CHANGELOG.md` 段落（已有则复用，缺则用上个 tag 以来的提交生成）→ `tsc` 与 `vsce package` 双校验 → commit + tag `v<version>` + push → `gh release create` 触发 `publish.yml` → 轮询 Actions 结果并确认 Open VSX `latest` 已指向新版本

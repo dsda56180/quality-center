@@ -4,7 +4,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import * as vscode from 'vscode';
 import { exportForAgent, formatIssueForCopy } from '../agentExport';
-import { resolveBinary, run, tailMessage } from '../exec';
+import { resolveBinary, run, runStreaming, StreamHandle, tailMessage } from '../exec';
 import { applyAutoFixes, isFixable } from '../fixer';
 import { Issue, ScanResult, SOURCE_LABEL } from '../model';
 import { EXTERNAL_TOOLS, ExternalTool, installLocation, installPlan, InstallPlan, ToolId } from '../tools';
@@ -67,6 +67,84 @@ interface ScanSettingsInput {
   recipes?: string[];
   autoRecipes?: boolean;
   showAllRecipes?: boolean;
+}
+
+/** 把一行输出压到指定长度，避免进度条文字撑满通知 */
+function clamp(value: string, limit = 64): string {
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+/** 安装脚本里的进度标识：优先用脚本自己打的 [qc] 标记，其次按关键字识别 */
+function installStage(line: string): string | undefined {
+  // 编码不匹配的输出（乱码）不当作进度展示
+  if (line.includes('\uFFFD')) {
+    return undefined;
+  }
+  const marker = /^\[qc\]\s*(.+)$/.exec(line);
+  if (marker) {
+    return clamp(marker[1], 64);
+  }
+  // curl / winget 的进度条会输出百分比，直接当进度用
+  const percent = /(\d{1,3}(?:[.,]\d)?)\s*%/.exec(line);
+  if (percent) {
+    return `${/Install|安装/.test(line) ? '安装中' : '下载中'} ${percent[1]}%`;
+  }
+  if (/Downloading|正在下载|下载中|下载 /.test(line)) {
+    return `下载中：${clamp(line, 48)}`;
+  }
+  if (/Installing|正在安装|安装中/.test(line)) {
+    return `安装中：${clamp(line, 48)}`;
+  }
+  if (/Successfully installed|已成功安装|成功安装了/.test(line)) {
+    return '安装完成，正在校验';
+  }
+  if (/Verifying|校验|sha256/i.test(line)) {
+    return `校验：${clamp(line, 48)}`;
+  }
+  // 进度条、百分比、纯符号行没有意义，丢掉
+  if (/[█▓▒░]/.test(line) || /^\s*\d+ ?%/.test(line) || /^[-\\|/]+\s*$/.test(line)) {
+    return undefined;
+  }
+  return undefined;
+}
+
+/** mvn 输出里的进度：模块、阶段、下载、构建结果 */
+function buildStage(line: string): string | undefined {
+  const plain = line.replace(/^\[[A-Z]+\]\s*/, '');
+  if (/^\[ERROR\]/.test(line)) {
+    return `报错：${clamp(plain, 56)}`;
+  }
+  if (/^Downloading/i.test(line) || /^Downloaded/i.test(line)) {
+    return clamp(plain, 56);
+  }
+  if (/^\[WARNING\]/.test(line)) {
+    return undefined;
+  }
+  const info = /^\[INFO\]\s+(.+)$/.exec(line);
+  if (!info) {
+    return undefined;
+  }
+  const body = info[1].trim();
+  const building = /^Building (.+)$/.exec(body);
+  if (building) {
+    return `构建模块 ${clamp(building[1], 48)}`;
+  }
+  const result = /^BUILD (SUCCESS|FAILURE)/.exec(body);
+  if (result) {
+    return result[1] === 'SUCCESS' ? '构建成功，整理产物' : '构建失败';
+  }
+  const phase = /^--- (\S+?)(?::| )/.exec(body);
+  if (phase) {
+    return `执行 ${clamp(phase[1], 40)}`;
+  }
+  if (/^Nothing to compile|Nothing to compile/i.test(body)) {
+    return '无需编译，直接打包';
+  }
+  if (/^Total time|^Finished at/i.test(body)) {
+    return undefined;
+  }
+  return clamp(body, 56);
 }
 
 /** 同一 GA 只保留一个坐标，避免内置配方包与用户配置重复加载 */
@@ -365,15 +443,20 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
-  /** 把多行脚本落到临时文件，交给系统自带 shell 执行，避免逐层转义 */
-  private runInstallPlan(plan: InstallPlan, root: string): Promise<{ code: number; stdout: string; stderr: string }> {
-    const timeout = 10 * 60_000;
+  /**
+   * 把多行脚本落到临时文件，交给系统自带 shell 执行，避免逐层转义。
+   * 返回可实时读取输出的句柄，调用方负责轮询/取消。
+   */
+  private startInstallPlan(plan: InstallPlan, root: string, onLine: (line: string) => void): StreamHandle {
+    const timeout = 15 * 60_000;
     if (!plan.script) {
-      return run(plan.command ?? '', [], root, timeout);
+      return runStreaming(plan.command ?? '', [], root, timeout, { onLine });
     }
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-center-install-'));
     const file = path.join(dir, plan.scriptShell === 'powershell' ? 'install.ps1' : 'install.sh');
-    fs.writeFileSync(file, plan.script, 'utf8');
+    // Windows PowerShell 5.1 默认按 ANSI 读取 .ps1，带 BOM 才会按 UTF-8 解析，否则中文进度标记会变成乱码
+    const body = plan.scriptShell === 'powershell' ? `\uFEFF${plan.script}` : plan.script;
+    fs.writeFileSync(file, body, 'utf8');
     const shell =
       plan.scriptShell === 'powershell'
         ? `"${path.join(
@@ -384,13 +467,45 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
             'powershell.exe'
           )}" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${file}"`
         : `bash "${file}"`;
-    return run(shell, [], root, timeout).finally(() => {
+    const handle = runStreaming(shell, [], root, timeout, { onLine });
+    void handle.result.finally(() => {
       try {
         fs.rmSync(dir, { recursive: true, force: true });
       } catch {
         // 临时目录清理失败不影响结果
       }
     });
+    return handle;
+  }
+
+  /** 包装一个长任务的进度状态：同步到通知栏与面板提示行 */
+  private taskState: { label: string; stage: string; startedAt: number } | null = null;
+
+  private taskReporter(label: string, startedAt: number, initialStage: string) {
+    let stage = initialStage;
+    let lastPush = 0;
+    const touch = (): void => {
+      this.taskState = { label, stage, startedAt };
+      const now = Date.now();
+      if (now - lastPush >= 400) {
+        lastPush = now;
+        this.push();
+      }
+    };
+    touch();
+    return {
+      setStage: (next: string | undefined): void => {
+        if (next) {
+          stage = next;
+        }
+        touch();
+      },
+      stage: (): string => stage,
+      finish: (): void => {
+        this.taskState = null;
+        this.push();
+      }
+    };
   }
 
   /**
@@ -462,15 +577,51 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     const root = this.runner.root() ?? process.cwd();
     this.log(`安装 ${tool.label}（${plan.kind}）：${plan.command ?? plan.describe}`);
-    const outcome = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `质量中心：正在安装 ${tool.label}…`,
-        cancellable: false
-      },
-      () => this.runInstallPlan(plan, root)
-    );
+    const startedAt = Date.now();
+    const reporter = this.taskReporter(`安装 ${tool.label}`, startedAt, plan.describe);
+    let cancelled = false;
+    let outcome = { code: 1, stdout: '', stderr: '' };
+    try {
+      outcome = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `质量中心：安装 ${tool.label}`,
+          cancellable: true
+        },
+        async (progress, token) => {
+          const elapsed = (): string => `${Math.round((Date.now() - startedAt) / 1000)} 秒`;
+          const report = (): void => progress.report({ message: `${reporter.stage()}（${elapsed()}）` });
+          report();
+          this.log(`  ${plan.describe}`);
+          const handle = this.startInstallPlan(plan, root, (line) => {
+            this.log(`  ${line}`);
+            reporter.setStage(installStage(line));
+            report();
+          });
+          const ticker = setInterval(report, 2000);
+          const subscription = token.onCancellationRequested(() => {
+            cancelled = true;
+            this.log(`安装 ${tool.label} 已取消`);
+            handle.kill(`取消安装 ${tool.label}`);
+          });
+          try {
+            return await handle.result;
+          } finally {
+            clearInterval(ticker);
+            subscription.dispose();
+          }
+        }
+      );
+    } finally {
+      reporter.finish();
+    }
+
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
     const output = tailMessage(`${outcome.stdout}\n${outcome.stderr}`, 10);
+    if (cancelled || outcome.code === 130) {
+      void vscode.window.showInformationMessage(`已取消安装 ${tool.label}（用时 ${seconds} 秒）。`);
+      return;
+    }
     // winget 对「已是最新 / 已安装」会返回非零码，输出里写得很清楚
     const already = /already installed|已安装|No applicable installer|No newer package/i.test(output);
     const configured =
@@ -480,9 +631,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const resolved = resolveBinary(tool.bin, configured);
     const installed = resolved !== undefined || outcome.code === 0 || already;
     if (!installed) {
-      this.log(`安装 ${tool.label} 失败：\n${output}`);
+      this.log(`安装 ${tool.label} 失败（${seconds} 秒）：\n${output}`);
       const pick = await vscode.window.showErrorMessage(
-        `安装 ${tool.label} 失败（退出码 ${outcome.code}）：\n${output || plan.describe}`,
+        `安装 ${tool.label} 失败（退出码 ${outcome.code}，用时 ${seconds} 秒）：\n${output || plan.describe}`,
         '查看日志',
         '安装文档'
       );
@@ -496,9 +647,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     this.missingToolPrompts.delete(id);
     this.runner.resetCache();
-    this.log(`安装 ${tool.label} 完成：${resolved ?? target ?? ''}\n${output}`);
+    this.log(`安装 ${tool.label} 完成（${seconds} 秒）：${resolved ?? target ?? ''}\n${output}`);
     void vscode.window.showInformationMessage(
-      `已安装 ${tool.label}${resolved ? `（${resolved}）` : ''}，正在重新扫描…`
+      `已安装 ${tool.label}${resolved ? `（${resolved}）` : ''}，用时 ${seconds} 秒，正在重新扫描…`
     );
     await this.scanAndPush(true);
   }
@@ -532,38 +683,131 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     void vscode.window.showInformationMessage(`已复制第 ${id} 条问题，可直接粘贴给 AI。`);
   }
 
-  /** 构建项目后再扫描，用于补齐依赖漏洞所需的构建产物 */
+  /** 构建项目后再扫描，用于补齐依赖漏洞与静态缺陷所需的构建产物 */
   async buildAndScan(): Promise<void> {
     const root = this.runner.root();
     if (!root) {
       return;
     }
     const answer = await vscode.window.showWarningMessage(
-      '将执行 mvn -DskipTests package 构建项目（可能需要几分钟），完成后自动重新扫描。是否继续？',
+      '将执行 mvn -B -DskipTests package 构建项目（可能需要几分钟），完成后自动重新扫描。是否继续？',
       { modal: true },
       '构建并扫描'
     );
     if (answer !== '构建并扫描') {
       return;
     }
-    const outcome = await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: '质量中心：正在构建项目…',
-        cancellable: false
-      },
-      () => run('mvn', ['-B', '-q', ...mavenMirrorArgs(), '-DskipTests', 'package'], root, 20 * 60_000)
-    );
-    if (outcome.code !== 0) {
-      const tail = (outcome.stderr || outcome.stdout)
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .slice(-6)
-        .join('\n');
-      void vscode.window.showErrorMessage(`构建失败，未执行扫描：\n${tail}`);
+
+    // mvn 不在 PATH 时直接给安装入口，而不是让用户看到一句「构建失败」
+    const mvn = resolveBinary('mvn');
+    if (!mvn) {
+      const pick = await vscode.window.showErrorMessage(
+        '没有找到 mvn，无法构建项目。请先安装 Maven（需要 JDK 8+），或用「构建并扫描」下方的一键安装。',
+        '去安装 Maven',
+        '安装文档'
+      );
+      if (pick === '去安装 Maven') {
+        await this.installTool('mvn');
+      } else if (pick === '安装文档') {
+        await vscode.env.openExternal(vscode.Uri.parse(EXTERNAL_TOOLS.mvn.docs));
+      }
       return;
     }
+
+    const startedAt = Date.now();
+    const reporter = this.taskReporter('构建 jar 包', startedAt, '准备构建');
+    let cancelled = false;
+    let outcome = { code: 1, stdout: '', stderr: '' };
+    try {
+      outcome = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: '质量中心：构建 jar 包',
+          cancellable: true
+        },
+        async (progress, token) => {
+          const elapsed = (): string => `${Math.round((Date.now() - startedAt) / 1000)} 秒`;
+          const report = (): void => progress.report({ message: `${reporter.stage()}（${elapsed()}）` });
+          report();
+          this.log(`构建：${mvn} -B ${mavenMirrorArgs().join(' ')} -DskipTests package`);
+          const handle = runStreaming(
+            mvn,
+            ['-B', ...mavenMirrorArgs(), '-DskipTests', 'package'],
+            root,
+            30 * 60_000,
+            {
+              onLine: (line) => {
+                this.log(`  ${line}`);
+                reporter.setStage(buildStage(line));
+                report();
+              }
+            }
+          );
+          const ticker = setInterval(report, 2000);
+          const subscription = token.onCancellationRequested(() => {
+            cancelled = true;
+            this.log('构建已取消');
+            handle.kill('取消构建');
+          });
+          try {
+            return await handle.result;
+          } finally {
+            clearInterval(ticker);
+            subscription.dispose();
+          }
+        }
+      );
+    } finally {
+      reporter.finish();
+    }
+
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    if (cancelled || outcome.code === 130) {
+      void vscode.window.showInformationMessage(`已取消构建（用时 ${seconds} 秒），未执行扫描。`);
+      return;
+    }
+    if (outcome.code !== 0) {
+      const tail =
+        tailMessage(`${outcome.stdout}\n${outcome.stderr}`, 6) ||
+        (outcome.code === 124 ? '构建超过 30 分钟，已终止' : '构建未输出可用错误信息');
+      this.log(`构建失败（${seconds} 秒）：\n${tail}`);
+      const pick = await vscode.window.showErrorMessage(
+        `构建失败（退出码 ${outcome.code}，用时 ${seconds} 秒）：\n${tail}`,
+        '查看日志'
+      );
+      if (pick === '查看日志') {
+        this.output?.show(true);
+      }
+      return;
+    }
+
+    const jars = this.buildArtifacts(root);
+    this.log(`构建完成（${seconds} 秒）：${jars.join(', ') || 'target 下未找到 jar'}`);
+    void vscode.window.showInformationMessage(
+      jars.length > 0
+        ? `构建完成（用时 ${seconds} 秒）：${jars.join('、')}，正在重新扫描…`
+        : `构建完成（用时 ${seconds} 秒），target 下未找到 jar，仍将重新扫描…`
+    );
     await this.scanAndPush();
+  }
+
+  /** 列出 target 下可用的产物 jar（排除 sources / javadoc / original- 备份） */
+  private buildArtifacts(root: string): string[] {
+    const target = path.join(root, 'target');
+    try {
+      return fs
+        .readdirSync(target)
+        .filter(
+          (name) =>
+            name.endsWith('.jar') &&
+            !/-sources\.jar$/.test(name) &&
+            !/-javadoc\.jar$/.test(name) &&
+            !name.startsWith('original-')
+        )
+        .slice(0, 3);
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -1765,6 +2009,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       scanning: override ? override.scanning : this.runner.isRunning,
       paused: this.runner.isPaused,
       deepFix: this.deepFixState,
+      task: this.taskState,
       scanStartedAt: this.scanStartedAt,
       scanProgress: this.scanProgress,
       finishedAt: result?.finishedAt ?? null,

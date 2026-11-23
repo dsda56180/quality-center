@@ -60,7 +60,7 @@ export function stripJvmNoise(text: string): string {
 
 /**
  * 取输出末尾若干行作为错误详情：先去噪、去空行、去重复，
- * 避免只剩下 `Picked up JAVA_TOOL_OPTIONS` 这种无用信息。
+ * 避免只剩下 `Picked up JAVA_TOOL_OPTIONS` 或一串下载进度条这种无用信息。
  */
 export function tailMessage(text: string, limit = 5): string {
   const seen = new Set<string>();
@@ -68,6 +68,10 @@ export function tailMessage(text: string, limit = 5): string {
   for (const raw of stripJvmNoise(text).split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || seen.has(line)) {
+      continue;
+    }
+    // curl / winget 的进度条与纯百分比行没有诊断价值
+    if (/^[#.=\s|-]+$/.test(line) || /^[^0-9]*\d{1,3}(?:[.,]\d)?%\s*$/.test(line)) {
       continue;
     }
     seen.add(line);
@@ -224,6 +228,133 @@ function quote(arg: string): string {
   return `"${arg.replace(/"/g, '""')}"`;
 }
 
+/** 去掉终端控制序列（winget / trivy 会输出彩色与光标控制） */
+export function stripAnsi(text: string): string {
+  return text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').replace(/\u001b\][^\u0007]*\u0007/g, '');
+}
+
+export interface StreamHooks {
+  env?: NodeJS.ProcessEnv;
+  /** 每输出一行回调一次（已去 ANSI、按 \r 或 \n 切分，空行不回调） */
+  onLine?: (line: string) => void;
+}
+
+export interface StreamHandle {
+  /** 命令结束时兑现 */
+  result: Promise<RunResult>;
+  /** 主动终止整棵进程树，result 会以退出码 130 兑现 */
+  kill: (reason?: string) => void;
+}
+
+/**
+ * 以 shell 方式执行命令并逐行回调输出。
+ * 安装与构建这类长任务需要实时进度，不能等命令结束才拿到结果。
+ */
+export function runStreaming(
+  command: string,
+  args: string[],
+  cwd: string,
+  timeout = 180_000,
+  hooks: StreamHooks = {}
+): StreamHandle {
+  const line = [command, ...args.map(quote)].join(' ');
+  let child: ChildProcess | undefined;
+  let settled = false;
+  let timer: NodeJS.Timeout | undefined;
+  let stdout = '';
+  let stderr = '';
+  let resolveResult: (value: RunResult) => void = () => undefined;
+
+  const result = new Promise<RunResult>((resolve) => {
+    resolveResult = resolve;
+  });
+
+  const finish = (code: number, extra?: string): void => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    if (timer) {
+      clearTimeout(timer);
+    }
+    if (child) {
+      running.delete(child);
+    }
+    resolveResult({
+      code,
+      stdout,
+      stderr: extra ? `${stderr}${stderr ? '\n' : ''}${extra}` : stderr
+    });
+  };
+
+  const emit = (raw: string): void => {
+    const text = stripAnsi(raw).trim();
+    if (!text) {
+      return;
+    }
+    try {
+      hooks.onLine?.(text);
+    } catch {
+      // 回调异常不影响命令执行
+    }
+  };
+
+  try {
+    child = spawn(line, {
+      cwd,
+      shell: true,
+      windowsHide: true,
+      env: { ...process.env, ...hooks.env }
+    });
+  } catch (error) {
+    finish(1, error instanceof Error ? error.message : String(error));
+    return { result, kill: () => undefined };
+  }
+  running.add(child);
+
+  // 到点直接结束整棵进程树并立即返回，避免 mvn / winget 子进程占住输出流
+  timer = setTimeout(() => {
+    killTree(child!);
+    finish(124, `命令执行超过 ${Math.round(timeout / 1000)} 秒，已终止`);
+  }, timeout);
+
+  // 进度条用 \r 覆盖同一行，需要同时按 \r 和 \n 切分，未结束的半行留到下一次
+  const buffers = { stdout: '', stderr: '' };
+  const consume = (chunk: string, stream: 'stdout' | 'stderr'): void => {
+    if (stream === 'stdout') {
+      stdout += chunk;
+    } else {
+      stderr += chunk;
+    }
+    const parts = (buffers[stream] + chunk).split(/\r\n|\n|\r/);
+    buffers[stream] = parts.pop() ?? '';
+    parts.forEach(emit);
+  };
+
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', (chunk: string) => consume(chunk, 'stdout'));
+  child.stderr?.on('data', (chunk: string) => consume(chunk, 'stderr'));
+  child.on('error', (error) => finish(1, error.message));
+  child.on('close', (code) => {
+    emit(buffers.stdout);
+    emit(buffers.stderr);
+    finish(code ?? 1);
+  });
+
+  const kill = (reason = '任务已取消'): void => {
+    if (settled) {
+      return;
+    }
+    if (child) {
+      killTree(child);
+    }
+    finish(130, reason);
+  };
+
+  return { result, kill };
+}
+
 /**
  * 以 shell 方式执行命令。
  * Windows 上 mvn / gitleaks / trivy 多为 .cmd 或需要 PATHEXT 解析，
@@ -236,52 +367,5 @@ export function run(
   timeout = 180_000,
   env?: NodeJS.ProcessEnv
 ): Promise<RunResult> {
-  const line = [command, ...args.map(quote)].join(' ');
-  return new Promise((resolve) => {
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-    let stdout = '';
-    let stderr = '';
-    const child = spawn(line, {
-      cwd,
-      shell: true,
-      windowsHide: true,
-      env: { ...process.env, ...env }
-    });
-    running.add(child);
-
-    const finish = (code: number, extra?: string): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      running.delete(child);
-      resolve({
-        code,
-        stdout,
-        stderr: extra ? `${stderr}${stderr ? '\n' : ''}${extra}` : stderr
-      });
-    };
-
-    // exec 的 timeout 只结束外层 shell，mvn / trivy 等子进程仍会存活并占住输出流，
-    // 导致调用方永远等不到结果。这里到点直接结束整棵进程树并立即返回。
-    timer = setTimeout(() => {
-      killTree(child);
-      finish(124, `命令执行超过 ${Math.round(timeout / 1000)} 秒，已终止`);
-    }, timeout);
-
-    child.stdout?.setEncoding('utf8');
-    child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr?.on('data', (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on('error', (error) => finish(1, error.message));
-    child.on('close', (code) => finish(code ?? 1));
-  });
+  return runStreaming(command, args, cwd, timeout, { env }).result;
 }

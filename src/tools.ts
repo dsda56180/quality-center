@@ -141,6 +141,43 @@ function psQuote(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+/**
+ * PowerShell 公共头：
+ * - 统一 UTF-8 输出，否则中文进度标记在调用方会被解成乱码；
+ * - 优先用系统自带 curl.exe 下载：带进度条、带重试、单文件有上限，不会像
+ *   Invoke-WebRequest 那样在慢速/不通的源上无限期挂住。
+ */
+const PS_HEADER = `$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$curl = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+function Save-File($url, $out) {
+  if ($curl) {
+    & $curl.Source -fL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 900 --progress-bar -o $out $url
+    if ($LASTEXITCODE -ne 0) { throw "curl 退出码 $LASTEXITCODE" }
+    return
+  }
+  Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
+}
+function Save-FromMirrors($urls, $out) {
+  $lastError = ''
+  foreach ($u in $urls) {
+    Write-Output "[qc] 下载 $u"
+    try {
+      if (Test-Path $out) { Remove-Item $out -Force }
+      Save-File $u $out
+      if ((Test-Path $out) -and ((Get-Item $out).Length -gt 1024)) { return }
+      $lastError = '下载结果为空'
+    } catch {
+      $lastError = $_.Exception.Message
+      Write-Output "[qc] 该源不可用：$lastError"
+    }
+  }
+  throw "所有下载源都失败：$lastError"
+}
+`;
+
 /** Windows 无 winget/choco/scoop 时，直接下官方产物到便携目录（不改 PATH） */
 function windowsPortable(tool: ExternalTool): { script: string; describe: string } | undefined {
   const target = psQuote(portableTarget(tool));
@@ -148,14 +185,17 @@ function windowsPortable(tool: ExternalTool): { script: string; describe: string
     const ver = '3.9.9';
     return {
       describe: `下载 apache-maven-${ver} 便携版到 ${portableTarget(tool)}（不修改 PATH）`,
-      script: `$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
-$ver = '${ver}'
+      script: `${PS_HEADER}$ver = '${ver}'
 $dir = '${target}'
-$zip = Join-Path $env:TEMP 'apache-maven.zip'
-$url = "https://archive.apache.org/dist/maven/maven-3/$ver/binaries/apache-maven-$ver-bin.zip"
-Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+$zip = Join-Path $env:TEMP "apache-maven-$ver.zip"
+Write-Output "[qc] 获取 apache-maven-$ver（约 9 MB）"
+Save-FromMirrors @(
+  "https://mirrors.huaweicloud.com/apache/maven/maven-3/$ver/binaries/apache-maven-$ver-bin.zip",
+  "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/$ver/apache-maven-$ver-bin.zip",
+  "https://archive.apache.org/dist/maven/maven-3/$ver/binaries/apache-maven-$ver-bin.zip"
+) $zip
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
+Write-Output "[qc] 解压到 $dir"
 Expand-Archive -Force -Path $zip -DestinationPath $dir
 Remove-Item $zip -Force
 $inner = Join-Path $dir "apache-maven-$ver"
@@ -163,41 +203,42 @@ if (Test-Path $inner) {
   Get-ChildItem $inner | Move-Item -Destination $dir -Force
   Remove-Item $inner -Recurse -Force
 }
-& (Join-Path $dir 'bin\\mvn.cmd') -v
+Write-Output "[qc] 校验 mvn 可执行"
+& (Join-Path (Join-Path $dir 'bin') 'mvn.cmd') -v
 `
     };
   }
   if (tool.bin === 'gitleaks') {
     return {
       describe: `下载 gitleaks 最新版到 ${portableTarget(tool)}（不修改 PATH）`,
-      script: `$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
-$tag = (Invoke-RestMethod 'https://api.github.com/repos/gitleaks/gitleaks/releases/latest' -Headers @{ 'User-Agent' = 'quality-center' }).tag_name
+      script: `${PS_HEADER}$tag = (Invoke-RestMethod 'https://api.github.com/repos/gitleaks/gitleaks/releases/latest' -Headers @{ 'User-Agent' = 'quality-center' }).tag_name
 $ver = $tag.TrimStart('v')
 $dir = '${target}'
 $zip = Join-Path $env:TEMP 'gitleaks.zip'
-$url = "https://github.com/gitleaks/gitleaks/releases/download/$tag/gitleaks_" + $ver + "_windows_x64.zip"
-Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+Write-Output "[qc] gitleaks 最新版本：$tag"
+Save-FromMirrors @("https://github.com/gitleaks/gitleaks/releases/download/$tag/gitleaks_" + $ver + "_windows_x64.zip") $zip
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
+Write-Output "[qc] 解压到 $dir"
 Expand-Archive -Force -Path $zip -DestinationPath $dir
 Remove-Item $zip -Force
+Write-Output "[qc] 校验 gitleaks --version"
 & (Join-Path $dir 'gitleaks.exe') --version
 `
     };
   }
   return {
     describe: `下载 trivy 最新版到 ${portableTarget(tool)}（不修改 PATH）`,
-    script: `$ErrorActionPreference = 'Stop'
-$ProgressPreference = 'SilentlyContinue'
-$tag = (Invoke-RestMethod 'https://api.github.com/repos/aquasecurity/trivy/releases/latest' -Headers @{ 'User-Agent' = 'quality-center' }).tag_name
+    script: `${PS_HEADER}$tag = (Invoke-RestMethod 'https://api.github.com/repos/aquasecurity/trivy/releases/latest' -Headers @{ 'User-Agent' = 'quality-center' }).tag_name
 $ver = $tag.TrimStart('v')
 $dir = '${target}'
 $zip = Join-Path $env:TEMP 'trivy.zip'
-$url = "https://github.com/aquasecurity/trivy/releases/download/$tag/trivy_" + $ver + "_windows-64bit.zip"
-Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+Write-Output "[qc] trivy 最新版本：$tag（约 60 MB，请耐心等待）"
+Save-FromMirrors @("https://github.com/aquasecurity/trivy/releases/download/$tag/trivy_" + $ver + "_windows-64bit.zip") $zip
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
+Write-Output "[qc] 解压到 $dir"
 Expand-Archive -Force -Path $zip -DestinationPath $dir
 Remove-Item $zip -Force
+Write-Output "[qc] 校验 trivy --version"
 & (Join-Path $dir 'trivy.exe') --version
 `
   };
@@ -216,9 +257,12 @@ command -v curl > /dev/null 2>&1 || { echo "需要 curl 才能自动安装" >&2;
 dir="$HOME/.quality-center/tools/maven"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+echo "[qc] 下载 apache-maven-$ver（约 9 MB）"
 curl -fsSL -o "$tmp/maven.tgz" "https://archive.apache.org/dist/maven/maven-3/$ver/binaries/apache-maven-$ver-bin.tar.gz"
 mkdir -p "$dir"
+echo "[qc] 解压到 $dir"
 tar -xzf "$tmp/maven.tgz" -C "$dir" --strip-components=1
+echo "[qc] 校验 mvn 可执行"
 "$dir/bin/mvn" -v
 `
     };
@@ -243,18 +287,23 @@ tag=$(curl -fsSL "https://api.github.com/repos/gitleaks/gitleaks/releases/latest
 ver=\${tag#v}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+echo "[qc] 下载 gitleaks $tag（$os/$arch）"
 curl -fsSL -o "$tmp/gitleaks.tgz" "https://github.com/gitleaks/gitleaks/releases/download/$tag/gitleaks_\${ver}_\${os}_\${arch}.tar.gz"
 tar -xzf "$tmp/gitleaks.tgz" -C "$tmp" gitleaks 2>/dev/null || tar -xzf "$tmp/gitleaks.tgz" -C "$tmp"
 mkdir -p "$HOME/.quality-center/tools/gitleaks"
+echo "[qc] 安装到 $HOME/.quality-center/tools/gitleaks"
 cp "$tmp/gitleaks" "$HOME/.quality-center/tools/gitleaks/gitleaks"
 chmod 755 "$HOME/.quality-center/tools/gitleaks/gitleaks"
+echo "[qc] 校验 gitleaks --version"
 "$HOME/.quality-center/tools/gitleaks/gitleaks" --version
 `
     };
   }
   return {
     describe: `用 trivy 官方脚本安装到 ${target}（不修改 PATH）`,
-    script: `${header}curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b "$HOME/.quality-center/tools/trivy"
+    script: `${header}echo "[qc] 下载 trivy 官方安装脚本"
+curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b "$HOME/.quality-center/tools/trivy"
+echo "[qc] 校验 trivy --version"
 "$HOME/.quality-center/tools/trivy/trivy" --version
 `
   };

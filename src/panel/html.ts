@@ -37,6 +37,8 @@ export interface Snapshot {
   type: 'state';
   scanning: boolean;
   deepFix?: { stage: string; startedAt: number; total?: number; done?: number } | null;
+  /** 安装外部工具 / 构建 jar 等长任务的实时进度 */
+  task?: { label: string; stage: string; startedAt: number } | null;
   scanStartedAt?: number | null;
   scanProgress?: { done: number; total: number; active: string[] };
   paused?: boolean;
@@ -460,7 +462,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, paused: false, deepFix: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
+  let state = { scanning: false, paused: false, deepFix: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, scanOnSave: true, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
   let activeTab = 'all';
   /** 各来源分组的折叠状态，跨渲染保留 */
   let collapsed = {};
@@ -744,6 +746,23 @@ export function getHtml(nonce: string): string {
     });
   }
 
+  /** 面板顶部的提示行：进行中的长任务 + 扫描异常 + 已跳过的扫描器 */
+  function renderNotice() {
+    const notes = [];
+    if (state.task) {
+      var sec = Math.max(0, Math.floor((Date.now() - state.task.startedAt) / 1000));
+      notes.push('⏳ ' + esc(state.task.label) + '：' + esc(state.task.stage) + ' · 已用 ' + sec + ' 秒');
+    }
+    (state.errors || []).forEach(function (e) { notes.push('⚠ ' + (SRC_LABEL[e.source] || e.source) + ' 扫描异常：' + esc(e.message)); });
+    (state.skipped || []).forEach(function (s) {
+      var install = s.tool
+        ? ' <a class="tool-link" data-install="' + esc(s.tool) + '">安装</a>'
+        : '';
+      notes.push('· 已跳过 ' + (SRC_LABEL[s.source] || s.source) + '：' + esc(s.reason) + install);
+    });
+    document.getElementById('notice').innerHTML = notes.join('<br>');
+  }
+
   function render() {
     updateTabs();
     var upgradeBtn = document.getElementById('upgrade');
@@ -930,15 +949,7 @@ export function getHtml(nonce: string): string {
       }
     }
 
-    const notes = [];
-    (state.errors || []).forEach(function (e) { notes.push('⚠ ' + (SRC_LABEL[e.source] || e.source) + ' 扫描异常：' + esc(e.message)); });
-    (state.skipped || []).forEach(function (s) {
-      var install = s.tool
-        ? ' <a class="tool-link" data-install="' + esc(s.tool) + '">安装</a>'
-        : '';
-      notes.push('· 已跳过 ' + (SRC_LABEL[s.source] || s.source) + '：' + esc(s.reason) + install);
-    });
-    document.getElementById('notice').innerHTML = notes.join('<br>');
+    renderNotice();
 
     const fixable = (state.issues || []).filter(function (i) { return i.fixable; }).length;
     const bar = document.getElementById('fixbar');
@@ -1294,6 +1305,9 @@ export function getHtml(nonce: string): string {
     }
   });
   setInterval(function () {
+    if (state.task) {
+      renderNotice();
+    }
     if (!state.scanning && !state.deepFix) {
       return;
     }
