@@ -76,13 +76,15 @@ npm run compile
 npm run package
 ```
 
-然后安装生成的 `.vsix`：
+然后安装生成的 `.vsix`（文件名里的版本号以当前 `package.json` 为准）：
 
 ```bash
-code --install-extension quality-center-0.1.0.vsix
+code --install-extension quality-center-<version>.vsix
 # Trae:
-trae-cn --install-extension quality-center-0.1.0.vsix
+trae-cn --install-extension quality-center-<version>.vsix
 ```
+
+也可以直接 `node scripts/install.mjs --build`，自动完成「编译 → 打包 → 装进本机编辑器 → 回读校验」。
 
 ### 从 Open VSX 安装
 
@@ -96,6 +98,7 @@ code --install-extension dsda56180.quality-center
 | --- | --- | --- |
 | `qualityCenter.scanOnStartup` | `true` | 打开项目后自动扫描一次 |
 | `qualityCenter.scanOnSave` | `true` | 保存文件后自动触发扫描 |
+| `qualityCenter.exportForAgent` | `true` | 每轮扫描后写入 `.quality-center/issues.json` 与 `report.md`，供 AI agent 直接读取 |
 | `qualityCenter.notifyMissingTools` | `true` | 外部工具（gitleaks / trivy / mvn）缺失时弹窗提示并提供一键安装 |
 | `qualityCenter.checkstyle.enabled` | `true` | 启用 Checkstyle |
 | `qualityCenter.checkstyle.config` | `""` | 规则文件路径，留空则依次尝试 `.githooks/checkstyle-config.xml`、`checkstyle.xml`、`config/checkstyle/checkstyle.xml` |
@@ -129,9 +132,12 @@ code --install-extension dsda56180.quality-center
 | 命令 | 说明 |
 | --- | --- |
 | `质量中心：重新扫描` | 立即执行全部扫描 |
+| `质量中心：自动修复可确定性问题` | 修复无导入、修饰符顺序、布尔表达式等确定性规则 |
+| `质量中心：深度修复（OpenRewrite）` | 用 OpenRewrite 执行白名单配方，编译失败可回滚 |
 | `质量中心：复制报告为 Markdown` | 把当前结果复制到剪贴板 |
 | `质量中心：导出报告文件` | 保存为 `.md` 并打开 |
-| `质量中心：深度修复` | 用 OpenRewrite 执行白名单配方，编译失败可回滚 |
+| `质量中心：打开问题位置` | 跳到某条问题对应的文件行 |
+| `质量中心：打开设置` | 打开面板内的扫描范围与配方设置 |
 
 ## 隐私与安全
 
@@ -334,19 +340,27 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 插件只执行设置里明确勾选的配方，不会自动加载任意来源的配方包。
 
-## 发布
+## 发布与文档同步
 
-推 tag 并创建 GitHub Release 后，CI 会自动构建并发布到 Open VSX：
+`README.md` 不只是仓库说明：`vsce package` 会把它打进扩展包，**Open VSX / VS Code 市场的扩展介绍页正文就是这份 README**，`package.json` 的 `description` 则用于搜索结果与列表摘要。所以每次发版前文档必须是最新的，否则商店页会停留在旧功能说明。
 
-```bash
-git tag v0.2.1 && git push origin v0.2.1
-# 在 GitHub 上创建 Release，Actions 会自动执行 npm run package + ovsx publish
+`npm run release` 已经内置了这一步的校验：发布前会检查 README 是否覆盖 `package.json` 里声明的**每一个配置项**与**每一条命令标题**、是否还残留旧版本号示例、`description` 是否为空或过长；任何一项不达标都会直接中止发版，提示缺哪些内容（临时可用 `--skip-docs` 跳过）。
+
+发版流程本身：
+
+```
+npm run release   →  校验工作区/分支/tag + README 覆盖度
+                  →  bump package.json / package-lock.json
+                  → 补 CHANGELOG 段落（缺则用上个 tag 以来的提交生成）
+                  →  tsc 编译 + vsce 打包校验
+                  →  commit + tag v<version> + push
+                  →  gh release create（触发 publish.yml）
+                  →  等 Actions 结果 + 确认 Open VSX latest 已指向新版本
 ```
 
-前提：在仓库 Settings → Secrets and variables → Actions 中配置 `OVSX_TOKEN`
-（Token 在 open-vsx.org → Settings → Access Tokens 生成，命名空间需已在 open-vsx.org 创建）。
+`publish.yml` 只监听「Release 被发布」和手动触发，**推 `main` 不会发版**。前提是仓库 Secrets 里配置了 `OVSX_TOKEN`（open-vsx.org → Settings → Access Tokens，命名空间需已创建）。
 
-也可以手动发布：
+手动发布（脚本不可用时）：
 
 ```bash
 npm run package

@@ -9,6 +9,7 @@
  *   npm run release -- --dry-run   # 只打印将要做的事，不改文件、不推送
  *   npm run release -- --no-wait   # 建完 Release 就走，不等 Actions
  *   npm run release -- --branch main
+ *   npm run release -- --skip-docs # 跳过 README 覆盖度校验
  */
 
 import { execFileSync } from 'node:child_process';
@@ -25,6 +26,7 @@ const argv = process.argv.slice(2);
 const DRY = argv.includes('--dry-run');
 const NO_WAIT = argv.includes('--no-wait');
 const NO_VERIFY = argv.includes('--no-verify');
+const SKIP_DOCS = argv.includes('--skip-docs');
 
 let versionArg;
 let branch = 'main';
@@ -126,6 +128,52 @@ function insertSection(text, version, body) {
   return lines.join('\n');
 }
 
+/**
+ * README 就是商店里的扩展介绍页：vsce 会把它打进 vsix，Open VSX / VS Code 市场直接展示正文，
+ * package.json 的 description 则用于列表摘要。所以发布前必须确认文档跟得上当前功能。
+ */
+function checkDocs(pkg, version) {
+  const readmeFile = path.join(repoRoot, 'README.md');
+  if (!fs.existsSync(readmeFile)) {
+    fail('缺少 README.md：Open VSX 的扩展介绍页正文来自它，不能省略');
+  }
+  const readme = fs.readFileSync(readmeFile, 'utf8');
+  const problems = [];
+
+  const settings = Object.keys(pkg.contributes?.configuration?.properties || {}).filter((key) =>
+    key.startsWith('qualityCenter.')
+  );
+  const missingSettings = settings.filter((key) => !readme.includes(key));
+  if (missingSettings.length > 0) {
+    problems.push(`README 未记录 ${missingSettings.length} 个配置项：${missingSettings.join(', ')}`);
+  }
+
+  const commands = (pkg.contributes?.commands || []).map((command) => command.title);
+  const missingCommands = commands.filter((title) => !readme.includes(title));
+  if (missingCommands.length > 0) {
+    problems.push(`README 未记录 ${missingCommands.length} 条命令：${missingCommands.join(' / ')}`);
+  }
+
+  const staleVersions = [...readme.matchAll(/quality-center-(\d+\.\d+\.\d+)\.vsix/g)]
+    .map((match) => match[1])
+    .filter((item, index, list) => list.indexOf(item) === index);
+  if (staleVersions.length > 0) {
+    problems.push(`README 写死了产物版本号（${staleVersions.join(', ')}），请改成 <version> 占位或与当前 ${version} 一致`);
+  }
+
+  const description = String(pkg.description || '').trim();
+  if (!description) {
+    problems.push('package.json 的 description 为空，Open VSX 列表里会显示空白');
+  } else if (description.length > 160) {
+    problems.push(`description 有 ${description.length} 字，商店列表会截断，建议 ≤ 160 字`);
+  }
+  if ((pkg.keywords || []).length === 0) {
+    problems.push('package.json 的 keywords 为空，影响市场搜索命中');
+  }
+
+  return { problems };
+}
+
 /** 轮询 Actions，等这次 tag 的发布任务结束 */
 async function waitForRun(tag, timeoutMs = 10 * 60_000) {
   const startedAt = Date.now();
@@ -211,6 +259,16 @@ async function main() {
 
   log(`仓库：${repoRoot}`);
   log(`版本：${current} → ${version}${DRY ? '（dry-run）' : ''}`);
+
+  if (SKIP_DOCS) {
+    log('跳过 README 覆盖度校验（--skip-docs）');
+  } else {
+    const { problems } = checkDocs(pkg, version);
+    if (problems.length > 0) {
+      fail(`README 与当前功能不一致，请先更新文档再发版（临时可加 --skip-docs）：\n  - ${problems.join('\n  - ')}`);
+    }
+    log('README 已覆盖全部配置项与命令，可作为商店介绍页使用');
+  }
 
   const status = git(['status', '--porcelain'], { quiet: true, readOnly: true }).stdout;
   if (status) {
