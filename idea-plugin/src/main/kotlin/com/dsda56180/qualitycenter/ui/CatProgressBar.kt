@@ -2,6 +2,7 @@ package com.dsda56180.qualitycenter.ui
 
 import com.dsda56180.qualitycenter.model.ScanProgress
 import com.dsda56180.qualitycenter.model.StageProgress
+import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import java.awt.BasicStroke
 import java.awt.Color
@@ -38,8 +39,8 @@ class CatProgressBar : JComponent() {
 
     init {
         isOpaque = false
-        preferredSize = Dimension(JBUI.scale(420), JBUI.scale(56))
-        minimumSize = Dimension(JBUI.scale(120), JBUI.scale(56))
+        preferredSize = Dimension(JBUI.scale(420), JBUI.scale(30))
+        minimumSize = Dimension(JBUI.scale(120), JBUI.scale(30))
     }
 
     fun start() {
@@ -115,22 +116,23 @@ class CatProgressBar : JComponent() {
         try {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
             val scale = JBUI.scale(1f)
-            val trackHeight = 11f * scale
-            val trackY = height - trackHeight - 3f * scale
+            // 细线进度条：4px 高，避免读成一整条粗白条
+            val trackHeight = 4f * scale
+            val trackY = height - trackHeight - 1f * scale
             val trackWidth = width.toFloat()
 
             g2.color = trackBackground()
             g2.fill(RoundRectangle2D.Float(0f, trackY, trackWidth, trackHeight, trackHeight, trackHeight))
 
-            val accent = fillColor()
+            val accent = accentColor()
             val r = ratio()
             if (r > 0) {
-                // 已知进度：按比例填充，并叠一层流动高光
-                val fillWidth = (trackWidth * r.toFloat()).coerceAtLeast(8f * scale)
+                // 已知进度：按比例填充主题色，并叠一层流动高光
+                val fillWidth = (trackWidth * r.toFloat()).coerceAtLeast(6f * scale)
                 drawFill(g2, 0f, trackY, fillWidth, trackHeight, accent)
             } else {
-                // 未知进度（如单阶段深度修复）：用一条来回扫动的彩色光带表示进行中
-                val bandWidth = (trackWidth * 0.34f).coerceAtLeast(60f * scale)
+                // 未知进度（如单阶段深度修复）：主题色光带左右扫动，表示"正在进行"
+                val bandWidth = (trackWidth * 0.28f).coerceAtLeast(48f * scale)
                 val bandX = (trackWidth + bandWidth) * sweep.toFloat() - bandWidth
                 drawFill(g2, bandX, trackY, bandWidth, trackHeight, accent)
             }
@@ -176,9 +178,9 @@ class CatProgressBar : JComponent() {
         val total = unitCount()
         val done = if (completed) total else doneCount()
         val remaining = (total - done).coerceAtLeast(0)
-        val size = JBUI.scale(24).toFloat()
-        val gap = JBUI.scale(6).toFloat()
-        val baseY = trackY - size
+        val size = JBUI.scale(18).toFloat()
+        val gap = JBUI.scale(5).toFloat()
+        val baseY = trackY - size - JBUI.scale(1).toFloat()
         val phase = System.currentTimeMillis() / 220.0
 
         for (index in 0 until total) {
@@ -256,15 +258,19 @@ class CatProgressBar : JComponent() {
     private fun trackBackground(): Color {
         val panel = UIManager.getColor("Panel.background") ?: Color(60, 63, 65)
         return if (panel.red + panel.green + panel.blue > 380) {
-            Color(0, 0, 0, 26)
+            Color(0, 0, 0, 40)
         } else {
-            Color(255, 255, 255, 26)
+            Color(255, 255, 255, 32)
         }
     }
 
-    private fun fillColor(): Color = UIManager.getColor("ProgressBar.foreground") ?: Color(55, 148, 255)
+    /** 用固定的主题强调色，不要取 UIManager 的 ProgressBar.foreground（深色主题下那是白色） */
+    private fun accentColor(): Color = ACCENT
 
     private companion object {
+        /** 主题强调色（深色/浅色各一），与 IDEA 的进度条蓝保持一致 */
+        val ACCENT: Color = JBColor(Color(0x2F6FEB), Color(0x4E8CFF))
+
         /** 10 种猫咪配色：脸 / 耳朵 */
         val CAT_COLORS: List<List<Color>> = listOf(
             listOf(Color(150, 153, 160), Color(220, 158, 132)), // 灰

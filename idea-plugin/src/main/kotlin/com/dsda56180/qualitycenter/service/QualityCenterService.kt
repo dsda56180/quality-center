@@ -472,7 +472,7 @@ class QualityCenterService(val project: Project) : Disposable {
                         patchText = previewPatch,
                         files = previewFiles
                     )
-                    val decision = showDeepFixPreview(project, info) ?: run {
+                    val decision = onEdt { showDeepFixPreview(project, info) } ?: run {
                         notifyInfo("已取消深度修复。")
                         return@execute
                     }
@@ -491,9 +491,11 @@ class QualityCenterService(val project: Project) : Disposable {
                         }
                         if (dirty > 0) appendLine("检测到 $dirty 处未提交改动，会先做完整备份。")
                     }
-                    val confirmed = com.intellij.openapi.ui.Messages.showYesNoDialog(
-                        project, detail, headline, "执行深度修复", "取消", null
-                    )
+                    val confirmed = onEdt {
+                        com.intellij.openapi.ui.Messages.showYesNoDialog(
+                            project, detail, headline, "执行深度修复", "取消", null
+                        )
+                    }
                     if (confirmed != com.intellij.openapi.ui.Messages.YES) {
                         return@execute
                     }
@@ -655,14 +657,16 @@ class QualityCenterService(val project: Project) : Disposable {
             val build = Maven.runMvn(dir, listOf("-B", "-q") + Maven.mirrorArgs() + listOf("-DskipTests", "compile"), 20 * 60_000)
             if (build.code != 0) {
                 advanceStage("编译失败，等待回滚确认")
-                val rollback = com.intellij.openapi.ui.Messages.showYesNoDialog(
-                    project,
-                    "深度修复后编译失败，需要回滚已改动的 ${changed.size} 个文件。\n${tail(build.stderr.ifBlank { build.stdout })}",
-                    "编译失败",
-                    "立即回滚",
-                    "保留改动",
-                    null
-                ) == com.intellij.openapi.ui.Messages.YES
+                val rollback = onEdt {
+                    com.intellij.openapi.ui.Messages.showYesNoDialog(
+                        project,
+                        "深度修复后编译失败，需要回滚已改动的 ${changed.size} 个文件。\n${tail(build.stderr.ifBlank { build.stdout })}",
+                        "编译失败",
+                        "立即回滚",
+                        "保留改动",
+                        null
+                    )
+                } == com.intellij.openapi.ui.Messages.YES
                 if (rollback) {
                     advanceStage("回滚本次改动")
                     restoreBackup()
@@ -828,14 +832,16 @@ class QualityCenterService(val project: Project) : Disposable {
                 }
                 if (spring != null) {
                     val bootVersion = decision.versions[spring.packageName] ?: spring.to
-                    val migrate = com.intellij.openapi.ui.Messages.showYesNoDialog(
-                        project,
-                        "Spring Boot 已升级到 $bootVersion 并通过编译。是否继续执行代码级迁移？（rewrite-spring 会改动业务代码）",
-                        "继续迁移",
-                        "执行代码迁移",
-                        "稍后",
-                        null
-                    ) == com.intellij.openapi.ui.Messages.YES
+                    val migrate = onEdt {
+                        com.intellij.openapi.ui.Messages.showYesNoDialog(
+                            project,
+                            "Spring Boot 已升级到 $bootVersion 并通过编译。是否继续执行代码级迁移？（rewrite-spring 会改动业务代码）",
+                            "继续迁移",
+                            "执行代码迁移",
+                            "稍后",
+                            null
+                        )
+                    } == com.intellij.openapi.ui.Messages.YES
                     if (migrate) {
                         deepFixInternal(
                             DeepFixOverride(
@@ -1128,6 +1134,19 @@ class QualityCenterService(val project: Project) : Disposable {
         NotificationGroupManager.getInstance().getNotificationGroup("QualityCenter")
             .createNotification("质量中心", message, type)
             .notify(project)
+    }
+
+    /**
+     * 扫描/修复跑在后台线程，但对话框、DialogWrapper 只能从 EDT 打开，
+     * 新版 IDE 会直接抛「Access is allowed from EDT only」。统一切到 EDT 再回传结果。
+     */
+    private fun <T> onEdt(block: () -> T): T {
+        val app = ApplicationManager.getApplication()
+        if (app.isDispatchThread) return block()
+        var holder: Any? = null
+        app.invokeAndWait { holder = block() }
+        @Suppress("UNCHECKED_CAST")
+        return holder as T
     }
 
     override fun dispose() {
