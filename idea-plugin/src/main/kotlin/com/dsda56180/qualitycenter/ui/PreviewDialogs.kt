@@ -15,10 +15,13 @@ import java.awt.Color
 import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.RenderingHints
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.BoxLayout
-import javax.swing.ButtonGroup
 import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JLabel
@@ -27,7 +30,6 @@ import javax.swing.JScrollPane
 import javax.swing.JTable
 import javax.swing.JTextArea
 import javax.swing.JTextPane
-import javax.swing.JToggleButton
 import javax.swing.table.AbstractTableModel
 import javax.swing.table.TableColumn
 import javax.swing.text.SimpleAttributeSet
@@ -67,19 +69,26 @@ private class DeepFixPreviewDialog(
 ) : DialogWrapper(project, true) {
 
     private class Row(val path: String, val box: JCheckBox, val panel: JPanel)
+    private class Rendered(
+        val primary: javax.swing.text.StyledDocument,
+        val secondary: javax.swing.text.StyledDocument?
+    )
 
     private val rows = mutableListOf<Row>()
     private val fileDiffs: Map<String, List<String>> = parsePatch(info.patchText)
     private val styles = DiffStyles()
     private var selectedPath: String? = null
     private var baseBackground: Color? = null
+    /** 渲染令牌：切文件/切模式时递增，丢弃过期的后台结果 */
+    private var renderToken = 0
+    /** 已渲染过的文档缓存（key = 路径|模式），来回切文件不用重复构建 */
+    private val renderCache = LinkedHashMap<String, Rendered>()
 
     private val unifiedPane = DiffTextPane()
     private val leftPane = DiffTextPane()
     private val rightPane = DiffTextPane()
     private val diffCards = JPanel(CardLayout())
-    private val unifiedButton = JToggleButton("统一")
-    private val sideButton = JToggleButton("并排")
+    private val modeSwitch = ModeSwitch(listOf("统一", "并排")) { index -> applyMode(index == 1) }
 
     init {
         title = info.label?.let { "深度修复预览：$it" } ?: "深度修复预览"
@@ -167,45 +176,26 @@ private class DeepFixPreviewDialog(
         sidePanel.add(sideBlock("修改后", rightScroll))
         diffCards.add(sidePanel, CARD_SIDE_BY_SIDE)
 
-        val modeBar = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(4), 0))
-        val modeHint = JLabel("对比方式").apply {
-            font = JBUI.Fonts.smallFont()
-            foreground = MUTED_FOREGROUND
-        }
-        val group = ButtonGroup()
-        listOf(unifiedButton, sideButton).forEach { button ->
-            button.font = JBUI.Fonts.smallFont()
-            button.isFocusable = false
-            button.isContentAreaFilled = false
-            button.isBorderPainted = false
-            button.border = JBUI.Borders.empty(2, 8)
-            button.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            group.add(button)
-            modeBar.add(button)
-        }
-        unifiedButton.isSelected = true
-        unifiedButton.addActionListener { showMode(CARD_UNIFIED) }
-        sideButton.addActionListener { showMode(CARD_SIDE_BY_SIDE) }
-        modeBar.add(modeHint)
+        val modeBar = JPanel(BorderLayout(JBUI.scale(6), 0))
+        val hint = JLabel("绿色为新增、红色为删除")
+        hint.font = JBUI.Fonts.smallFont()
+        hint.foreground = MUTED_FOREGROUND
+        modeBar.add(hint, BorderLayout.WEST)
+        modeBar.add(modeSwitch, BorderLayout.EAST)
 
         val diffBlock = JPanel(BorderLayout())
-        diffBlock.add(modeBar, BorderLayout.NORTH)
         diffBlock.add(diffCards, BorderLayout.CENTER)
 
         val split = Splitter(true)
-        split.proportion = 0.32f
+        split.proportion = 0.34f
         split.setShowDividerControls(false)
         split.setShowDividerIcon(false)
         split.firstComponent = filesScroll
         split.secondComponent = diffBlock
 
-        val hint = JLabel("绿色为新增、红色为删除；「并排」可左右对照，「统一」单栏查看 +/-")
-        hint.font = JBUI.Fonts.smallFont()
-        hint.foreground = MUTED_FOREGROUND
-
-        val center = JPanel(BorderLayout(0, JBUI.scale(4)))
+        val center = JPanel(BorderLayout(0, JBUI.scale(2)))
         center.add(split, BorderLayout.CENTER)
-        center.add(hint, BorderLayout.SOUTH)
+        center.add(modeBar, BorderLayout.SOUTH)
         root.add(center, BorderLayout.CENTER)
 
         info.files.firstOrNull()?.let { showFile(it) }
@@ -224,50 +214,81 @@ private class DeepFixPreviewDialog(
         return panel
     }
 
-    private fun showMode(card: String) {
-        (diffCards.layout as CardLayout).show(diffCards, card)
-        val side = card == CARD_SIDE_BY_SIDE
-        if (sideButton.isSelected != side) sideButton.isSelected = side
-        if (unifiedButton.isSelected != !side) unifiedButton.isSelected = !side
+    private fun applyMode(side: Boolean) {
+        (diffCards.layout as CardLayout).show(diffCards, if (side) CARD_SIDE_BY_SIDE else CARD_UNIFIED)
         renderActive()
     }
 
-    private fun sideBySide(): Boolean = sideButton.isSelected
+    private fun sideBySide(): Boolean = modeSwitch.selectedIndex == 1
 
     private fun showFile(path: String) {
         if (selectedPath == path) return
         selectedPath = path
-        val bg = baseBackground ?: return
-        rows.forEach { other ->
-            other.panel.background = if (other.path == path) ROW_SELECTED_BACKGROUND else bg
-            other.panel.repaint()
+        baseBackground?.let { bg ->
+            rows.forEach { other ->
+                other.panel.background = if (other.path == path) ROW_SELECTED_BACKGROUND else bg
+                other.panel.repaint()
+            }
         }
         renderActive()
-    }
-
-    private fun renderActive() {
-        val path = selectedPath ?: return
-        val lines = diffLines(path)
-        if (sideBySide()) renderSideBySide(path, lines) else renderUnified(path, lines)
     }
 
     private fun diffLines(path: String): List<String>? = fileDiffs.entries
         .firstOrNull { (key, _) -> key == path || key.endsWith("/$path") || path.endsWith("/$key") }
         ?.value
 
-    private fun renderUnified(path: String, lines: List<String>?) {
-        val doc = unifiedPane.styledDocument
-        doc.remove(0, doc.length)
+    /**
+     * 切文件 / 切模式时，先在后台线程把整篇文档拼好，再回到 EDT 一次性替换。
+     * 之前是在 EDT 上逐行 insertString，上千行会不断触发文档事件与重排，表现为点击卡顿。
+     */
+    private fun renderActive() {
+        val path = selectedPath ?: return
+        val lines = diffLines(path)
+        val side = sideBySide()
+        val token = ++renderToken
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        app.executeOnPooledThread {
+            val cacheKey = "$path|$side"
+            val rendered = try {
+                synchronized(renderCache) {
+                    renderCache[cacheKey] ?: run {
+                        val fresh = if (side) buildSideBySide(lines) else buildUnified(path, lines)
+                        if (renderCache.size >= 8) {
+                            val oldest = renderCache.keys.firstOrNull()
+                            if (oldest != null) renderCache.remove(oldest)
+                        }
+                        renderCache[cacheKey] = fresh
+                        fresh
+                    }
+                }
+            } catch (_: Throwable) {
+                null
+            }
+            app.invokeLater {
+                if (token != renderToken || rendered == null) return@invokeLater
+                if (side) {
+                    leftPane.document = rendered.primary
+                    rightPane.document = rendered.secondary ?: javax.swing.text.DefaultStyledDocument()
+                    leftPane.caretPosition = 0
+                    rightPane.caretPosition = 0
+                } else {
+                    unifiedPane.document = rendered.primary
+                    unifiedPane.caretPosition = 0
+                }
+            }
+        }
+    }
+
+    private fun buildUnified(path: String, lines: List<String>?): Rendered {
+        val doc = javax.swing.text.DefaultStyledDocument()
         if (lines.isNullOrEmpty()) {
             insert(doc, "该文件在当前补丁中没有可显示的差异片段。\n", styles.meta)
-            unifiedPane.caretPosition = 0
-            return
+            return Rendered(doc, null)
         }
         val added = lines.count { it.startsWith("+") && !it.startsWith("+++") }
         val removed = lines.count { it.startsWith("-") && !it.startsWith("---") }
-        val shown = lines.take(MAX_DIFF_LINES)
         insert(doc, "$path   +$added / -$removed\n\n", styles.header)
-        shown.forEach { line ->
+        lines.take(MAX_DIFF_LINES).forEach { line ->
             val style = when {
                 line.startsWith("@@") -> styles.hunk
                 line.startsWith("diff ") || line.startsWith("index ") ||
@@ -276,27 +297,36 @@ private class DeepFixPreviewDialog(
                 line.startsWith("-") -> styles.del
                 else -> styles.normal
             }
-            insert(doc, line + "\n", style)
+            insert(doc, clipLine(line) + "\n", style)
         }
         if (lines.size > MAX_DIFF_LINES) {
             insert(doc, "…… 还有 ${lines.size - MAX_DIFF_LINES} 行未显示\n", styles.meta)
         }
-        unifiedPane.caretPosition = 0
+        return Rendered(doc, null)
     }
 
-    private fun renderSideBySide(path: String, lines: List<String>?) {
-        val leftDoc = leftPane.styledDocument
-        val rightDoc = rightPane.styledDocument
-        leftDoc.remove(0, leftDoc.length)
-        rightDoc.remove(0, rightDoc.length)
+    private fun buildSideBySide(lines: List<String>?): Rendered {
+        val leftDoc = javax.swing.text.DefaultStyledDocument()
+        val rightDoc = javax.swing.text.DefaultStyledDocument()
         if (lines.isNullOrEmpty()) {
             insert(leftDoc, "该文件在当前补丁中没有可显示的差异片段。\n", styles.meta)
-            return
+            return Rendered(leftDoc, rightDoc)
         }
         val diffRows = buildDiffRows(lines).take(MAX_DIFF_ROWS)
         diffRows.forEach { row ->
             val left = row.left
             val right = row.right
+            // 并排视图也保留 +/- 前缀：左侧删除行 "-"，右侧新增行 "+"，未变化的行不加
+            val leftText = when {
+                left == null -> ""
+                right == null -> "-" + clipLine(left)
+                else -> clipLine(left)
+            }
+            val rightText = when {
+                right == null -> ""
+                left == null -> "+" + clipLine(right)
+                else -> clipLine(right)
+            }
             val leftStyle = when {
                 left == null -> styles.blank
                 right == null -> styles.removedLine
@@ -307,16 +337,18 @@ private class DeepFixPreviewDialog(
                 left == null -> styles.addedLine
                 else -> styles.normal
             }
-            insert(leftDoc, (left ?: "") + "\n", leftStyle)
-            insert(rightDoc, (right ?: "") + "\n", rightStyle)
+            insert(leftDoc, leftText + "\n", leftStyle)
+            insert(rightDoc, rightText + "\n", rightStyle)
         }
         if (diffRows.size >= MAX_DIFF_ROWS) {
             insert(leftDoc, "…… 内容过长，已截断\n", styles.meta)
             insert(rightDoc, "…… 内容过长，已截断\n", styles.meta)
         }
-        leftPane.caretPosition = 0
-        rightPane.caretPosition = 0
+        return Rendered(leftDoc, rightDoc)
     }
+
+    private fun clipLine(line: String): String =
+        if (line.length <= MAX_LINE_LENGTH) line else line.take(MAX_LINE_LENGTH) + " …"
 
     private fun linkScroll(a: JScrollPane, b: JScrollPane) {
         var guard = false
@@ -354,6 +386,7 @@ private class DeepFixPreviewDialog(
         const val CARD_SIDE_BY_SIDE = "sideBySide"
         const val MAX_DIFF_LINES = 1500
         const val MAX_DIFF_ROWS = 1200
+        const val MAX_LINE_LENGTH = 400
     }
 }
 
@@ -459,6 +492,107 @@ private fun parsePatch(patch: String?): Map<String, List<String>> {
 }
 
 private val ROW_SELECTED_BACKGROUND = JBColor(Color(0xE8F0FE), Color(0x2E3540))
+private val SEGMENT_SELECTED_BACKGROUND = JBColor(Color(0xE3EBFA), Color(0x2F3A4E))
+
+/**
+ * 紧凑的分段切换（统一 / 并排）：整条自绘、18px 高。
+ * 不用 JToggleButton，避免按钮 UI 的内边距把高度撑到 24px 以上、白白占掉一行工具栏。
+ */
+private class ModeSwitch(
+    private val options: List<String>,
+    initialIndex: Int = 0,
+    private val onSelect: (Int) -> Unit
+) : JComponent() {
+
+    private val font = JBUI.Fonts.smallFont().deriveFont(Font.BOLD)
+    private val padX = JBUI.scale(7)
+    private val stripHeight = JBUI.scale(18)
+    private var hovered = -1
+
+    var selectedIndex: Int = initialIndex
+        private set
+
+    init {
+        isOpaque = false
+        isFocusable = false
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        toolTipText = " "
+        addMouseListener(object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) {
+                indexAt(e.x)?.let { select(it) }
+            }
+
+            override fun mouseExited(e: MouseEvent) {
+                if (hovered != -1) {
+                    hovered = -1
+                    repaint()
+                }
+            }
+        })
+        addMouseMotionListener(object : MouseAdapter() {
+            override fun mouseMoved(e: MouseEvent) {
+                val index = indexAt(e.x) ?: -1
+                if (index != hovered) {
+                    hovered = index
+                    repaint()
+                }
+            }
+        })
+    }
+
+    private fun select(index: Int) {
+        if (index == selectedIndex) return
+        selectedIndex = index
+        repaint()
+        onSelect(index)
+    }
+
+    override fun getPreferredSize(): Dimension = Dimension(widths().sum(), stripHeight)
+
+    override fun getMinimumSize(): Dimension = preferredSize
+
+    override fun getMaximumSize(): Dimension = Dimension(preferredSize.width, stripHeight)
+
+    private fun widths(): List<Int> {
+        val fm = getFontMetrics(font)
+        return options.map { fm.stringWidth(it) + padX * 2 }
+    }
+
+    private fun indexAt(x: Int): Int? {
+        var start = 0
+        widths().forEachIndexed { index, width ->
+            if (x >= start && x < start + width) return index
+            start += width
+        }
+        return null
+    }
+
+    override fun paintComponent(g: Graphics) {
+        val g2 = g.create() as Graphics2D
+        try {
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            g2.font = font
+            val fm = g2.fontMetrics
+            var x = 0
+            widths().forEachIndexed { index, width ->
+                val selected = index == selectedIndex
+                if (selected) {
+                    g2.color = SEGMENT_SELECTED_BACKGROUND
+                    g2.fillRoundRect(x, 0, width - 1, stripHeight - 1, stripHeight, stripHeight)
+                } else if (index == hovered) {
+                    g2.color = TAB_HOVER_BACKGROUND
+                    g2.fillRoundRect(x, 0, width - 1, stripHeight - 1, stripHeight, stripHeight)
+                }
+                g2.color = if (selected) TAB_ACCENT else MUTED_FOREGROUND
+                val baseline = (stripHeight - fm.height) / 2 + fm.ascent
+                g2.drawString(options[index], x + padX, baseline)
+                x += width
+            }
+        } finally {
+            g2.dispose()
+        }
+    }
+}
 
 /** 依赖升级预览：勾选依赖、可改目标版本，确认后写入 pom */
 fun showUpgradePreview(
