@@ -141,14 +141,50 @@ code --install-extension dsda56180.quality-center
 | `质量中心：打开问题位置` | 跳到某条问题对应的文件行 |
 | `质量中心：打开设置` | 打开面板内的扫描范围与配方设置 |
 
-## 给 AI agent 的接口（CLI + Skills）
+## 给 AI agent 的接口（MCP + CLI + Skills）
 
-插件除了侧边栏，还带一个无界面 CLI（扩展包内 `out/cli.js`），用同一套扫描器与同一份基线，可在纯 Node 环境运行，供 agent 与 CI 调用。配套的 `skills/` 目录是可直接加载给 agent 的 Skill 包。
+插件除了侧边栏，还对外提供三种接入方式，三种都走同一套扫描器、同一份基线与同一套修复规则：
+
+1. **MCP 服务端**（推荐给 agent）：`node <扩展目录>/out/cli.js mcp`，stdio + JSON-RPC，零依赖。
+2. **CLI**：`out/cli.js` 的各子命令，适合脚本与 CI。
+3. **Skills**：`skills/` 下可加载的 Skill 包 + `manifest.json` 清单。
+
+### MCP 配置
+
+把下面这段加到 MCP 客户端（Trae / Claude Desktop / Cursor 等）的配置里，`args` 第一项换成你的扩展目录：
+
+```json
+{
+  "mcpServers": {
+    "quality-center": {
+      "command": "node",
+      "args": ["<扩展目录>/out/cli.js", "mcp"]
+    }
+  }
+}
+```
+
+暴露的工具：
+
+| 工具 | 作用 |
+| --- | --- |
+| `quality_scan` | 四类扫描，返回 `AgentPayload`（schemaVersion 2）与 `exitCode` |
+| `quality_build` | `mvn -B -DskipTests package`，返回 jar 列表与失败原因 |
+| `quality_tools_status` | 工具是否就绪、解析到的路径、能否自动安装 |
+| `quality_tools_install` | 按当前系统自动安装 mvn / gitleaks / trivy |
+| `quality_report` | 读取已落盘的 issues.json / report.md，不重新扫描 |
+| `quality_fix` | 确定性修复，默认只预览，`write=true` 才落盘 |
+
+服务端在 stdin/stdout 上收发换行分隔的 JSON-RPC，stdout 只放协议消息；请求串行处理，避免并发拉起多份 mvn/trivy。
+
+### CLI
 
 ```bash
 node <扩展目录>/out/cli.js scan --json --fail-on high   # 四类扫描，JSON 到 stdout
 node <扩展目录>/out/cli.js scan --only trivy,spotbugs   # 只跑指定扫描器
 node <扩展目录>/out/cli.js build <项目>                 # mvn -B -DskipTests package
+node <扩展目录>/out/cli.js fix <项目>                   # 确定性修复，默认只预览
+node <扩展目录>/out/cli.js fix <项目> --write           # 写回文件，改完需复扫
 node <扩展目录>/out/cli.js tools status --json          # 工具是否就绪
 node <扩展目录>/out/cli.js tools install mvn            # 缺失工具自动安装
 node <扩展目录>/out/cli.js report --md                  # 复用已有结果
@@ -158,15 +194,20 @@ node <扩展目录>/out/cli.js report --md                  # 复用已有结果
 
 `--json` 输出 `schemaVersion: "2"` 的 `AgentPayload`：`summary`（按严重度与来源计数）、`issues`（含相对路径 `file`、绝对路径 `abs`、`rule`、`zhSummary`、`advice`、`fixable`、`package`/`installedVersion`/`fixedVersion`/`cvss`）、`ignored`、`suggestions`（根因级方案）、`skipped`、`errors`、`missingTools`、`nextActions`。字段只增不减，结构变化时升版本号。
 
-`skills/` 内含三个 Skill 与机器可读清单：
+`fix` 覆盖与面板「一键修复」相同的四条确定性规则（`UnusedImports`、`RedundantImport`、`ModifierOrder`、`SimplifyBooleanExpression`），不碰其他问题；删除类规则只删真正的 `import` 行，行号漂移时宁可不改。
+
+### Skills
+
+`skills/` 内含四个 Skill 与机器可读清单：
 
 | Skill | 触发场景 |
 | --- | --- |
 | `quality-center-scan` | 跑扫描、读结果、判断严重度与交付口径 |
 | `quality-center-tools` | 缺 mvn / gitleaks / trivy 时自动安装，或先构建产物 |
 | `quality-center-dependencies` | 按 CVE 修复版本升级 pom，整组对齐 BOM/父 POM 并编译校验 |
+| `quality-center-mcp` | 把插件接成 MCP 服务端，按工具语义编排调用顺序 |
 
-`skills/manifest.json` 声明 CLI 入口、命令、退出码与 Skill 路径，支持清单式发现；把对应 `SKILL.md` 放进 agent 的 skills 目录即可加载。CLI 只做只读扫描、构建与装工具，改代码与改 pom 由 agent 按 Skill 指引完成并复扫确认。
+`skills/manifest.json` 声明 CLI 入口、命令、退出码、MCP 工具与 Skill 路径，支持清单式发现；把对应 `SKILL.md` 放进 agent 的 skills 目录即可加载。CLI/MCP 的修复只做确定性改写，依赖升级与语义修复由 agent 按 Skill 指引完成并复扫确认。
 
 ## 隐私与安全
 

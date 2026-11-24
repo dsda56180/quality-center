@@ -2,12 +2,12 @@
   "name": "quality-center-agent-kit",
   "publisher": "dsda56180",
   "extensionId": "dsda56180.quality-center",
-  "description": "quality-center 的 agent 接口包：无界面 CLI + 三个可直接加载的 Skill，用于代码质量、密钥泄露、依赖漏洞(CVE)与字节码静态缺陷扫描。",
+  "description": "quality-center 的 agent 接口包：MCP 服务端 + 无界面 CLI + 四个可直接加载的 Skill，用于代码质量、密钥泄露、依赖漏洞(CVE)与字节码静态缺陷扫描。",
   "cli": {
     "runtime": "node",
     "entry": "out/cli.js",
     "invoke": "node <扩展目录>/out/cli.js <command>",
-    "commands": ["scan", "build", "tools status", "tools install", "report", "version"],
+    "commands": ["scan", "build", "fix", "tools status", "tools install", "report", "mcp", "version"],
     "payloadSchema": "2",
     "outputs": [".quality-center/issues.json", ".quality-center/report.md"],
     "exitCodes": {
@@ -16,6 +16,20 @@
       "2": "执行失败或外部工具缺失",
       "3": "用法错误"
     }
+  },
+  "mcp": {
+    "transport": "stdio",
+    "command": "node",
+    "args": ["<扩展目录>/out/cli.js", "mcp"],
+    "protocolVersion": "2024-11-05",
+    "tools": [
+      { "name": "quality_scan", "purpose": "四类扫描，返回 AgentPayload(schemaVersion 2) 与 exitCode" },
+      { "name": "quality_build", "purpose": "mvn -B -DskipTests package，返回 jar 列表与失败原因" },
+      { "name": "quality_tools_status", "purpose": "外部工具是否就绪、路径、能否自动安装" },
+      { "name": "quality_tools_install", "purpose": "按当前系统自动安装 mvn / gitleaks / trivy" },
+      { "name": "quality_report", "purpose": "读取已落盘的 issues.json / report.md" },
+      { "name": "quality_fix", "purpose": "确定性修复，默认只预览，write=true 才落盘" }
+    ]
   },
   "skills": [
     {
@@ -32,6 +46,11 @@
       "name": "quality-center-dependencies",
       "path": "quality-center-dependencies/SKILL.md",
       "when": "要按 CVE 修复版本升级 pom 依赖，并保证编译与复扫通过时"
+    },
+    {
+      "name": "quality-center-mcp",
+      "path": "quality-center-mcp/SKILL.md",
+      "when": "要把插件接成 MCP 服务端，或以工具调用方式编排扫描/构建/修复时"
     }
   ],
   "docs": {

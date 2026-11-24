@@ -1,17 +1,8 @@
 import * as vscode from 'vscode';
 import { Issue } from './model';
-import { reorderModifiers } from './modifiers';
-import { simplifyBooleanLine } from './booleans';
+import { FIXABLE_RULES, planLineFix } from './fixerCore';
 
-/** 可确定性修复的规则：删导入、调整修饰符顺序、简化布尔字面量比较 */
-export const FIXABLE_RULES = new Set([
-  'UnusedImports',
-  'RedundantImport',
-  'ModifierOrder',
-  'SimplifyBooleanExpression'
-]);
-
-const IDENT = '[A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*';
+export { FIXABLE_RULES };
 
 export interface FixOutcome {
   applied: number;
@@ -24,8 +15,9 @@ export function isFixable(issue: Issue): boolean {
 }
 
 /**
- * 批量应用确定性修复。
- * 同一文件中按行去重，避免重复删除导致编辑区间重叠。
+ * 批量应用确定性修复（IDE 面板用）。
+ * 同一文件中按行去重，避免重复删除导致编辑区间重叠；
+ * 「哪一行怎么改」与 CLI/MCP 共用 fixerCore.planLineFix。
  */
 export async function applyAutoFixes(issues: Issue[]): Promise<FixOutcome> {
   const targets = issues.filter(isFixable);
@@ -60,25 +52,14 @@ export async function applyAutoFixes(issues: Issue[]): Promise<FixOutcome> {
         continue;
       }
       const text = document.lineAt(line).text;
+      const plan = planLineFix(issue.rule, text);
+      if (!plan) {
+        outcome.skipped += 1;
+        continue;
+      }
 
-      if (issue.rule === 'ModifierOrder') {
-        const fixed = reorderModifiers(text);
-        if (!fixed) {
-          outcome.skipped += 1;
-          continue;
-        }
-        edits.push(
-          vscode.TextEdit.replace(new vscode.Range(line, 0, line, text.length), fixed)
-        );
-      } else if (issue.rule === 'SimplifyBooleanExpression') {
-        const fixed = simplifyBooleanLine(text);
-        if (!fixed) {
-          outcome.skipped += 1;
-          continue;
-        }
-        edits.push(
-          vscode.TextEdit.replace(new vscode.Range(line, 0, line, text.length), fixed)
-        );
+      if (plan.type === 'replace') {
+        edits.push(vscode.TextEdit.replace(new vscode.Range(line, 0, line, text.length), plan.text));
       } else {
         // 删除整行导入（含换行）
         const start = new vscode.Position(line, 0);

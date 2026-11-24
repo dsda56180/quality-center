@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.19
+
+- 新增 **MCP 服务端**（`out/cli.js mcp`，`npm run mcp`）：stdio + 换行分隔 JSON-RPC 2.0，零依赖，暴露 `quality_scan` / `quality_build` / `quality_tools_status` / `quality_tools_install` / `quality_report` / `quality_fix` 六个工具，agent 可直接以工具调用方式跑扫描与修复，不必记 CLI 参数
+- MCP 请求串行处理：避免并发拉起多份 mvn / trivy，stdin 关闭时等所有请求收尾再退出；stdout 只放协议消息，日志全走 stderr
+- CLI 新增 `fix` 子命令：应用四条确定性修复规则（`UnusedImports` / `RedundantImport` / `ModifierOrder` / `SimplifyBooleanExpression`），默认只预览并列出「文件 + 行号 + 规则」，`--write` 才落盘
+- 抽出 `src/fixerCore.ts`：确定性修复变成纯函数（`planLineFix` / `applyFixesToContent`），IDE 面板的「一键修复」与 CLI/MCP 共用同一份规则实现，不再各自维护；删除类规则只删真正的 `import` 行，行号漂移时宁可不改
+- 抽出 `src/agentOps.ts`：扫描 / 构建 / 工具安装 / 报告 / 修复统一成返回纯数据的操作层，CLI 与 MCP 共用，避免两套实现行为分叉
+- 新增 `quality-center-mcp` Skill（MCP 配置样例、工具语义与调用顺序），`skills/manifest.json` 增加 MCP 工具清单，README 补充 MCP 接入章节
+
 ## 0.17.18
 
 - 新增无界面 CLI（`out/cli.js`，`npm run agent`）：`scan` / `build` / `tools status` / `tools install` / `report`，用同一套扫描器、同一份基线，可在纯 Node 环境与 CI 中运行，不依赖 vscode API

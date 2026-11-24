@@ -301,8 +301,8 @@ export function summarize(result: ScanResult): AgentSummary {
   return summary;
 }
 
-/** 可确定性修复的规则：与 IDE 面板「一键修复」一致 */
-const FIXABLE_RULES = new Set(['UnusedImports', 'RedundantImport', 'ModifierOrder', 'SimplifyBooleanExpression']);
+/** 可确定性修复的规则：与 IDE 面板「一键修复」共用同一份定义 */
+import { FIXABLE_RULES } from './fixerCore';
 
 export interface AgentIssue {
   id: number;
