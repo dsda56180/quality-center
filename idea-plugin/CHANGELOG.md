@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.27
+
+- 修复 0.1.26 预览变空白：`DiffContentFactory.create(文本, FileType)` 给的是**只读文档**，原地 `setText` 抛「试图修改只读文档」，内容不更新。改为自己用 `EditorFactory.createDocument` 建两个**可写**文档，再用 `create(project, document, virtualFile)` 包成 diff 内容——文档能改、语法高亮照旧、diff 视图照旧
+- 原地更新失败时不再让右侧空着：记日志并立刻退回内置渲染，保证内容始终可见
+
 ## 0.1.26
 
 - 彻底换掉「每次点击重建 viewer」的做法：改为**按文件类型复用一块原生 diff 面板**，点击文件时只把「改前 / 改后」两个文档的内容原地换掉（`Document.setText`），视图自己增量重算（官方 `ListenerDiffViewerBase.onDocumentChange → scheduleRediff` 的行为），编辑器、工具栏、分割器全部不重建

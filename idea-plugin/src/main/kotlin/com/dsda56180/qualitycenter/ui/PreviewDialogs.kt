@@ -517,12 +517,20 @@ private class DeepFixPreviewDialog(
         }
         // 只更新文档内容，不 setRequest：编辑器、工具栏、分割器全部原地复用。
         // 文档变更必须在写操作里做，否则 DocumentImpl 会拒绝并抛异常。
-        val beforeDoc = page.before.document
-        val afterDoc = page.after.document
+        val beforeDoc = page.beforeDoc
+        val afterDoc = page.afterDoc
         val app = com.intellij.openapi.application.ApplicationManager.getApplication()
-        app.runWriteAction {
-            if (beforeDoc.text != texts.before) beforeDoc.setText(texts.before)
-            if (afterDoc.text != texts.after) afterDoc.setText(texts.after)
+        try {
+            app.runWriteAction {
+                if (beforeDoc.text != texts.before) beforeDoc.setText(texts.before)
+                if (afterDoc.text != texts.after) afterDoc.setText(texts.after)
+            }
+        } catch (e: Throwable) {
+            // 任何异常都不能让预览变空白：退回内置渲染，至少内容还在
+            logWarn("原地更新 diff 文档失败，回退内置渲染", e)
+            fallbackToBuiltIn()
+            queuedRender = true
+            return
         }
         (nativeHost.layout as CardLayout).show(nativeHost, page.card)
         (diffCards.layout as CardLayout).show(diffCards, CARD_NATIVE)
@@ -536,8 +544,8 @@ private class DeepFixPreviewDialog(
 
     private class NativePage(
         val panel: com.intellij.diff.DiffRequestPanel,
-        val before: com.intellij.diff.contents.DocumentContent,
-        val after: com.intellij.diff.contents.DocumentContent,
+        val beforeDoc: com.intellij.openapi.editor.Document,
+        val afterDoc: com.intellij.openapi.editor.Document,
         val card: String
     )
 
@@ -557,9 +565,21 @@ private class DeepFixPreviewDialog(
         val factory = com.intellij.diff.DiffContentFactory.getInstance()
         val before: com.intellij.diff.contents.DocumentContent
         val after: com.intellij.diff.contents.DocumentContent
+        val beforeDoc = com.intellij.openapi.editor.EditorFactory.getInstance().createDocument(texts.before)
+        val afterDoc = com.intellij.openapi.editor.EditorFactory.getInstance().createDocument(texts.after)
         try {
-            before = factory.create(project, texts.before, fileType)
-            after = factory.create(project, texts.after, fileType)
+            // 关键：文档由自己创建（可写），再包成 DiffContent。工厂的 create(文本) 产生的是只读文档，
+            // 改内容会抛「试图修改只读文档」，复用面板就无从谈起。
+            before = if (texts.file != null) {
+                factory.create(project, beforeDoc, texts.file)
+            } else {
+                factory.create(project, beforeDoc)
+            }
+            after = if (texts.file != null) {
+                factory.create(project, afterDoc, texts.file)
+            } else {
+                factory.create(project, afterDoc)
+            }
             val request = com.intellij.diff.requests.SimpleDiffRequest(
                 // 标题留空：面板按文件类型复用，标题若填首个文件名就会和后续文件对不上；
                 // 当前文件路径由对话框自己的 pathLabel 显示。
@@ -575,7 +595,7 @@ private class DeepFixPreviewDialog(
         val card = "native-" + (++nativeCardSeq)
         nativeHost.add(panel.component, card)
         nativePanel = panel
-        val page = NativePage(panel, before, after, card)
+        val page = NativePage(panel, beforeDoc, afterDoc, card)
         nativePages[fileType.name] = page
         return page
     }
