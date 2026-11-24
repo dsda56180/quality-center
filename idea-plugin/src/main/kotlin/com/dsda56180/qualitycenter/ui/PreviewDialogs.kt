@@ -4,22 +4,30 @@ import com.dsda56180.qualitycenter.upgrade.SkippedUpgrade
 import com.dsda56180.qualitycenter.upgrade.UpgradeCandidate
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.openapi.ui.Splitter
 import com.intellij.openapi.ui.ValidationInfo
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.Color
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.BoxLayout
 import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
-import javax.swing.JScrollPane
 import javax.swing.JTable
 import javax.swing.JTextArea
+import javax.swing.JTextPane
 import javax.swing.table.AbstractTableModel
 import javax.swing.table.TableColumn
+import javax.swing.text.SimpleAttributeSet
+import javax.swing.text.StyleConstants
 
 data class DeepFixPreviewInfo(
     val label: String?,
@@ -54,7 +62,13 @@ private class DeepFixPreviewDialog(
     private val info: DeepFixPreviewInfo
 ) : DialogWrapper(project, true) {
 
-    private val checkBoxes = mutableListOf<JCheckBox>()
+    private class Row(val path: String, val box: JCheckBox, val panel: JPanel)
+
+    private val rows = mutableListOf<Row>()
+    private val diffPane = JTextPane()
+    private val diffStyles = DiffStyles()
+    private val fileDiffs: Map<String, List<String>> = parsePatch(info.patchText)
+    private var selectedPath: String? = null
 
     init {
         title = info.label?.let { "深度修复预览：$it" } ?: "深度修复预览"
@@ -62,11 +76,11 @@ private class DeepFixPreviewDialog(
         setOKButtonText("应用改动")
     }
 
-    fun selectedFiles(): List<String> = checkBoxes.filter { it.isSelected }.map { it.text }
+    fun selectedFiles(): List<String> = rows.filter { it.box.isSelected }.map { it.path }
 
     override fun createCenterPanel(): JComponent {
         val root = JPanel(BorderLayout(0, JBUI.scale(8)))
-        root.preferredSize = Dimension(JBUI.scale(760), JBUI.scale(520))
+        root.preferredSize = Dimension(JBUI.scale(980), JBUI.scale(680))
 
         val summary = JTextArea().apply {
             isEditable = false
@@ -83,46 +97,167 @@ private class DeepFixPreviewDialog(
                 if (info.advice.isNotEmpty()) {
                     appendLine("推荐（未启用）：${info.advice.joinToString("；")}")
                 }
-                appendLine("共 ${info.files.size} 个文件将被修改，取消勾选可跳过对应文件。")
+                appendLine("共 ${info.files.size} 个文件将被修改：单击文件名查看该文件的 diff，勾选框控制是否应用。")
             }
         }
         root.add(summary, BorderLayout.NORTH)
 
         val filesPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = JBUI.Borders.empty(4, 8)
+            border = JBUI.Borders.empty(2, 4)
+            isOpaque = true
+            background = root.background
         }
+        val baseBackground = root.background
         info.files.forEach { file ->
-            val box = JCheckBox(file, true)
-            checkBoxes += box
-            filesPanel.add(box)
+            val checkBox = JCheckBox("", true).apply { isOpaque = false }
+            val label = JLabel(file).apply {
+                font = JBUI.Fonts.smallFont()
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                toolTipText = file
+            }
+            val rowPanel = JPanel(BorderLayout(JBUI.scale(4), 0)).apply {
+                isOpaque = true
+                background = baseBackground
+                border = JBUI.Borders.empty(2, 2)
+                add(checkBox, BorderLayout.WEST)
+                add(label, BorderLayout.CENTER)
+            }
+            val row = Row(file, checkBox, rowPanel)
+            rows += row
+            val onClick = object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) = selectRow(row, baseBackground)
+            }
+            label.addMouseListener(onClick)
+            rowPanel.addMouseListener(onClick)
+            filesPanel.add(rowPanel)
         }
-        val filesScroll = JBScrollPane(filesPanel).apply {
-            preferredSize = Dimension(JBUI.scale(760), JBUI.scale(180))
-        }
-        root.add(filesScroll, BorderLayout.CENTER)
 
-        val patchText = info.patchText?.lines()?.take(400)?.joinToString("\n")
-        if (!patchText.isNullOrBlank()) {
-            val patch = JTextArea(patchText).apply {
-                isEditable = false
-                font = JBUI.Fonts.create("JetBrains Mono", 12)
-            }
-            val patchScroll = JBScrollPane(patch).apply {
-                preferredSize = Dimension(JBUI.scale(760), JBUI.scale(220))
-            }
-            root.add(patchScroll, BorderLayout.SOUTH)
+        val filesScroll = thinScrollPane(filesPanel).apply {
+            preferredSize = Dimension(JBUI.scale(980), JBUI.scale(220))
         }
+
+        diffPane.apply {
+            isEditable = false
+            font = JBUI.Fonts.create("JetBrains Mono", 12)
+            background = root.background
+            border = JBUI.Borders.empty(4, 6)
+        }
+        val diffScroll = thinScrollPane(diffPane).apply {
+            preferredSize = Dimension(JBUI.scale(980), JBUI.scale(300))
+        }
+
+        val split = Splitter(true)
+        split.proportion = 0.38f
+        split.setShowDividerControls(false)
+        split.setShowDividerIcon(false)
+        split.firstComponent = filesScroll
+        split.secondComponent = diffScroll
+
+        val hint = JLabel("单击文件可查看该文件的代码变更，绿色为新增、红色为删除")
+        hint.font = JBUI.Fonts.smallFont()
+        hint.foreground = MUTED_FOREGROUND
+
+        val center = JPanel(BorderLayout(0, JBUI.scale(4)))
+        center.add(split, BorderLayout.CENTER)
+        center.add(hint, BorderLayout.SOUTH)
+        root.add(center, BorderLayout.CENTER)
+
+        info.files.firstOrNull()?.let { selectRow(rows.first(), baseBackground) }
         return root
     }
 
+    private fun selectRow(row: Row, baseBackground: java.awt.Color) {
+        if (selectedPath == row.path) return
+        selectedPath = row.path
+        rows.forEach { other ->
+            other.panel.background = if (other.path == row.path) ROW_SELECTED_BACKGROUND else baseBackground
+            other.panel.repaint()
+        }
+        renderDiff(row.path)
+    }
+
+    private fun renderDiff(path: String) {
+        val doc = diffPane.styledDocument
+        doc.remove(0, doc.length)
+        val lines = fileDiffs.entries
+            .firstOrNull { (key, _) ->
+                key == path || key.endsWith("/$path") || path.endsWith("/$key")
+            }?.value
+        if (lines.isNullOrEmpty()) {
+            insert(doc, "该文件在当前补丁中没有可显示的差异片段。\n", diffStyles.meta)
+            diffPane.caretPosition = 0
+            return
+        }
+        val added = lines.count { it.startsWith("+") && !it.startsWith("+++") }
+        val removed = lines.count { it.startsWith("-") && !it.startsWith("---") }
+        insert(doc, "$path   +$added / -$removed\n\n", diffStyles.header)
+        lines.forEach { line ->
+            val style = when {
+                line.startsWith("@@") -> diffStyles.hunk
+                line.startsWith("diff ") || line.startsWith("index ") ||
+                    line.startsWith("---") || line.startsWith("+++") -> diffStyles.meta
+                line.startsWith("+") -> diffStyles.add
+                line.startsWith("-") -> diffStyles.del
+                else -> diffStyles.normal
+            }
+            insert(doc, line + "\n", style)
+        }
+        diffPane.caretPosition = 0
+    }
+
+    private fun insert(doc: javax.swing.text.StyledDocument, text: String, style: javax.swing.text.AttributeSet) {
+        try {
+            doc.insertString(doc.length, text, style)
+        } catch (_: javax.swing.text.BadLocationException) {
+        }
+    }
+
     override fun doValidate(): ValidationInfo? {
-        if (checkBoxes.none { it.isSelected }) {
+        if (rows.none { it.box.isSelected }) {
             return ValidationInfo("请至少选择一个要应用改动的文件", null)
         }
         return null
     }
 }
+
+/** diff 逐行着色：新增绿、删除红、hunk 蓝、文件头灰 */
+private class DiffStyles {
+    private val font = JBUI.Fonts.create("JetBrains Mono", 12)
+
+    val normal = style(JBColor(Color(0x24292F), Color(0xD4D9DF)))
+    val add = style(JBColor(Color(0x1B7F3B), Color(0x6EDC93)))
+    val del = style(JBColor(Color(0xB4261C), Color(0xFF8078)))
+    val hunk = style(JBColor(Color(0x2C6BE0), Color(0x7FA8FF)))
+    val meta = style(MUTED_FOREGROUND)
+    val header = style(JBColor(Color(0x1F2A33), Color(0xE6E9EC)), bold = true)
+
+    private fun style(fg: Color, bold: Boolean = false): SimpleAttributeSet = SimpleAttributeSet().apply {
+        StyleConstants.setForeground(this, fg)
+        StyleConstants.setFontFamily(this, font.family)
+        StyleConstants.setFontSize(this, font.size)
+        StyleConstants.setBold(this, bold)
+    }
+}
+
+/** 把 git diff 按文件切开，便于逐个文件预览 */
+private fun parsePatch(patch: String?): Map<String, List<String>> {
+    if (patch.isNullOrBlank()) return emptyMap()
+    val result = LinkedHashMap<String, MutableList<String>>()
+    var current: MutableList<String>? = null
+    patch.lineSequence().forEach { line ->
+        if (line.startsWith("diff --git ")) {
+            val path = line.split(" ").lastOrNull()?.removePrefix("b/") ?: line
+            current = result.getOrPut(path) { mutableListOf() }
+            current?.add(line)
+        } else {
+            current?.add(line)
+        }
+    }
+    return result
+}
+
+private val ROW_SELECTED_BACKGROUND = JBColor(Color(0xE8F0FE), Color(0x2E3540))
 
 /** 依赖升级预览：勾选依赖、可改目标版本，确认后写入 pom */
 fun showUpgradePreview(
