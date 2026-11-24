@@ -26,14 +26,13 @@ import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.JMenuItem
+import javax.swing.JPopupMenu
 import javax.swing.JScrollPane
 import javax.swing.JTable
 import javax.swing.JTextArea
-import javax.swing.JTextPane
 import javax.swing.table.AbstractTableModel
 import javax.swing.table.TableColumn
-import javax.swing.text.SimpleAttributeSet
-import javax.swing.text.StyleConstants
 
 data class DeepFixPreviewInfo(
     val label: String?,
@@ -69,24 +68,32 @@ private class DeepFixPreviewDialog(
 ) : DialogWrapper(project, true) {
 
     private class Row(val path: String, val box: JCheckBox, val panel: JPanel)
-    private class Rendered(
-        val primary: javax.swing.text.StyledDocument,
-        val secondary: javax.swing.text.StyledDocument?
+    private class RenderData(
+        val unified: List<DiffLine>,
+        val left: List<DiffLine>,
+        val right: List<DiffLine>,
+        val added: Int,
+        val removed: Int
     )
 
     private val rows = mutableListOf<Row>()
     private val fileDiffs: Map<String, List<String>> = parsePatch(info.patchText)
-    private val styles = DiffStyles()
+    private val monoFont: Font = JBUI.Fonts.create("JetBrains Mono", 12)
     private var selectedPath: String? = null
     private var baseBackground: Color? = null
-    /** 渲染令牌：切文件/切模式时递增，丢弃过期的后台结果 */
+    /** 渲染令牌：切文件时递增，丢弃过期的后台结果 */
     private var renderToken = 0
-    /** 已渲染过的文档缓存（key = 路径|模式），来回切文件不用重复构建 */
-    private val renderCache = LinkedHashMap<String, Rendered>()
+    /** 预处理结果缓存（key = 路径）：统一 / 并排共用同一份行数据，切模式零成本 */
+    private val dataCache = LinkedHashMap<String, RenderData>()
 
-    private val unifiedPane = DiffTextPane()
-    private val leftPane = DiffTextPane()
-    private val rightPane = DiffTextPane()
+    private val unifiedList = DiffRowList()
+    private val leftList = DiffRowList()
+    private val rightList = DiffRowList()
+    private val pathLabel = JLabel(" ").apply {
+        font = JBUI.Fonts.smallFont()
+        foreground = MUTED_FOREGROUND
+        border = JBUI.Borders.empty(2, 6, 2, 6)
+    }
     private val diffCards = JPanel(CardLayout())
     private val modeSwitch = ModeSwitch(listOf("统一", "并排")) { index -> applyMode(index == 1) }
 
@@ -102,7 +109,10 @@ private class DeepFixPreviewDialog(
         val root = JPanel(BorderLayout(0, JBUI.scale(6)))
         root.preferredSize = Dimension(JBUI.scale(1040), JBUI.scale(720))
         baseBackground = root.background
-        listOf(unifiedPane, leftPane, rightPane).forEach { it.background = root.background }
+        listOf(unifiedList, leftList, rightList).forEach {
+            it.font = monoFont
+            it.background = root.background
+        }
 
         val summary = JTextArea().apply {
             isEditable = false
@@ -164,13 +174,17 @@ private class DeepFixPreviewDialog(
         }
 
         // 统一视图：单栏 +/- 着色
-        val unifiedScroll = thinScrollPane(unifiedPane)
+        val unifiedScroll = thinScrollPane(unifiedList)
         diffCards.add(unifiedScroll, CARD_UNIFIED)
 
-        // 并排视图：左「修改前」、右「修改后」，滚动联动
-        val leftScroll = thinScrollPane(leftPane)
-        val rightScroll = thinScrollPane(rightPane)
+        // 并排视图：左「修改前」、右「修改后」，固定行高保证两栏逐行对齐，滚动与选中联动
+        val leftScroll = thinScrollPane(leftList)
+        val rightScroll = thinScrollPane(rightList)
         linkScroll(leftScroll, rightScroll)
+        linkSelection()
+        installCopyMenu(unifiedList)
+        installCopyMenu(leftList)
+        installCopyMenu(rightList)
         val sidePanel = JPanel(java.awt.GridLayout(1, 2, JBUI.scale(4), 0))
         sidePanel.add(sideBlock("修改前", leftScroll))
         sidePanel.add(sideBlock("修改后", rightScroll))
@@ -184,6 +198,7 @@ private class DeepFixPreviewDialog(
         modeBar.add(modeSwitch, BorderLayout.EAST)
 
         val diffBlock = JPanel(BorderLayout())
+        diffBlock.add(pathLabel, BorderLayout.NORTH)
         diffBlock.add(diffCards, BorderLayout.CENTER)
 
         val split = Splitter(true)
@@ -216,10 +231,9 @@ private class DeepFixPreviewDialog(
 
     private fun applyMode(side: Boolean) {
         (diffCards.layout as CardLayout).show(diffCards, if (side) CARD_SIDE_BY_SIDE else CARD_UNIFIED)
-        renderActive()
+        // 两种视图的数据在切文件时已一起准备好，切模式只需换卡片，不做任何重建
+        if (unifiedList.model.size == 0) renderActive()
     }
-
-    private fun sideBySide(): Boolean = modeSwitch.selectedIndex == 1
 
     private fun showFile(path: String) {
         if (selectedPath == path) return
@@ -238,117 +252,148 @@ private class DeepFixPreviewDialog(
         ?.value
 
     /**
-     * 切文件 / 切模式时，先在后台线程把整篇文档拼好，再回到 EDT 一次性替换。
-     * 之前是在 EDT 上逐行 insertString，上千行会不断触发文档事件与重排，表现为点击卡顿。
+     * 切文件时在后台线程把「统一 / 并排」两套行数据一次性准备好（同一份模型，两边内容必然一致），
+     * 回到 EDT 只把行列表塞给 JList。JList 是固定行高、只画可见行，不需要文档排版，
+     * 因此不再出现"点了要等一下"的卡顿。
      */
     private fun renderActive() {
         val path = selectedPath ?: return
-        val lines = diffLines(path)
-        val side = sideBySide()
         val token = ++renderToken
+        val cached = synchronized(dataCache) { dataCache[path] }
+        if (cached != null) {
+            applyRender(path, cached)
+            return
+        }
+        val lines = diffLines(path)
         val app = com.intellij.openapi.application.ApplicationManager.getApplication()
         app.executeOnPooledThread {
-            val cacheKey = "$path|$side"
-            val rendered = try {
-                synchronized(renderCache) {
-                    renderCache[cacheKey] ?: run {
-                        val fresh = if (side) buildSideBySide(lines) else buildUnified(path, lines)
-                        if (renderCache.size >= 8) {
-                            val oldest = renderCache.keys.firstOrNull()
-                            if (oldest != null) renderCache.remove(oldest)
-                        }
-                        renderCache[cacheKey] = fresh
-                        fresh
-                    }
-                }
+            val data = try {
+                buildRenderData(lines)
             } catch (_: Throwable) {
-                null
+                buildRenderData(emptyList())
             }
-            // 预览是模态对话框：从后台线程直接 invokeLater 用的是 NON_MODAL 模态状态，
-            // 会被模态对话框挡在队列里不执行（表现为面板一直空白），必须用 ModalityState.any()
+            synchronized(dataCache) {
+                if (dataCache.size >= 30) dataCache.keys.firstOrNull()?.let { dataCache.remove(it) }
+                dataCache[path] = data
+            }
+            // 预览是模态对话框：后台线程直接 invokeLater 用的是 NON_MODAL 模态状态，会被挡在队列里，
+            // 表现为面板一直空白，必须用 ModalityState.any()
             app.invokeLater({
                 if (token != renderToken) return@invokeLater
-                val result = rendered ?: (if (side) buildSideBySide(lines) else buildUnified(path, lines))
-                if (side) {
-                    leftPane.document = result.primary
-                    rightPane.document = result.secondary ?: javax.swing.text.DefaultStyledDocument()
-                    leftPane.caretPosition = 0
-                    rightPane.caretPosition = 0
-                } else {
-                    unifiedPane.document = result.primary
-                    unifiedPane.caretPosition = 0
-                }
+                applyRender(path, data)
             }, com.intellij.openapi.application.ModalityState.any())
         }
     }
 
-    private fun buildUnified(path: String, lines: List<String>?): Rendered {
-        val doc = javax.swing.text.DefaultStyledDocument()
-        if (lines.isNullOrEmpty()) {
-            insert(doc, "该文件在当前补丁中没有可显示的差异片段。\n", styles.meta)
-            return Rendered(doc, null)
-        }
-        val added = lines.count { it.startsWith("+") && !it.startsWith("+++") }
-        val removed = lines.count { it.startsWith("-") && !it.startsWith("---") }
-        insert(doc, "$path   +$added / -$removed\n\n", styles.header)
-        lines.take(MAX_DIFF_LINES).forEach { line ->
-            val style = when {
-                line.startsWith("@@") -> styles.hunk
-                line.startsWith("diff ") || line.startsWith("index ") ||
-                    line.startsWith("---") || line.startsWith("+++") -> styles.meta
-                line.startsWith("+") -> styles.add
-                line.startsWith("-") -> styles.del
-                else -> styles.normal
-            }
-            insert(doc, clipLine(line) + "\n", style)
-        }
-        if (lines.size > MAX_DIFF_LINES) {
-            insert(doc, "…… 还有 ${lines.size - MAX_DIFF_LINES} 行未显示\n", styles.meta)
-        }
-        return Rendered(doc, null)
+    private fun applyRender(path: String, data: RenderData) {
+        pathLabel.text = "${path}    +${data.added} / -${data.removed}"
+        val width = listWidth(data)
+        unifiedList.showRows(data.unified, width)
+        leftList.showRows(data.left, width)
+        rightList.showRows(data.right, width)
     }
 
-    private fun buildSideBySide(lines: List<String>?): Rendered {
-        val leftDoc = javax.swing.text.DefaultStyledDocument()
-        val rightDoc = javax.swing.text.DefaultStyledDocument()
-        if (lines.isNullOrEmpty()) {
-            insert(leftDoc, "该文件在当前补丁中没有可显示的差异片段。\n", styles.meta)
-            return Rendered(leftDoc, rightDoc)
-        }
-        val diffRows = buildDiffRows(lines).take(MAX_DIFF_ROWS)
-        diffRows.forEach { row ->
-            val left = row.left
-            val right = row.right
-            // 并排视图也保留 +/- 前缀：左侧删除行 "-"，右侧新增行 "+"，未变化的行不加
-            val leftText = when {
-                left == null -> ""
-                right == null -> "-" + clipLine(left)
-                else -> clipLine(left)
-            }
-            val rightText = when {
-                right == null -> ""
-                left == null -> "+" + clipLine(right)
-                else -> clipLine(right)
-            }
-            val leftStyle = when {
-                left == null -> styles.blank
-                right == null -> styles.removedLine
-                else -> styles.normal
-            }
-            val rightStyle = when {
-                right == null -> styles.blank
-                left == null -> styles.addedLine
-                else -> styles.normal
-            }
-            insert(leftDoc, leftText + "\n", leftStyle)
-            insert(rightDoc, rightText + "\n", rightStyle)
-        }
-        if (diffRows.size >= MAX_DIFF_ROWS) {
-            insert(leftDoc, "…… 内容过长，已截断\n", styles.meta)
-            insert(rightDoc, "…… 内容过长，已截断\n", styles.meta)
-        }
-        return Rendered(leftDoc, rightDoc)
+    /** 按最长一行估算列表宽度：只量一次字符宽度，避免 EDT 上逐行 stringWidth */
+    private fun listWidth(data: RenderData): Int {
+        var maxCols = 1
+        data.unified.forEach { maxCols = maxOf(maxCols, it.text.length) }
+        val charWidth = runCatching {
+            val image = java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+            val g = image.createGraphics()
+            g.font = monoFont
+            val w = g.fontMetrics.charWidth('M')
+            g.dispose()
+            w
+        }.getOrNull() ?: JBUI.scale(8)
+        return maxCols * maxOf(charWidth, 1) + JBUI.scale(24)
     }
+
+    /**
+     * 一次生成三种视图的行数据：
+     * - unified：全部补丁行，删除行 "-"、新增行 "+"
+     * - left / right：按行配对，行数完全相同（缺失侧填空行），因此逐行严格对齐
+     */
+    private fun buildRenderData(lines: List<String>?): RenderData {
+        val unified = ArrayList<DiffLine>()
+        val left = ArrayList<DiffLine>()
+        val right = ArrayList<DiffLine>()
+        if (lines.isNullOrEmpty()) {
+            val message = DiffLine("该文件在当前补丁中没有可显示的差异片段。", DiffKind.META)
+            unified += message
+            left += message
+            right += DiffLine("", DiffKind.BLANK)
+            return RenderData(unified, left, right, 0, 0)
+        }
+
+        var added = 0
+        var removed = 0
+        var truncated = false
+        val removedBuf = ArrayList<String>()
+        val addedBuf = ArrayList<String>()
+
+        fun flush() {
+            if (removedBuf.isEmpty() && addedBuf.isEmpty()) return
+            removedBuf.forEach { unified += DiffLine("-" + it, DiffKind.DELETE) }
+            addedBuf.forEach { unified += DiffLine("+" + it, DiffKind.ADD) }
+            val count = maxOf(removedBuf.size, addedBuf.size)
+            for (index in 0 until count) {
+                val old = removedBuf.getOrNull(index)
+                val new = addedBuf.getOrNull(index)
+                left += if (old != null) DiffLine("-" + old, DiffKind.DELETE) else DiffLine("", DiffKind.BLANK)
+                right += if (new != null) DiffLine("+" + new, DiffKind.ADD) else DiffLine("", DiffKind.BLANK)
+            }
+            removedBuf.clear()
+            addedBuf.clear()
+        }
+
+        fun addContext(text: String) {
+            flush()
+            val rendered = DiffLine(" " + text, DiffKind.CONTEXT)
+            unified += rendered
+            left += rendered
+            right += rendered
+        }
+
+        fun addBoth(text: String, kind: DiffKind) {
+            flush()
+            val rendered = DiffLine(text, kind)
+            unified += rendered
+            left += rendered
+            right += rendered
+        }
+
+        for ((index, raw) in lines.withIndex()) {
+            if (index >= MAX_DIFF_LINES) {
+                truncated = true
+                break
+            }
+            val line = prepare(raw)
+            when {
+                line.startsWith("diff ") || line.startsWith("index ") ||
+                    line.startsWith("---") || line.startsWith("+++") -> Unit
+                line.startsWith("@@") -> addBoth(line, DiffKind.HUNK)
+                line.startsWith("\\") -> addBoth(line, DiffKind.META)
+                line.startsWith("+") -> {
+                    added++
+                    addedBuf += clipLine(line.substring(1))
+                }
+                line.startsWith("-") -> {
+                    removed++
+                    removedBuf += clipLine(line.substring(1))
+                }
+                line.startsWith(" ") -> addContext(clipLine(line.substring(1)))
+                else -> addContext(clipLine(line))
+            }
+        }
+        flush()
+
+        if (truncated) {
+            addBoth("…… 内容过长，仅显示前 $MAX_DIFF_LINES 行", DiffKind.META)
+        }
+        return RenderData(unified, left, right, added, removed)
+    }
+
+    private fun prepare(line: String): String = line.replace("\t", "    ")
 
     private fun clipLine(line: String): String =
         if (line.length <= MAX_LINE_LENGTH) line else line.take(MAX_LINE_LENGTH) + " …"
@@ -365,15 +410,72 @@ private class DeepFixPreviewDialog(
                     guard = false
                 }
             }
+            from.horizontalScrollBar.addAdjustmentListener { e ->
+                if (guard) return@addAdjustmentListener
+                guard = true
+                try {
+                    to.horizontalScrollBar.value = e.value
+                } finally {
+                    guard = false
+                }
+            }
         }
         sync(a, b)
         sync(b, a)
     }
 
-    private fun insert(doc: javax.swing.text.StyledDocument, text: String, style: javax.swing.text.AttributeSet) {
-        try {
-            doc.insertString(doc.length, text, style)
-        } catch (_: javax.swing.text.BadLocationException) {
+    /** 并排模式下左右选中同一行，配色一致便于对照 */
+    private fun linkSelection() {
+        var guard = false
+        listOf(leftList, rightList).forEach { source ->
+            val target = if (source === leftList) rightList else leftList
+            source.addListSelectionListener {
+                if (guard || it.valueIsAdjusting) return@addListSelectionListener
+                val index = source.selectedIndex
+                if (index < 0 || index == target.selectedIndex) return@addListSelectionListener
+                guard = true
+                try {
+                    if (index < target.model.size) target.selectedIndex = index
+                } finally {
+                    guard = false
+                }
+            }
+        }
+    }
+
+    private fun installCopyMenu(list: DiffRowList) {
+        val menu = JPopupMenu()
+        val copyLine = JMenuItem("复制此行")
+        copyLine.addActionListener {
+            list.selectedValue?.let { copyToClipboard(it.text) }
+        }
+        val copyAll = JMenuItem("复制全部")
+        copyAll.addActionListener {
+            val builder = StringBuilder()
+            val model = list.model
+            for (index in 0 until model.size) {
+                if (builder.isNotEmpty()) builder.append('\n')
+                builder.append(model.getElementAt(index).text)
+            }
+            copyToClipboard(builder.toString())
+        }
+        menu.add(copyLine)
+        menu.add(copyAll)
+        list.componentPopupMenu = menu
+        list.addMouseListener(object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) {
+                if (e.isPopupTrigger) {
+                    val index = list.locationToIndex(e.point)
+                    if (index >= 0) list.selectedIndex = index
+                }
+            }
+        })
+    }
+
+    private fun copyToClipboard(text: String) {
+        runCatching {
+            java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                .setContents(java.awt.datatransfer.StringSelection(text), null)
         }
     }
 
@@ -387,93 +489,95 @@ private class DeepFixPreviewDialog(
     private companion object {
         const val CARD_UNIFIED = "unified"
         const val CARD_SIDE_BY_SIDE = "sideBySide"
-        const val MAX_DIFF_LINES = 1500
-        const val MAX_DIFF_ROWS = 1200
+        const val MAX_DIFF_LINES = 1200
         const val MAX_LINE_LENGTH = 400
     }
 }
 
-/** 不换行的等宽文本面板：避免长行折行导致大补丁渲染卡顿 */
-private class DiffTextPane : JTextPane() {
+/** diff 行的类型：决定前景色与底色 */
+private enum class DiffKind { CONTEXT, DELETE, ADD, HUNK, META, BLANK }
+
+private class DiffLine(val text: String, val kind: DiffKind)
+
+private fun diffForeground(kind: DiffKind): Color = when (kind) {
+    DiffKind.ADD -> JBColor(Color(0x1B7F3B), Color(0x6EDC93))
+    DiffKind.DELETE -> JBColor(Color(0xB4261C), Color(0xFF8078))
+    DiffKind.HUNK -> JBColor(Color(0x2C6BE0), Color(0x7FA8FF))
+    DiffKind.META, DiffKind.BLANK -> MUTED_FOREGROUND
+    else -> JBColor(Color(0x24292F), Color(0xD4D9DF))
+}
+
+private fun diffBackground(kind: DiffKind, base: Color): Color = when (kind) {
+    DiffKind.ADD -> JBColor(Color(0xE8F5EC), Color(0x2C4235))
+    DiffKind.DELETE -> JBColor(Color(0xFBE7E7), Color(0x4A2727))
+    DiffKind.BLANK -> JBColor(Color(0xF4F5F7), Color(0x2A2C30))
+    DiffKind.HUNK -> JBColor(Color(0xEFF4FD), Color(0x252C38))
+    else -> base
+}
+
+private class DiffListModel(private val data: List<DiffLine>) : javax.swing.AbstractListModel<DiffLine>() {
+    override fun getSize(): Int = data.size
+    override fun getElementAt(index: Int): DiffLine = data[index]
+}
+
+/**
+ * 固定行高的差异列表：一行一个调色块、永不换行、只绘制可见行。
+ * 改用文本面板时每换一次文档都要在 EDT 上对上千个段落整体排版（点击卡顿的根源），
+ * 而且按宽折行会让左右两栏断行位置不同、逐行错位（"统一和并排内容不一致"的根源）。
+ */
+private class DiffRowList : javax.swing.JList<DiffLine>() {
+
+    private var preferredWidth = JBUI.scale(200)
+
     init {
-        isEditable = false
+        fixedCellHeight = JBUI.scale(19)
+        selectionMode = javax.swing.ListSelectionModel.SINGLE_SELECTION
         isOpaque = true
-        font = JBUI.Fonts.create("JetBrains Mono", 12)
-        border = JBUI.Borders.empty(4, 6)
-        margin = java.awt.Insets(0, 0, 0, 0)
+        cellRenderer = DiffCellRenderer()
     }
+
+    fun showRows(data: List<DiffLine>, width: Int) {
+        preferredWidth = width
+        model = DiffListModel(data)
+        clearSelection()
+        revalidate()
+        repaint()
+        scrollRectToVisible(java.awt.Rectangle(0, 0, 1, 1))
+    }
+
+    override fun getPreferredSize(): Dimension =
+        Dimension(preferredWidth, maxOf(model.size, 1) * fixedCellHeight + JBUI.scale(6))
 
     override fun getScrollableTracksViewportWidth(): Boolean = false
+
+    override fun getScrollableUnitIncrement(visibleRect: java.awt.Rectangle, orientation: Int, direction: Int): Int =
+        fixedCellHeight
 }
 
-/** 并排视图的一行：左为修改前、右为修改后，null 表示该侧为空行（占位对齐） */
-private class DiffRow(val left: String?, val right: String?)
+private class DiffCellRenderer : javax.swing.ListCellRenderer<DiffLine> {
+    private val panel = JPanel(BorderLayout())
+    private val label = JLabel()
 
-/** 把 unified diff 切成左右可对齐的行组：连续 - 与连续 + 配对，上下文行两侧相同 */
-private fun buildDiffRows(lines: List<String>): List<DiffRow> {
-    val rows = mutableListOf<DiffRow>()
-    val removed = mutableListOf<String>()
-    val added = mutableListOf<String>()
-
-    fun flush() {
-        val count = maxOf(removed.size, added.size)
-        for (index in 0 until count) {
-            rows += DiffRow(removed.getOrNull(index), added.getOrNull(index))
-        }
-        removed.clear()
-        added.clear()
+    init {
+        panel.isOpaque = true
+        panel.border = JBUI.Borders.empty(0, 6, 0, 6)
+        label.isOpaque = false
+        panel.add(label, BorderLayout.CENTER)
     }
 
-    lines.forEach { line ->
-        when {
-            line.startsWith("+") && !line.startsWith("+++") -> added += line.substring(1)
-            line.startsWith("-") && !line.startsWith("---") -> removed += line.substring(1)
-            line.startsWith("diff ") || line.startsWith("index ") ||
-                line.startsWith("---") || line.startsWith("+++") ||
-                line.startsWith("@@") || line.startsWith("\\") -> flush()
-            line.startsWith(" ") -> {
-                flush()
-                val text = line.substring(1)
-                rows += DiffRow(text, text)
-            }
-            line.isEmpty() -> {
-                flush()
-                rows += DiffRow("", "")
-            }
-            else -> {
-                flush()
-                rows += DiffRow(line, line)
-            }
-        }
-    }
-    flush()
-    return rows
-}
-
-/** diff 逐行着色：新增绿、删除红、hunk 蓝、文件头灰 */
-private class DiffStyles {
-    private val font = JBUI.Fonts.create("JetBrains Mono", 12)
-
-    val normal = style(JBColor(Color(0x24292F), Color(0xD4D9DF)))
-    val add = style(JBColor(Color(0x1B7F3B), Color(0x6EDC93)))
-    val del = style(JBColor(Color(0xB4261C), Color(0xFF8078)))
-    val hunk = style(JBColor(Color(0x2C6BE0), Color(0x7FA8FF)))
-    val meta = style(MUTED_FOREGROUND)
-    val header = style(JBColor(Color(0x1F2A33), Color(0xE6E9EC)), bold = true)
-    val removedLine = style(JBColor(Color(0xB4261C), Color(0xFF8078)), background = JBColor(Color(0xFBE7E7), Color(0x4A2727)))
-    val addedLine = style(JBColor(Color(0x1B7F3B), Color(0x6EDC93)), background = JBColor(Color(0xE8F5EC), Color(0x2C4235)))
-    val blank = style(JBColor(Color(0x9AA1A9), Color(0x4B5058)), background = JBColor(Color(0xF4F5F7), Color(0x2A2C30)))
-
-    private fun style(
-        fg: Color,
-        bold: Boolean = false,
-        background: Color? = null
-    ): SimpleAttributeSet = SimpleAttributeSet().apply {
-        StyleConstants.setForeground(this, fg)
-        StyleConstants.setFontFamily(this, font.family)
-        StyleConstants.setFontSize(this, font.size)
-        StyleConstants.setBold(this, bold)
-        if (background != null) StyleConstants.setBackground(this, background)
+    override fun getListCellRendererComponent(
+        list: javax.swing.JList<out DiffLine>,
+        value: DiffLine?,
+        index: Int,
+        isSelected: Boolean,
+        cellHasFocus: Boolean
+    ): java.awt.Component {
+        val kind = value?.kind ?: DiffKind.CONTEXT
+        panel.background = if (isSelected) ROW_SELECTED_BACKGROUND else diffBackground(kind, list.background)
+        label.font = list.font
+        label.foreground = diffForeground(kind)
+        label.text = value?.text ?: ""
+        return panel
     }
 }
 
