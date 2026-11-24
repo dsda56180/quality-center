@@ -1,0 +1,10 @@
+{
+  "id": "ast-sql-append-chain",
+  "title": "链式 append（含直接塞进 executeQuery 的 StringBuilder）拼 SQL",
+  "layer": "code",
+  "cwe": "CWE-89",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_SQL_STRING_CONCAT"], "mustNotFire": [] },
+  "target": { "rules": ["AST_SQL_STRING_CONCAT"], "owner": "astgrep", "status": "covered" }
+}

@@ -7,7 +7,7 @@
 
 - **代码层**（Java 源码 / 字节码）：由 `SpotBugs + FindSecBugs 1.14`（144 个 pattern）承担，`PERMISSIVE_CORS`、`SPRING_CSRF_*` 等由字节码 + Spring 语义检测。
 - **源码语义层**（Java AST + 模板）：由 `astgrep` 承担（`@ast-grep/napi` + `@ast-grep/lang-java`），用于「方法链 + 字符串字面量」这类字节码会丢失语义、正则又容易误报的规则；当前 12 条规则（含 Thymeleaf / JSP 未转义输出），全部有正例/反例靶场。
-- **配置层**（`application*.yml/yaml/properties`、`bootstrap*.yml`、MyBatis Mapper XML）：由内置扫描器 `qcsec` 承担，把配置拍平成「键路径 + 值 + 行号」或按 XML 行号定位，支持跨键组合判断（Druid 面板开启但未设口令这类），不依赖任何外部二进制。当前 18 条配置规则 + 2 条 Mapper 规则，全部实现且有靶场。
+- **配置层**（`application*.yml/yaml/properties`、`bootstrap*.yml`、MyBatis Mapper XML）：由内置扫描器 `qcsec` 承担，把配置拍平成「键路径 + 值 + 行号」或按 XML 行号定位，支持跨键组合判断（Druid 面板开启但未设口令这类），不依赖任何外部二进制。当前 20 条配置规则 + 2 条 Mapper 规则，全部实现且有靶场。
 - **依赖层**：`Trivy --scanners vuln`，按依赖坐标查漏洞库（CVE），只能回答"这个版本有没有已知漏洞"。
 - 覆盖度不是承诺"100%"，而是：清单条目 → 规则 ID → fixture 用例，一一对应，可跑可查；缺口在表里写明。
 
@@ -63,8 +63,10 @@
 | Kafka SASL JAAS 里写死明文口令 | 798 | `SEC_MQ_SASL_PLAINTEXT` | 已覆盖 | `middleware-config-risk` / `middleware-config-hardened` |
 | Nacos token secret key 为空或官方示例密钥 | 1392 | `SEC_NACOS_TOKEN_SECRET_KEY`（`nacos.core.auth.*.token.secret.key`，空值、`SecretKey0123456789…`、`nacos/secret/changeme` 都算未更换） | 已覆盖 | `nacos-token-default` / `nacos-token-hardened` |
 | Spring Cloud Gateway actuator 端点开启 | 497 | `SEC_ACTUATOR_GATEWAY_EXPOSED`（`/actuator/gateway/routes` 泄露路由，refresh 可触发刷新） | 已覆盖 | `actuator-gateway-exposed` / `actuator-gateway-hardened` |
-| 上传文件名直接拼落盘路径（路径穿越） | 22 | `AST_PATH_TRAVERSAL_UPLOAD`（astgrep：`getOriginalFilename()` 出现在 `new File` / `Files.write` / `transferTo` 等落盘调用里，且未用 `FilenameUtils.getName` / `getFileName` 收敛） | 已覆盖 | `ast-upload-path-traversal` / `ast-upload-path-hardened` |
-| SQL 由字符串拼接/格式化构造后执行 | 89 | `AST_SQL_STRING_CONCAT`（astgrep：`+` 拼接、`String.format` 的 SQL 模板带非字面量参数、`StringBuilder` 逐段 append 后直接执行） | 已覆盖 | `ast-sql-string-concat` / `ast-sql-format-building` / `ast-sql-building-hardened` |
+| JDBC 连接串关闭 TLS（`useSSL=false` / `sslMode=DISABLED`） | 319 | `SEC_DATASOURCE_DISABLED_SSL` | 已覆盖 | `datasource-ssl-disabled` / `datasource-ssl-hardened` |
+| Actuator 全暴露且与应用共用端口（管理面未隔离） | 668 | `SEC_MANAGEMENT_PORT_SHARED`（要求 `exposure.include: *` 且未配 `management.server.port`） | 已覆盖 | `management-port-shared` / `management-port-isolated` |
+| 上传文件名直接或经局部变量中转拼落盘路径（路径穿越） | 22 | `AST_PATH_TRAVERSAL_UPLOAD`（astgrep：`getOriginalFilename()` 或其同方法局部变量出现在 `new File` / `Files.write` / `transferTo` 等落盘调用里，且未用 `FilenameUtils.getName` / `getFileName` 收敛） | 已覆盖 | `ast-upload-path-traversal` / `ast-upload-path-relay` / `ast-upload-path-hardened` |
+| SQL 由字符串拼接/格式化构造后执行 | 89 | `AST_SQL_STRING_CONCAT`（astgrep：`+` 拼接、`String.format` 的 SQL 模板带非字面量参数、`StringBuilder` 逐段或链式 `append`（含直接塞进执行调用）后执行） | 已覆盖 | `ast-sql-string-concat` / `ast-sql-format-building` / `ast-sql-append-chain` / `ast-sql-building-hardened` |
 | 关闭 HTTPS / `server.ssl.enabled: false` | 319 | `SEC_SSL_DISABLED` | 已覆盖 | `config-hardening-mixed` |
 
 ## 接线现状与局限
@@ -80,4 +82,4 @@ FindSecBugs 必须写进 pom 的 `<build><plugins>` 才生效（`spotbugs-maven-
 - **多模块工程**：只注入根 pom，SpotBugs 在子模块上运行时不会带上 FindSecBugs（后续计划改用 SpotBugs 独立发行版 + `-pluginList` 解决）。
 - 需要 `target/classes`（或先执行构建），否则 SpotBugs 直接跳过。
 - 配置层由 `qcsec` 覆盖，但它只解析配置文本、不做运行期验证：`${ENV}` 占位视为已外部化（`ENC(...)`、`{cipher}`、`sm:/vault:` 等密钥托管写法同样放行），不会跟进到实际生效值；profile 差异按文件计，不会合并 `application-*.yml` 的覆盖关系；`dev/local/test/it` profile 里的 Swagger、devtools 与「Redis 空口令」按正常用法忽略；Swagger 规则只认显式 enabled 开关，依赖引入但未显式配置时不会报；MyBatis 只认 XML 与注解里的 `${}`、`statementType="STATEMENT"`，白名单豁免要求 `<if test>` 里对同一表达式做字面量 `==`/`eq` 比较且不与其他变量比较，写成 `x > 'a'` 之类范围判断仍会报。
-- 语义层由 `astgrep` 覆盖，局限是：只解析 Java 源码（不处理 Kotlin / Groovy / 编译产物）；不解析 Spring 继承与 `@Configuration` 装配关系，`/actuator` 这类路径靠字面量匹配；`anyRequest()` / 匹配器判断只看同一条方法链，常量只展开一层（字段常量全文件、局部变量限同方法、`@Value` 只取默认值），跨类常量、配置中心实际取值、`@ConfigurationProperties` 绑定会漏报；`MultipartFile` 校验只看方法体内关键字，跨方法封装的校验会判为缺失；SQL 拼接覆盖 `+` 拼进执行调用、`String.format` 的 SQL 模板带变量参数、同一方法内 `StringBuilder/StringBuffer` append 后整体交给执行调用，但 `String sql = ... + x` 再执行的变量中转、跨方法的 builder、以及先 `append` 再 `replace` 的写法会漏报；路径穿越只认 `getOriginalFilename()` 直接出现在落盘调用里的写法，先存进变量再传递的会漏报；`@CrossOrigin` 只认注解本身，不合并全局 CORS 配置；SSRF 与命令执行只放行字面量参数，常量中转会报（可用 `baseline` 忽略）；XSS 覆盖 `getWriter()` 直连与同方法内 `PrintWriter` 变量中转，跨方法传递的输出流不在范围；模板层只认 Thymeleaf `th:utext` 与 JSP 里 `<%= %>` 直出请求参数，FreeMarker/Velocity 与自定义标签不在范围。以上都可用 `baseline` 忽略。
+- 语义层由 `astgrep` 覆盖，局限是：只解析 Java 源码（不处理 Kotlin / Groovy / 编译产物）；不解析 Spring 继承与 `@Configuration` 装配关系，`/actuator` 这类路径靠字面量匹配；`anyRequest()` / 匹配器判断只看同一条方法链，常量只展开一层（字段常量全文件、局部变量限同方法、`@Value` 只取默认值），跨类常量、配置中心实际取值、`@ConfigurationProperties` 绑定会漏报；`MultipartFile` 校验只看方法体内关键字，跨方法封装的校验会判为缺失；SQL 拼接覆盖 `+` 拼进执行调用、`String.format` 的 SQL 模板带变量参数、同一方法内 `StringBuilder/StringBuffer` 逐段或链式 append（含直接塞进执行调用）后整体交给执行调用，但 `String sql = ... + x` 再执行的变量中转、跨方法的 builder、先 `append` 再 `replace` 的写法会漏报；路径穿越覆盖 `getOriginalFilename()` 直接出现在落盘调用、以及同方法内局部变量中转的写法，跨方法/字段中转和先做字符串替换再落盘的会漏报；`@CrossOrigin` 只认注解本身，不合并全局 CORS 配置；SSRF 与命令执行只放行字面量参数，常量中转会报（可用 `baseline` 忽略）；XSS 覆盖 `getWriter()` 直连与同方法内 `PrintWriter` 变量中转，跨方法传递的输出流不在范围；模板层只认 Thymeleaf `th:utext` 与 JSP 里 `<%= %>` 直出请求参数，FreeMarker/Velocity 与自定义标签不在范围。以上都可用 `baseline` 忽略。

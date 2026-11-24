@@ -1,0 +1,10 @@
+{
+  "id": "ast-upload-path-relay",
+  "title": "getOriginalFilename 先存局部变量，再拼落盘路径",
+  "layer": "code",
+  "cwe": "CWE-22",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_PATH_TRAVERSAL_UPLOAD"], "mustNotFire": [] },
+  "target": { "rules": ["AST_PATH_TRAVERSAL_UPLOAD"], "owner": "astgrep", "status": "covered" }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "datasource-ssl-hardened",
+  "title": "JDBC 开启 SSL 并校验证书（应不告警）",
+  "layer": "config",
+  "cwe": "CWE-319",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["SEC_DATASOURCE_DISABLED_SSL", "SEC_PLAINTEXT_PASSWORD_PROPERTY"] },
+  "target": { "rules": [], "owner": "qcsec", "status": "covered" }
+}

@@ -432,20 +432,43 @@ function checkSqlConcat(file: string, root: SgNode): Issue[] {
           bin.findAll({ rule: { kind: 'field_access' } }).length > 0
         );
       });
-    if (!concat) {
-      continue;
+    if (concat) {
+      issues.push(
+        makeIssue(
+          file,
+          call,
+          'AST_SQL_STRING_CONCAT',
+          'high',
+          'CWE-89',
+          `${name.text()}() 的 SQL 由字符串拼接构造，外部输入可直接改写语义（注入）`,
+          '改用 PreparedStatement 的 `?` 占位符 + setXxx 绑定参数，或 MyBatis 的 `#{}`；不要用 `+` 或 String.format 拼 SQL。'
+        )
+      );
     }
-    issues.push(
-      makeIssue(
-        file,
-        call,
-        'AST_SQL_STRING_CONCAT',
-        'high',
-        'CWE-89',
-        `${name.text()}() 的 SQL 由字符串拼接构造，外部输入可直接改写语义（注入）`,
-        '改用 PreparedStatement 的 `?` 占位符 + setXxx 绑定参数，或 MyBatis 的 `#{}`；不要用 `+` 或 String.format 拼 SQL。'
-      )
-    );
+
+    // 链式 builder 直接塞进执行调用：executeQuery(new StringBuilder("...").append(x).toString())
+    const builders = args
+      .findAll({ rule: { kind: 'object_creation_expression' } })
+      .filter((node) => /new\s+(java\.lang\.)?(StringBuilder|StringBuffer)/.test(node.text()));
+    if (builders.length > 0) {
+      const riskyAppend = args
+        .findAll({ rule: { kind: 'method_invocation' } })
+        .filter((node) => node.field('name')?.text() === 'append')
+        .some((node) => !/^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)$/.test(node.field('arguments')?.text() ?? ''));
+      if (riskyAppend) {
+        issues.push(
+          makeIssue(
+            file,
+            call,
+            'AST_SQL_STRING_CONCAT',
+            'high',
+            'CWE-89',
+            `${name.text()}() 的 SQL 由 StringBuilder/StringBuffer 链式 append 拼出，拼进来的变量可改写语句语义（注入）`,
+            '改用 PreparedStatement 占位符；动态片段（表名/排序）用白名单枚举校验，不要 append 外部输入。'
+          )
+        );
+      }
+    }
   }
 
   // String.format("... where id = %s", id)：格式串里是 SQL、参数来自变量，等价于拼接
@@ -520,7 +543,14 @@ function checkSqlConcat(file: string, root: SgNode): Issue[] {
       }
       const appends = body
         .findAll({ rule: { kind: 'method_invocation' } })
-        .filter((item) => item.field('name')?.text() === 'append' && (item.field('object')?.text() ?? '') === used);
+        .filter((item) => {
+          if (item.field('name')?.text() !== 'append') {
+            return false;
+          }
+          const receiver = item.field('object')?.text() ?? '';
+          // `sb.append(a)` 与链式 `sb.append(a).append(b)` 都要覆盖
+          return receiver === used || new RegExp(`^${used}\\b`).test(receiver);
+        });
       const risky = appends.some((item) => !literalArgs(item.field('arguments')?.text() ?? ''));
       if (!risky || appends.length === 0) {
         continue;
@@ -885,8 +915,37 @@ function checkJspOutput(file: string, text: string): Issue[] {
   return issues;
 }
 
-/** 规则 12：上传文件名直接参与构造落盘路径（路径穿越） */
+/** 规则 12：上传文件名直接或经局部变量中转参与构造落盘路径（路径穿越） */
 const PATH_GUARD = /FilenameUtils\.(getName|getBaseName)|Paths\.get[\s\S]*\.getFileName|getFileName\s*\(\)|UUID\.randomUUID|sanitizeFileName|normalize\s*\(/i;
+
+/** 同方法内由 `getOriginalFilename()` 直接赋值的局部变量（且未被收敛处理覆盖） */
+function taintedUploadNames(method: SgNode): string[] {
+  const body = method.field('body');
+  if (!body) {
+    return [];
+  }
+  const names: string[] = [];
+  for (const declaration of body.findAll({ rule: { kind: 'local_variable_declaration' } })) {
+    const declarator = declaration.field('declarator');
+    const name = declarator?.field('name')?.text();
+    const value = declarator?.field('value')?.text() ?? '';
+    if (name && /getOriginalFilename\s*\(/.test(value) && !PATH_GUARD.test(value)) {
+      names.push(name);
+    }
+  }
+  // 后续被重新赋值为收敛处理过的值（如 name = FilenameUtils.getName(name)）则移除
+  for (const assignment of body.findAll({ rule: { kind: 'assignment_expression' } })) {
+    if (!PATH_GUARD.test(assignment.text())) {
+      continue;
+    }
+    const left = assignment.field('left')?.text() ?? '';
+    const index = names.indexOf(left);
+    if (index >= 0) {
+      names.splice(index, 1);
+    }
+  }
+  return names;
+}
 
 function checkUploadPathTraversal(file: string, root: SgNode): Issue[] {
   const issues: Issue[] = [];
@@ -911,7 +970,21 @@ function checkUploadPathTraversal(file: string, root: SgNode): Issue[] {
   const seen = new Set<string>();
   for (const node of candidates) {
     const text = node.text();
-    if (!/getOriginalFilename\s*\(/.test(text) || PATH_GUARD.test(text)) {
+    if (PATH_GUARD.test(text)) {
+      continue;
+    }
+    let detail: string | undefined;
+    if (/getOriginalFilename\s*\(/.test(text)) {
+      detail = '上传文件的原始文件名（getOriginalFilename）直接用于构造落盘路径';
+    } else {
+      const method = climb(node, ['method_declaration', 'constructor_declaration']);
+      const tainted = method ? taintedUploadNames(method) : [];
+      const hit = tainted.find((item) => new RegExp(`\\b${item}\\b`).test(text));
+      if (hit) {
+        detail = `上传文件名经局部变量 ${hit} 中转后用于构造落盘路径`;
+      }
+    }
+    if (!detail) {
       continue;
     }
     const key = `${node.range().start.line}:${node.range().start.column}`;
@@ -926,7 +999,7 @@ function checkUploadPathTraversal(file: string, root: SgNode): Issue[] {
         'AST_PATH_TRAVERSAL_UPLOAD',
         'high',
         'CWE-22',
-        '上传文件的原始文件名（getOriginalFilename）直接用于构造落盘路径，可用 `../` 写到任意目录甚至覆盖文件',
+        `${detail}，可用 \`../\` 写到任意目录甚至覆盖文件`,
         '只取文件名部分（`FilenameUtils.getName` / `Path.getFileName`）并做允许字符白名单，落盘目录用服务端固定路径 + 随机文件名。'
       )
     );

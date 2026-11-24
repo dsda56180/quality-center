@@ -1,0 +1,10 @@
+{
+  "id": "management-port-isolated",
+  "title": "管理端点独立端口（应不告警）",
+  "layer": "config",
+  "cwe": "CWE-668",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["SEC_MANAGEMENT_PORT_SHARED"] },
+  "target": { "rules": [], "owner": "qcsec", "status": "covered" }
+}

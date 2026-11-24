@@ -7,7 +7,7 @@ public class SafeReportDao {
   public ResultSet query(Connection conn) throws Exception {
     String sql = String.format("select * from report where name = '%s'", "fixed");
     StringBuilder sb = new StringBuilder();
-    sb.append("select * from report order by id");
+    sb.append("select * from report").append(" where 1 = 1");
     return conn.createStatement().executeQuery(sb.toString());
   }
 }

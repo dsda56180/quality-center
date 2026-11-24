@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.26.0
+
+**把两条已有规则的数据流补上，再加两条配置组合。**
+
+- `AST_PATH_TRAVERSAL_UPLOAD` 支持同方法内局部变量中转：`String name = file.getOriginalFilename(); new File(dir, name)` 现在会报；如果同名变量被 `FilenameUtils.getName(...)` 重新赋值则放行
+- `AST_SQL_STRING_CONCAT` 覆盖链式 `append`：`sb.append("... ").append(orderBy)` 以及直接把 `new StringBuilder("...").append(name).toString()` 塞进 `executeQuery` 的写法
+- 新增 `SEC_DATASOURCE_DISABLED_SSL`：JDBC 连接串显式 `useSSL=false` / `sslMode=DISABLED` / `sslmode=disable`
+- 新增 `SEC_MANAGEMENT_PORT_SHARED`：`exposure.include: '*'` 且没配 `management.server.port`，管理面与业务共用端口
+- 反例靶场同步扩充：`ast-upload-path-hardened` 增加“变量 + FilenameUtils 收敛”的写法，`ast-sql-building-hardened` 增加“链式 append 全字面量”的写法，`management-port-isolated` 锁定独立端口不告警
+- 靶场新增 6 个用例，矩阵扩到 **57 个用例，PASS 57 / GAP 0 / FAIL 0**
+- 文档：`docs/RULES.md` 补 2 行、更新可变信息流局限，README/配置项说明同步为 20 条配置 + 2 条 Mapper + 12 条 AST
+
 ## 0.25.0
 
 **继续把「能检出来但不误报」的边界往外推：Druid 面板组合、上传路径穿越、SQL 的 format/append 写法。**

@@ -512,6 +512,38 @@ const RULES: RuleDef[] = [
         }))
   },
   {
+    id: 'SEC_DATASOURCE_DISABLED_SSL',
+    cwe: 'CWE-319',
+    match: (index) =>
+      index
+        .all()
+        .filter((entry) => /(^|\.)url$/i.test(entry.key) && /jdbc:/i.test(entry.value))
+        .filter((entry) => /useSSL\s*=\s*false|sslMode\s*=\s*DISABLED|sslmode\s*=\s*disable/i.test(entry.value))
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'medium' as Severity,
+          message: 'JDBC 连接串显式关闭了 TLS（useSSL=false / sslMode=DISABLED），数据库账号与业务数据在链路上明文传输',
+          advice: '打开 `useSSL=true&requireSSL=true`（或 `sslMode=VERIFY_CA`），并在数据库侧配置证书；内网也建议启用。'
+        }))
+  },
+  {
+    id: 'SEC_MANAGEMENT_PORT_SHARED',
+    cwe: 'CWE-668',
+    match: (index) => {
+      const exposure = index.byKeySuffix(/management\.endpoints\.web\.exposure\.include$/);
+      const fullyOpen = exposure.some((entry) => entry.value.trim() === '*');
+      if (!fullyOpen || index.byKeySuffix(/management\.server\.port$/).length > 0) {
+        return [];
+      }
+      return exposure.map((entry) => ({
+        line: entry.line,
+        severity: 'medium' as Severity,
+        message: 'Actuator 全端点暴露且与应用共用同一端口，管理面没有做端口隔离，业务入口被攻破即等于管理面暴露',
+        advice: '设置 `management.server.port`（或独立管理网卡）把管理端点隔离，并在网关层只对内网放行该端口。'
+      }));
+    }
+  },
+  {
     id: 'SEC_ACTUATOR_GATEWAY_EXPOSED',
     cwe: 'CWE-497',
     match: (index) =>

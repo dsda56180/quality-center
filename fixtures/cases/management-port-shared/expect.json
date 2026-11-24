@@ -1,0 +1,10 @@
+{
+  "id": "management-port-shared",
+  "title": "Actuator 全暴露且与应用共用端口，没有管理面隔离",
+  "layer": "config",
+  "cwe": "CWE-668",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_MANAGEMENT_PORT_SHARED"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_MANAGEMENT_PORT_SHARED"], "owner": "qcsec", "status": "covered" }
+}

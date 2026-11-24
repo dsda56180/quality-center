@@ -1,0 +1,10 @@
+{
+  "id": "datasource-ssl-disabled",
+  "title": "JDBC 连接串 useSSL=false，数据库链路明文传输",
+  "layer": "config",
+  "cwe": "CWE-319",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_DATASOURCE_DISABLED_SSL"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_DATASOURCE_DISABLED_SSL"], "owner": "qcsec", "status": "covered" }
+}
