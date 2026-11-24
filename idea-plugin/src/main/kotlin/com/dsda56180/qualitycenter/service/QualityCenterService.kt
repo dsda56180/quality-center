@@ -440,9 +440,24 @@ class QualityCenterService(val project: Project) : Disposable {
 
         executor.execute {
             try {
+                // 先确认这里确实是一个 Git 工作区，并把失败原因带出来（之前只报一句笼统文案，
+                // git 找不到、目录不是仓库、worktree 权限等都无法区分）
+                val inside = git(dir, listOf("rev-parse", "--is-inside-work-tree"))
+                if (inside.code != 0 || inside.stdout.trim() != "true") {
+                    val reason = (inside.stderr.ifBlank { inside.stdout }).trim().lineSequence().firstOrNull()
+                    notifyError(
+                        "深度修复需要在 Git 仓库中运行，便于失败时回滚。" +
+                            if (reason.isNullOrBlank()) "" else "（原因：$reason）"
+                    )
+                    return@execute
+                }
                 val status = git(dir, listOf("status", "--porcelain"))
                 if (status.code != 0) {
-                    notifyError("深度修复需要在 Git 仓库中运行，便于失败时回滚。")
+                    val reason = status.stderr.trim().lineSequence().firstOrNull()
+                    notifyError(
+                        "无法读取 Git 工作区状态，深度修复已中止。" +
+                            if (reason.isNullOrBlank()) "" else "（原因：$reason）"
+                    )
                     return@execute
                 }
                 val dirty = status.stdout.lines().count { it.isNotBlank() }
@@ -1149,8 +1164,13 @@ class QualityCenterService(val project: Project) : Disposable {
         }
     }
 
+    /** git 可执行文件只解析一次：PATH 不可靠时（IDEA 从裁剪环境启动）回退到常见安装目录 */
+    private val gitExe: String by lazy {
+        Exec.resolveBinary("git") ?: "git"
+    }
+
     private fun git(dir: File, args: List<String>, timeoutMs: Long = 30_000): Exec.Result =
-        Exec.run("git", args, dir, timeoutMs)
+        Exec.run(gitExe, args, dir, timeoutMs)
 
     private fun sourceEncoding(dir: File): String {
         val pom = File(dir, "pom.xml")

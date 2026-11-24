@@ -26,8 +26,12 @@ object Exec {
         env: Map<String, String> = emptyMap()
     ): Result {
         val line = (listOf(command) + args.map(::quote)).joinToString(" ")
+        // 不要用裸 "cmd.exe"：如果 IDEA 是从环境变量被裁剪过的父进程拉起的，PATH 可能不含 System32，
+        // ProcessBuilder 会直接 IOException，所有 git / mvn 调用都会莫名失败。
         val builder = if (isWindows()) {
-            ProcessBuilder("cmd.exe", "/d", "/s", "/c", line)
+            val comSpec = System.getenv("ComSpec")?.takeIf { File(it).exists() }
+                ?: "C:\\Windows\\System32\\cmd.exe"
+            ProcessBuilder(comSpec, "/d", "/s", "/c", line)
         } else {
             ProcessBuilder("/bin/sh", "-c", line)
         }
@@ -101,12 +105,26 @@ object Exec {
             return null
         }
         val candidates = mutableListOf<String>()
+        // 常见安装位置：Git for Windows 自带 git.exe，但默认不一定进 PATH
+        System.getenv("ProgramFiles")?.let {
+            candidates += File(it, "Git/cmd/$name.exe").path
+            candidates += File(it, "Git/bin/$name.exe").path
+        }
+        System.getenv("ProgramFiles(x86)")?.let {
+            candidates += File(it, "Git/cmd/$name.exe").path
+        }
         System.getenv("LOCALAPPDATA")?.let {
             candidates += File(it, "Microsoft/WinGet/Links/$name.exe").path
+            candidates += File(it, "Programs/Git/cmd/$name.exe").path
         }
         candidates += File("C:/ProgramData/chocolatey/bin/$name.exe").path
         System.getenv("USERPROFILE")?.let {
             candidates += File(it, "scoop/shims/$name.exe").path
+        }
+        // 绿色版 / 自定义目录（如 D:\Tools\Git）：逐盘扫常见位置
+        File.listRoots()?.forEach { root ->
+            candidates += File(root, "Tools/Git/cmd/$name.exe").path
+            candidates += File(root, "Git/cmd/$name.exe").path
         }
         return candidates.firstOrNull { File(it).exists() }
     }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.28
+
+- 修「深度修复需要在 Git 仓库中运行」误报：0.1.27 那次是由受限环境启动的 IDEA，进程 PATH 里没有 `D:\Tools\Git\cmd`，插件用裸 `git` 调用全部失败。现在 git / mvn 都先解析成绝对路径（PATH → Program Files\Git → 各盘 Tools\Git 等常见位置），并改用绝对路径的 `cmd.exe`（原先前 PATH 缺 System32 时连 shell 都起不来）
+- 报错文案带上真实原因（`rev-parse` 的结果 / git 的 stderr），不再是笼统一句话
+- `tools/install-plugin.ps1` 重启 IDEA 前会用注册表里的机器级 + 用户级 PATH 补齐环境变量，避免用受限 shell 安装时把 IDEA 带进残缺 PATH
+
 ## 0.1.27
 
 - 修复 0.1.26 预览变空白：`DiffContentFactory.create(文本, FileType)` 给的是**只读文档**，原地 `setText` 抛「试图修改只读文档」，内容不更新。改为自己用 `EditorFactory.createDocument` 建两个**可写**文档，再用 `create(project, document, virtualFile)` 包成 diff 内容——文档能改、语法高亮照旧、diff 视图照旧
