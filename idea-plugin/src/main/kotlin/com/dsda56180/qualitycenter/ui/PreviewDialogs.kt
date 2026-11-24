@@ -73,7 +73,8 @@ private class DeepFixPreviewDialog(
         val left: List<DiffLine>,
         val right: List<DiffLine>,
         val added: Int,
-        val removed: Int
+        val removed: Int,
+        val maxCols: Int
     )
 
     private val rows = mutableListOf<Row>()
@@ -214,6 +215,7 @@ private class DeepFixPreviewDialog(
         root.add(center, BorderLayout.CENTER)
 
         info.files.firstOrNull()?.let { showFile(it) }
+        prebuildAll()
         return root
     }
 
@@ -273,7 +275,7 @@ private class DeepFixPreviewDialog(
                 buildRenderData(emptyList())
             }
             synchronized(dataCache) {
-                if (dataCache.size >= 30) dataCache.keys.firstOrNull()?.let { dataCache.remove(it) }
+                if (dataCache.size >= 400) dataCache.keys.firstOrNull()?.let { dataCache.remove(it) }
                 dataCache[path] = data
             }
             // 预览是模态对话框：后台线程直接 invokeLater 用的是 NON_MODAL 模态状态，会被挡在队列里，
@@ -285,27 +287,41 @@ private class DeepFixPreviewDialog(
         }
     }
 
+    /** 对话框一打开就在后台把所有文件的行数据预处理好，之后点任何条目都是纯内存赋值 */
+    private fun prebuildAll() {
+        val pending = info.files.filter { synchronized(dataCache) { dataCache[it] } == null }
+        if (pending.isEmpty()) return
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        app.executeOnPooledThread {
+            pending.forEach { path ->
+                val data = try {
+                    buildRenderData(diffLines(path))
+                } catch (_: Throwable) {
+                    null
+                } ?: return@forEach
+                synchronized(dataCache) { dataCache[path] = data }
+            }
+        }
+    }
+
     private fun applyRender(path: String, data: RenderData) {
         pathLabel.text = "${path}    +${data.added} / -${data.removed}"
-        val width = listWidth(data)
+        val width = data.maxCols * charWidth + JBUI.scale(24)
         unifiedList.showRows(data.unified, width)
         leftList.showRows(data.left, width)
         rightList.showRows(data.right, width)
     }
 
-    /** 按最长一行估算列表宽度：只量一次字符宽度，避免 EDT 上逐行 stringWidth */
-    private fun listWidth(data: RenderData): Int {
-        var maxCols = 1
-        data.unified.forEach { maxCols = maxOf(maxCols, it.text.length) }
-        val charWidth = runCatching {
+    /** 等宽字体的字符宽度只量一次 */
+    private val charWidth: Int by lazy {
+        runCatching {
             val image = java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB)
             val g = image.createGraphics()
             g.font = monoFont
             val w = g.fontMetrics.charWidth('M')
             g.dispose()
             w
-        }.getOrNull() ?: JBUI.scale(8)
-        return maxCols * maxOf(charWidth, 1) + JBUI.scale(24)
+        }.getOrNull()?.takeIf { it > 0 } ?: JBUI.scale(8)
     }
 
     /**
@@ -322,25 +338,42 @@ private class DeepFixPreviewDialog(
             unified += message
             left += message
             right += DiffLine("", DiffKind.BLANK)
-            return RenderData(unified, left, right, 0, 0)
+            return RenderData(unified, left, right, 0, 0, message.text.length)
         }
 
         var added = 0
         var removed = 0
         var truncated = false
+        var maxCols = 1
         val removedBuf = ArrayList<String>()
         val addedBuf = ArrayList<String>()
 
+        fun track(line: DiffLine) {
+            maxCols = maxOf(maxCols, line.text.length)
+        }
+
         fun flush() {
             if (removedBuf.isEmpty() && addedBuf.isEmpty()) return
-            removedBuf.forEach { unified += DiffLine("-" + it, DiffKind.DELETE) }
-            addedBuf.forEach { unified += DiffLine("+" + it, DiffKind.ADD) }
+            removedBuf.forEach {
+                val line = DiffLine("-" + it, DiffKind.DELETE)
+                unified += line
+                track(line)
+            }
+            addedBuf.forEach {
+                val line = DiffLine("+" + it, DiffKind.ADD)
+                unified += line
+                track(line)
+            }
             val count = maxOf(removedBuf.size, addedBuf.size)
             for (index in 0 until count) {
                 val old = removedBuf.getOrNull(index)
                 val new = addedBuf.getOrNull(index)
-                left += if (old != null) DiffLine("-" + old, DiffKind.DELETE) else DiffLine("", DiffKind.BLANK)
-                right += if (new != null) DiffLine("+" + new, DiffKind.ADD) else DiffLine("", DiffKind.BLANK)
+                val leftLine = if (old != null) DiffLine("-" + old, DiffKind.DELETE) else DiffLine("", DiffKind.BLANK)
+                val rightLine = if (new != null) DiffLine("+" + new, DiffKind.ADD) else DiffLine("", DiffKind.BLANK)
+                left += leftLine
+                right += rightLine
+                track(leftLine)
+                track(rightLine)
             }
             removedBuf.clear()
             addedBuf.clear()
@@ -352,6 +385,7 @@ private class DeepFixPreviewDialog(
             unified += rendered
             left += rendered
             right += rendered
+            track(rendered)
         }
 
         fun addBoth(text: String, kind: DiffKind) {
@@ -360,6 +394,7 @@ private class DeepFixPreviewDialog(
             unified += rendered
             left += rendered
             right += rendered
+            track(rendered)
         }
 
         for ((index, raw) in lines.withIndex()) {
@@ -390,7 +425,7 @@ private class DeepFixPreviewDialog(
         if (truncated) {
             addBoth("…… 内容过长，仅显示前 $MAX_DIFF_LINES 行", DiffKind.META)
         }
-        return RenderData(unified, left, right, added, removed)
+        return RenderData(unified, left, right, added, removed, maxCols)
     }
 
     private fun prepare(line: String): String = line.replace("\t", "    ")
@@ -499,19 +534,29 @@ private enum class DiffKind { CONTEXT, DELETE, ADD, HUNK, META, BLANK }
 
 private class DiffLine(val text: String, val kind: DiffKind)
 
+/** 颜色只创建一次：JBColor 每创建一次都会登记进全局主题更新列表，放在绘制回调里会拖慢滚动 */
+private val DIFF_TEXT = JBColor(Color(0x24292F), Color(0xD4D9DF))
+private val DIFF_ADD_TEXT = JBColor(Color(0x1B7F3B), Color(0x6EDC93))
+private val DIFF_DEL_TEXT = JBColor(Color(0xB4261C), Color(0xFF8078))
+private val DIFF_HUNK_TEXT = JBColor(Color(0x2C6BE0), Color(0x7FA8FF))
+private val DIFF_ADD_BACKGROUND = JBColor(Color(0xE8F5EC), Color(0x2C4235))
+private val DIFF_DEL_BACKGROUND = JBColor(Color(0xFBE7E7), Color(0x4A2727))
+private val DIFF_BLANK_BACKGROUND = JBColor(Color(0xF4F5F7), Color(0x2A2C30))
+private val DIFF_HUNK_BACKGROUND = JBColor(Color(0xEFF4FD), Color(0x252C38))
+
 private fun diffForeground(kind: DiffKind): Color = when (kind) {
-    DiffKind.ADD -> JBColor(Color(0x1B7F3B), Color(0x6EDC93))
-    DiffKind.DELETE -> JBColor(Color(0xB4261C), Color(0xFF8078))
-    DiffKind.HUNK -> JBColor(Color(0x2C6BE0), Color(0x7FA8FF))
+    DiffKind.ADD -> DIFF_ADD_TEXT
+    DiffKind.DELETE -> DIFF_DEL_TEXT
+    DiffKind.HUNK -> DIFF_HUNK_TEXT
     DiffKind.META, DiffKind.BLANK -> MUTED_FOREGROUND
-    else -> JBColor(Color(0x24292F), Color(0xD4D9DF))
+    else -> DIFF_TEXT
 }
 
 private fun diffBackground(kind: DiffKind, base: Color): Color = when (kind) {
-    DiffKind.ADD -> JBColor(Color(0xE8F5EC), Color(0x2C4235))
-    DiffKind.DELETE -> JBColor(Color(0xFBE7E7), Color(0x4A2727))
-    DiffKind.BLANK -> JBColor(Color(0xF4F5F7), Color(0x2A2C30))
-    DiffKind.HUNK -> JBColor(Color(0xEFF4FD), Color(0x252C38))
+    DiffKind.ADD -> DIFF_ADD_BACKGROUND
+    DiffKind.DELETE -> DIFF_DEL_BACKGROUND
+    DiffKind.BLANK -> DIFF_BLANK_BACKGROUND
+    DiffKind.HUNK -> DIFF_HUNK_BACKGROUND
     else -> base
 }
 
@@ -548,7 +593,12 @@ private class DiffRowList : javax.swing.JList<DiffLine>() {
     override fun getPreferredSize(): Dimension =
         Dimension(preferredWidth, maxOf(model.size, 1) * fixedCellHeight + JBUI.scale(6))
 
-    override fun getScrollableTracksViewportWidth(): Boolean = false
+    /** 内容比视口窄时跟随视口宽度（否则只有文字那么宽、底色不铺满），更宽时出横向滚动条 */
+    override fun getScrollableTracksViewportWidth(): Boolean {
+        val holder = parent
+        val available = if (holder is javax.swing.JViewport) holder.width else width
+        return preferredWidth <= available
+    }
 
     override fun getScrollableUnitIncrement(visibleRect: java.awt.Rectangle, orientation: Int, direction: Int): Int =
         fixedCellHeight
