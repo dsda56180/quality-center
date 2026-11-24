@@ -1,0 +1,10 @@
+{
+  "id": "ast-xxe-source",
+  "title": "DocumentBuilderFactory 未禁用 DOCTYPE（XXE）",
+  "layer": "code",
+  "cwe": "CWE-611",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_XXE_UNHARDENED"], "mustNotFire": [] },
+  "target": { "rules": ["AST_XXE_UNHARDENED"], "owner": "astgrep", "status": "covered" }
+}

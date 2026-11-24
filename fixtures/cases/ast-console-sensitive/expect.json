@@ -1,0 +1,10 @@
+{
+  "id": "ast-console-sensitive",
+  "title": "System.out 打印口令字段",
+  "layer": "code",
+  "cwe": "CWE-532",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_CONSOLE_SENSITIVE_OUTPUT"], "mustNotFire": [] },
+  "target": { "rules": ["AST_CONSOLE_SENSITIVE_OUTPUT"], "owner": "astgrep", "status": "covered" }
+}

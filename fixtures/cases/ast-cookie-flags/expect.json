@@ -1,0 +1,10 @@
+{
+  "id": "ast-cookie-flags",
+  "title": "会话 Cookie 未设置 HttpOnly/Secure",
+  "layer": "code",
+  "cwe": "CWE-1004",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_COOKIE_FLAGS_MISSING"], "mustNotFire": [] },
+  "target": { "rules": ["AST_COOKIE_FLAGS_MISSING"], "owner": "astgrep", "status": "covered" }
+}

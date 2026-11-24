@@ -1,0 +1,10 @@
+{
+  "id": "ast-jwt-no-verify",
+  "title": "JWT 解析没有设置签名密钥",
+  "layer": "code",
+  "cwe": "CWE-347",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_JWT_NO_VERIFY"], "mustNotFire": [] },
+  "target": { "rules": ["AST_JWT_NO_VERIFY"], "owner": "astgrep", "status": "covered" }
+}

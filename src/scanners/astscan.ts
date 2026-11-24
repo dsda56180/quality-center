@@ -408,6 +408,32 @@ const SQL_APIS = new Set([
   'update'
 ]);
 
+/** 方法形参 + 由请求取值 API 赋值的局部变量，视为「外部可控」 */
+function externalNames(method: SgNode): Set<string> {
+  const names = new Set<string>();
+  const parameters = method.field('parameters');
+  if (parameters) {
+    for (const param of parameters.findAll({ rule: { kind: 'formal_parameter' } })) {
+      const name = param.field('name')?.text();
+      if (name) {
+        names.add(name);
+      }
+    }
+  }
+  const body = method.field('body');
+  if (body) {
+    for (const declaration of body.findAll({ rule: { kind: 'local_variable_declaration' } })) {
+      const declarator = declaration.field('declarator');
+      const name = declarator?.field('name')?.text();
+      const value = declarator?.field('value')?.text() ?? '';
+      if (name && /getParameter\s*\(|getHeader\s*\(|getAttribute\s*\(|getQueryString|getCookies/.test(value)) {
+        names.add(name);
+      }
+    }
+  }
+  return names;
+}
+
 function checkSqlConcat(file: string, root: SgNode): Issue[] {
   const issues: Issue[] = [];
   for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
@@ -568,6 +594,73 @@ function checkSqlConcat(file: string, root: SgNode): Issue[] {
       );
     }
   }
+
+  // SQL 变量中转：`String sql = "... " + name;` 再交给执行调用
+  for (const method of root.findAll({ rule: { kind: 'method_declaration' } })) {
+    const body = method.field('body');
+    if (!body) {
+      continue;
+    }
+    const externals = externalNames(method);
+    const tainted: string[] = [];
+    for (const declaration of body.findAll({ rule: { kind: 'local_variable_declaration' } })) {
+      const declarator = declaration.field('declarator');
+      const variable = declarator?.field('name')?.text();
+      const value = declarator?.field('value')?.text() ?? '';
+      if (!variable || !value) {
+        continue;
+      }
+      const concatWithExternal =
+        value.includes('+') && [...externals].some((name) => new RegExp(`\\b${name}\\b`).test(value));
+      const riskyFormat = /String\.format\s*\(\s*"[^"]*"\s*,\s*[^"'\s]/.test(value);
+      let riskyAppend = false;
+      if (/new\s+(java\.lang\.)?(StringBuilder|StringBuffer)/.test(value)) {
+        // 只有真的 append 了非字面量才算污点；全字面量的 builder 是安全写法
+        riskyAppend = body
+          .findAll({ rule: { kind: 'method_invocation' } })
+          .filter(
+            (item) =>
+              item.field('name')?.text() === 'append' &&
+              new RegExp(`^${variable}\\b`).test(item.field('object')?.text() ?? '')
+          )
+          .some(
+            (item) =>
+              !/^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)$/.test(item.field('arguments')?.text() ?? '')
+          );
+      }
+      if (concatWithExternal || riskyFormat || riskyAppend) {
+        tainted.push(variable);
+      }
+    }
+    if (tainted.length === 0) {
+      continue;
+    }
+    for (const call of body.findAll({ rule: { kind: 'method_invocation' } })) {
+      const name = call.field('name')?.text();
+      if (!name || !SQL_APIS.has(name)) {
+        continue;
+      }
+      const argsText = call.field('arguments')?.text() ?? '';
+      const used = tainted.find((item) => new RegExp(`\\b${item}\\b`).test(argsText));
+      if (!used) {
+        continue;
+      }
+      if (issues.some((issue) => issue.line === lineOf(call) && issue.rule === 'AST_SQL_STRING_CONCAT')) {
+        continue;
+      }
+      issues.push(
+        makeIssue(
+          file,
+          call,
+          'AST_SQL_STRING_CONCAT',
+          'high',
+          'CWE-89',
+          `SQL 先由变量 ${used} 拼接/格式化后传入 ${name}()，外部输入仍可改写语句语义（注入）`,
+          '直接在执行处使用 PreparedStatement 占位符；不要先拼好字符串再执行。'
+        )
+      );
+    }
+  }
   return issues;
 }
 
@@ -678,6 +771,23 @@ function checkCommandExec(file: string, root: SgNode): Issue[] {
       continue;
     }
     if (!/"-c"|'-c'/.test(text)) {
+      // 不是 shell 包装时，命令/参数里有非字面量同样是命令注入面
+      const args = creation.field('arguments')?.text() ?? '';
+      const allLiteral = /^\(\s*(?:(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')(?:\s*,\s*)?)+\)$/.test(args);
+      if (args.trim() === '()' || allLiteral) {
+        continue;
+      }
+      issues.push(
+        makeIssue(
+          file,
+          creation,
+          'AST_RUNTIME_EXEC_CONCAT',
+          'high',
+          'CWE-78',
+          'ProcessBuilder 的命令或参数里有变量，外部可控时可改写要执行的程序或参数',
+          '命令与参数全部用常量，用户只能选择白名单分支；需要传值就作为独立参数并做格式校验。'
+        )
+      );
       continue;
     }
     issues.push(
@@ -777,6 +887,32 @@ function checkSsrf(file: string, root: SgNode): Issue[] {
         'CWE-918',
         'HTTP 客户端的请求地址来自变量，外部输入可触发 SSRF 访问内网或云元数据',
         '目标地址用常量或白名单映射，禁止直接把用户传入的 URL 交给 RestTemplate/WebClient。'
+      )
+    );
+  }
+
+  // WebClient 链式写法：webClient.get().uri(var)
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    if (call.field('name')?.text() !== 'uri') {
+      continue;
+    }
+    const receiver = call.field('object')?.text() ?? '';
+    if (!/webClient|WebClient|\.get\(\)|\.post\(\)|\.retrieve|\.exchange/i.test(receiver)) {
+      continue;
+    }
+    const args = call.field('arguments')?.text() ?? '';
+    if (literalOnly(args)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_SSRF_EXTERNAL_URL',
+        'high',
+        'CWE-918',
+        'WebClient 的 uri() 参数不是字面量，外部输入可让请求落到任意地址（SSRF）',
+        'uri 只接收常量或用 `UriComponentsBuilder` 从白名单枚举拼装，禁止直接传用户输入。'
       )
     );
   }
@@ -1007,6 +1143,480 @@ function checkUploadPathTraversal(file: string, root: SgNode): Issue[] {
   return issues;
 }
 
+/** 规则 13：Zip Slip（压缩包条目名直接拼落盘路径） */
+function checkZipSlip(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const creation of root.findAll({ rule: { kind: 'object_creation_expression' } })) {
+    const text = creation.text();
+    if (!/new\s+(java\.io\.)?(File|FileOutputStream|FileWriter)\s*\(/.test(text)) {
+      continue;
+    }
+    if (!/\.getName\s*\(\)/.test(text) || !/entry|zip|ze|Zip/i.test(text) || PATH_GUARD.test(text)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        creation,
+        'AST_ZIP_SLIP',
+        'high',
+        'CWE-22',
+        '压缩包条目名直接参与构造落盘路径，可用 `../` 条目写到任意目录（Zip Slip）',
+        '只取条目名并做白名单校验，落盘前用规范化后的绝对路径确认仍在目标目录内。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 14：开放重定向 */
+function checkOpenRedirect(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    if (!name || !/^(sendRedirect|redirect)$/.test(name)) {
+      continue;
+    }
+    const args = call.field('arguments')?.text() ?? '';
+    if (/^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)$/.test(args)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_OPEN_REDIRECT',
+        'medium',
+        'CWE-601',
+        '重定向目标来自变量，可被构造成任意外部地址，用于钓鱼或窃取跳转参数',
+        '只允许相对路径或白名单域名，禁止直接使用请求参数作为跳转目标。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 15：XML 解析器未禁用 DOCTYPE（XXE） */
+function checkXxe(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    if (call.field('name')?.text() !== 'newInstance') {
+      continue;
+    }
+    const receiver = call.field('object')?.text() ?? '';
+    if (!/DocumentBuilderFactory|SAXParserFactory|XMLInputFactory|TransformerFactory/i.test(receiver)) {
+      continue;
+    }
+    const method = climb(call, ['method_declaration', 'constructor_declaration']);
+    const scope = method?.field('body')?.text() ?? '';
+    if (/disallow-doctype-decl|setFeature|setProperty|SUPPORT_DTD|external-general-entities|ACCESS_EXTERNAL_DTD/i.test(scope)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_XXE_UNHARDENED',
+        'high',
+        'CWE-611',
+        `${receiver} 创建后没有禁用 DOCTYPE / 外部实体，可被用来读取本地文件或发起内网请求（XXE）`,
+        '设置 `setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)`，并关闭外部实体与外部 DTD。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 16：用非密码学随机数生成安全相关值 */
+function checkInsecureRandom(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  const SENSITIVE = /token|passw|secret|salt|otp|nonce|reset|csrf|session|key/i;
+  const consider = (node: SgNode, name: string): void => {
+    const method = climb(node, ['method_declaration', 'constructor_declaration']);
+    const declaration = climb(node, ['variable_declarator', 'assignment_expression']);
+    const context = `${name} ${declaration?.text() ?? ''} ${method?.field('name')?.text() ?? ''}`;
+    if (!SENSITIVE.test(context)) {
+      return;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        node,
+        'AST_INSECURE_RANDOM',
+        'medium',
+        'CWE-338',
+        '安全场景（令牌/口令/盐）使用了可预测的随机源，输出可被枚举或重放',
+        '改用 `SecureRandom`（或 `UUID.randomUUID()` 生成不可预测标识）。'
+      )
+    );
+  };
+  for (const creation of root.findAll({ rule: { kind: 'object_creation_expression' } })) {
+    if (/new\s+(java\.util\.)?Random\s*\(\s*\)/.test(creation.text())) {
+      consider(creation, creation.text());
+    }
+  }
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    if (call.field('name')?.text() === 'random' && /^(Math|StrictMath)$/.test(call.field('object')?.text() ?? '')) {
+      consider(call, call.text());
+    }
+  }
+  return issues;
+}
+
+/** 规则 17：JWT 解析未校验签名 */
+function checkJwtNoVerify(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    if (!name || !/^(parseClaimsJws|parseClaimsJwt|parse)$/.test(name)) {
+      continue;
+    }
+    const receiver = call.field('object')?.text() ?? '';
+    if (!/Jwts|jjwt/i.test(receiver)) {
+      continue;
+    }
+    // 签名密钥必须出现在同一条调用链里
+    if (/setSigningKey|signatureAlgorithm|verifyWith|setSigningKeyResolver/i.test(receiver)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_JWT_NO_VERIFY',
+        'high',
+        'CWE-347',
+        'JWT 解析链里没有设置签名密钥（或未校验算法），攻击者可伪造任意身份的 token',
+        '解析前设置固定算法与签名密钥（`Jwts.parser().verifyWith(key).build()`），禁止信任 token 里的 alg。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 18：用 equals 比较口令/签名（非恒定时间） */
+function checkTimingCompare(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    if (call.field('name')?.text() !== 'equals') {
+      continue;
+    }
+    const receiver = call.field('object')?.text() ?? '';
+    if (!/password|passwd|pwd|token|secret|signature|hash|digest/i.test(receiver)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_TIMING_UNSAFE_COMPARE',
+        'medium',
+        'CWE-208',
+        '口令/签名用 equals 比较，比较耗时随前缀匹配长度变化，可被用来逐字节猜解（时序攻击）',
+        '改用 `MessageDigest.isEqual(a, b)` 做恒定时间比较。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 19：会话类 Cookie 未设置 HttpOnly / Secure */
+function checkCookieFlags(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const creation of root.findAll({ rule: { kind: 'object_creation_expression' } })) {
+    const text = creation.text();
+    if (!/new\s+(javax\.servlet\.http\.)?Cookie\s*\(/.test(text)) {
+      continue;
+    }
+    if (!/JSESSIONID|session|token|auth|jwt/i.test(text)) {
+      continue;
+    }
+    const method = climb(creation, ['method_declaration', 'constructor_declaration']);
+    const scope = method?.field('body')?.text() ?? '';
+    if (/setHttpOnly\s*\(\s*true/.test(scope) && /setSecure\s*\(\s*true/.test(scope)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        creation,
+        'AST_COOKIE_FLAGS_MISSING',
+        'medium',
+        'CWE-1004',
+        '会话类 Cookie 没有同时设置 HttpOnly 与 Secure，脚本可读取、明文链路可被截获',
+        '对会话 Cookie 调用 `setHttpOnly(true)` 与 `setSecure(true)`，并设置 SameSite。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 20：文件读取/下载路径来自变量（任意文件读取） */
+function checkFileReadTraversal(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const creation of root.findAll({ rule: { kind: 'object_creation_expression' } })) {
+    const text = creation.text();
+    if (!/new\s+(java\.io\.)?(FileInputStream|FileReader)\s*\(/.test(text) || PATH_GUARD.test(text)) {
+      continue;
+    }
+    const args = creation.field('arguments')?.text() ?? '';
+    if (/^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)$/.test(args)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        creation,
+        'AST_ARBITRARY_FILE_READ',
+        'high',
+        'CWE-22',
+        '文件读取路径来自变量且未做收敛，可被构造成 `../../etc/passwd` 读取任意文件',
+        '路径用服务端固定目录 + 白名单文件名，读取前校验规范化后的路径仍在允许目录内。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 21：模板引擎以外部输入作模板（SSTI） */
+function checkSsti(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    const receiver = call.field('object')?.text() ?? '';
+    if (name !== 'process' || !/templateEngine|TemplateEngine|engine/i.test(receiver)) {
+      continue;
+    }
+    const args = call.field('arguments')?.text() ?? '';
+    if (/^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*,/.test(args)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_TEMPLATE_INJECTION',
+        'high',
+        'CWE-94',
+        '模板名/模板内容来自变量，攻击者可注入模板语法执行任意代码（SSTI）',
+        '模板名只能用常量或白名单枚举，禁止把用户输入交给模板引擎解析。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 22：LDAP 查询由字符串拼接构造 */
+function checkLdapInjection(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    if (call.field('name')?.text() !== 'search') {
+      continue;
+    }
+    const receiver = call.field('object')?.text() ?? '';
+    const method = climb(call, ['method_declaration', 'constructor_declaration']);
+    const paramTypes = method?.field('parameters')?.text() ?? '';
+    if (!/DirContext|LdapContext|ldapTemplate|LdapTemplate/i.test(receiver) && !/DirContext|LdapContext|LdapTemplate/i.test(paramTypes)) {
+      continue;
+    }
+    const args = call.field('arguments');
+    if (!args) {
+      continue;
+    }
+    const concat = args
+      .findAll({ rule: { kind: 'binary_expression' } })
+      .some((bin) => bin.text().includes('+') && bin.findAll({ rule: { kind: 'identifier' } }).length > 0);
+    if (!concat) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_LDAP_INJECTION',
+        'high',
+        'CWE-90',
+        'LDAP 查询过滤器由字符串拼接构造，可注入 `)(uid=*` 绕过认证或枚举条目',
+        '用占位符/转义 API（`*`、`(`、`)` 等元字符全部转义），不要拼接外部输入。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 23：JDBC 连接地址由拼接构造 */
+function checkJdbcUrlConcat(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    if (call.field('name')?.text() !== 'getConnection') {
+      continue;
+    }
+    if (!/DriverManager|DataSource/i.test(call.field('object')?.text() ?? '')) {
+      continue;
+    }
+    const args = call.field('arguments')?.text() ?? '';
+    if (!/[A-Za-z_$][\w$]*\s*\+|\+\s*[A-Za-z_$][\w$]*|\+\s*[A-Za-z_$][\w$]*\s*\(/.test(args)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_JDBC_URL_INJECTION',
+        'medium',
+        'CWE-74',
+        'JDBC 连接地址由字符串拼接构造，外部输入可改写目标库或追加危险参数',
+        '连接地址与参数全部来自配置常量，不要拼接请求参数。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 24：日志参数直接来自请求且未过滤换行（日志注入） */
+function checkLogInjection(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    if (!name || !LOG_METHODS.includes(name)) {
+      continue;
+    }
+    if (!LOG_RECEIVERS.test(call.field('object')?.text() ?? '')) {
+      continue;
+    }
+    const args = call.field('arguments')?.text() ?? '';
+    if (!/getParameter\s*\(|getHeader\s*\(|getQueryString/.test(args)) {
+      continue;
+    }
+    if (/replace\s*\(\s*"\\r|replaceAll\s*\(\s*"[\\r\\n]/i.test(args)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_LOG_INJECTION',
+        'low',
+        'CWE-117',
+        '日志直接拼接请求参数且未过滤换行，可伪造日志行掩盖攻击痕迹',
+        '输出前把 CR/LF 与控制字符替换掉，或只记录白名单字段。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 25：System.out 输出敏感字段 */
+function checkSystemOutSensitive(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    if (!name || !/^(println|print|printf)$/.test(name)) {
+      continue;
+    }
+    if (!/^System\.(out|err)$/.test(call.field('object')?.text() ?? '')) {
+      continue;
+    }
+    const args = call.field('arguments')?.text() ?? '';
+    if (!SENSITIVE_FIELDS.test(args)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_CONSOLE_SENSITIVE_OUTPUT',
+        'low',
+        'CWE-532',
+        '标准输出/错误流打印了敏感字段，容器与 CI 日志会长期留存',
+        '改用日志框架并脱敏，或直接删除调试输出。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 26：不安全反序列化入口 */
+function checkUnsafeDeserialization(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const creation of root.findAll({ rule: { kind: 'object_creation_expression' } })) {
+    if (/new\s+(java\.io\.)?ObjectInputStream\s*\(/.test(creation.text())) {
+      issues.push(
+        makeIssue(
+          file,
+          creation,
+          'AST_UNSAFE_DESERIALIZATION',
+          'high',
+          'CWE-502',
+          'ObjectInputStream 反序列化不可信数据，可被构造 gadget 链执行任意代码',
+          '改用 JSON 等数据格式并做类型白名单；确需 Java 序列化时启用 `ObjectInputFilter`。'
+        )
+      );
+    }
+    if (/new\s+com\.thoughtworks\.xstream\.XStream\s*\(/i.test(creation.text())) {
+      issues.push(
+        makeIssue(
+          file,
+          creation,
+          'AST_UNSAFE_DESERIALIZATION',
+          'high',
+          'CWE-502',
+          'XStream 默认允许任意类型反序列化，可被构造 gadget 链执行任意代码',
+          '配置 `allowTypes`/`allowTypesByWildcard` 白名单并开启安全框架，不要直接解析外部 XML。'
+        )
+      );
+    }
+  }
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    if ((name === 'enableDefaultTyping' || name === 'activateDefaultTyping') && /mapper|objectMapper/i.test(call.field('object')?.text() ?? '')) {
+      issues.push(
+        makeIssue(
+          file,
+          call,
+          'AST_UNSAFE_DESERIALIZATION',
+          'high',
+          'CWE-502',
+          'Jackson 开启了默认类型信息（default typing），反序列化外部 JSON 可触发任意类型实例化',
+          '不要开启 default typing；确需多态就使用 `@JsonTypeInfo` + 显式子类白名单。'
+        )
+      );
+    }
+  }
+  return issues;
+}
+
+/** 规则 27：上传只校验大小/类型，完全没有扩展名校验 */
+function checkUploadExtension(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const param of root.findAll({ rule: { kind: 'formal_parameter' } })) {
+    if (!/MultipartFile/.test(param.text())) {
+      continue;
+    }
+    const method = climb(param, ['method_declaration', 'constructor_declaration']);
+    const body = method?.field('body')?.text() ?? '';
+    if (/getExtension|FilenameUtils|endsWith\s*\(\s*"\.|allowedExtensions|ALLOWED_EXT/i.test(body)) {
+      continue;
+    }
+    if (!UPLOAD_GUARD.test(body)) {
+      // 连大小/类型校验都没有的，交给 AST_UPLOAD_WITHOUT_VALIDATION
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        param,
+        'AST_UPLOAD_EXTENSION_UNCHECKED',
+        'medium',
+        'CWE-434',
+        '上传方法只做了大小/类型校验，没有校验文件扩展名，可上传可执行脚本',
+        '增加扩展名白名单（如 jpg/png/pdf），并按扩展名决定落盘目录与 Content-Type。'
+      )
+    );
+  }
+  return issues;
+}
+
 export async function scanAstgrep(root: string): Promise<AstscanResult> {
   const ast = loadEngine();
   if (!ast) {
@@ -1052,6 +1662,21 @@ export async function scanAstgrep(root: string): Promise<AstscanResult> {
     issues.push(...checkSsrf(file, treeRoot));
     issues.push(...checkXssWriter(file, treeRoot));
     issues.push(...checkUploadPathTraversal(file, treeRoot));
+    issues.push(...checkZipSlip(file, treeRoot));
+    issues.push(...checkOpenRedirect(file, treeRoot));
+    issues.push(...checkXxe(file, treeRoot));
+    issues.push(...checkInsecureRandom(file, treeRoot));
+    issues.push(...checkJwtNoVerify(file, treeRoot));
+    issues.push(...checkTimingCompare(file, treeRoot));
+    issues.push(...checkCookieFlags(file, treeRoot));
+    issues.push(...checkFileReadTraversal(file, treeRoot));
+    issues.push(...checkSsti(file, treeRoot));
+    issues.push(...checkLdapInjection(file, treeRoot));
+    issues.push(...checkJdbcUrlConcat(file, treeRoot));
+    issues.push(...checkLogInjection(file, treeRoot));
+    issues.push(...checkSystemOutSensitive(file, treeRoot));
+    issues.push(...checkUnsafeDeserialization(file, treeRoot));
+    issues.push(...checkUploadExtension(file, treeRoot));
   }
 
   // 模板层：Thymeleaf 的 th:utext 与 JSP 脚本输出，同样属于「源码可控 + 不转义」

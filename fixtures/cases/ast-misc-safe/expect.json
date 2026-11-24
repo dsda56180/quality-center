@@ -1,0 +1,29 @@
+{
+  "id": "ast-misc-safe",
+  "title": "XXE 已配置、SecureRandom、JWT 已验签、跳转常量、普通 Cookie、恒定时间比较（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-502",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": [],
+    "mustNotFire": [
+      "AST_ZIP_SLIP",
+      "AST_OPEN_REDIRECT",
+      "AST_XXE_UNHARDENED",
+      "AST_INSECURE_RANDOM",
+      "AST_JWT_NO_VERIFY",
+      "AST_TIMING_UNSAFE_COMPARE",
+      "AST_COOKIE_FLAGS_MISSING",
+      "AST_ARBITRARY_FILE_READ",
+      "AST_TEMPLATE_INJECTION",
+      "AST_LDAP_INJECTION",
+      "AST_JDBC_URL_INJECTION",
+      "AST_LOG_INJECTION",
+      "AST_CONSOLE_SENSITIVE_OUTPUT",
+      "AST_UNSAFE_DESERIALIZATION",
+      "AST_UPLOAD_EXTENSION_UNCHECKED"
+    ]
+  },
+  "target": { "rules": [], "owner": "astgrep", "status": "covered" }
+}

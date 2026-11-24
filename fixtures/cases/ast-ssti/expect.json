@@ -1,0 +1,10 @@
+{
+  "id": "ast-ssti",
+  "title": "TemplateEngine.process 的模板名来自变量（SSTI）",
+  "layer": "code",
+  "cwe": "CWE-94",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_TEMPLATE_INJECTION"], "mustNotFire": [] },
+  "target": { "rules": ["AST_TEMPLATE_INJECTION"], "owner": "astgrep", "status": "covered" }
+}

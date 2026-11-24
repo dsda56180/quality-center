@@ -1,0 +1,10 @@
+{
+  "id": "ast-insecure-random",
+  "title": "用 java.util.Random 生成 token",
+  "layer": "code",
+  "cwe": "CWE-338",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_INSECURE_RANDOM"], "mustNotFire": [] },
+  "target": { "rules": ["AST_INSECURE_RANDOM"], "owner": "astgrep", "status": "covered" }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "ast-deserialization",
+  "title": "ObjectInputStream 反序列化不可信数据",
+  "layer": "code",
+  "cwe": "CWE-502",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_UNSAFE_DESERIALIZATION"], "mustNotFire": [] },
+  "target": { "rules": ["AST_UNSAFE_DESERIALIZATION"], "owner": "astgrep", "status": "covered" }
+}

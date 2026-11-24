@@ -1,0 +1,10 @@
+{
+  "id": "ast-webclient-uri",
+  "title": "WebClient.get().uri(变量)",
+  "layer": "code",
+  "cwe": "CWE-918",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_SSRF_EXTERNAL_URL"], "mustNotFire": [] },
+  "target": { "rules": ["AST_SSRF_EXTERNAL_URL"], "owner": "astgrep", "status": "covered" }
+}

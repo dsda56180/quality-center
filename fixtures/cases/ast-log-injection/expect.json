@@ -1,0 +1,10 @@
+{
+  "id": "ast-log-injection",
+  "title": "日志直接拼请求参数且未过滤换行",
+  "layer": "code",
+  "cwe": "CWE-117",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_LOG_INJECTION"], "mustNotFire": [] },
+  "target": { "rules": ["AST_LOG_INJECTION"], "owner": "astgrep", "status": "covered" }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "ast-safe-patterns-3",
+  "title": "SQL 只拼字面量、ProcessBuilder 全字面量、WebClient uri 是常量（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-89",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": [],
+    "mustNotFire": ["AST_SQL_STRING_CONCAT", "AST_RUNTIME_EXEC_CONCAT", "AST_SSRF_EXTERNAL_URL"]
+  },
+  "target": { "rules": [], "owner": "astgrep", "status": "covered" }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "ast-ldap-injection",
+  "title": "LDAP 过滤器由字符串拼接构造",
+  "layer": "code",
+  "cwe": "CWE-90",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_LDAP_INJECTION"], "mustNotFire": [] },
+  "target": { "rules": ["AST_LDAP_INJECTION"], "owner": "astgrep", "status": "covered" }
+}

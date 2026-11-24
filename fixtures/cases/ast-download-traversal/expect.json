@@ -1,0 +1,10 @@
+{
+  "id": "ast-download-traversal",
+  "title": "下载路径直接来自请求参数（任意文件读取）",
+  "layer": "code",
+  "cwe": "CWE-22",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_ARBITRARY_FILE_READ"], "mustNotFire": [] },
+  "target": { "rules": ["AST_ARBITRARY_FILE_READ"], "owner": "astgrep", "status": "covered" }
+}

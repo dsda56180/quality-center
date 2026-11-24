@@ -1,0 +1,10 @@
+{
+  "id": "ast-upload-ext",
+  "title": "上传只校验大小/类型，没有扩展名校验",
+  "layer": "code",
+  "cwe": "CWE-434",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_UPLOAD_EXTENSION_UNCHECKED"], "mustNotFire": [] },
+  "target": { "rules": ["AST_UPLOAD_EXTENSION_UNCHECKED"], "owner": "astgrep", "status": "covered" }
+}

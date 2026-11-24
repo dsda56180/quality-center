@@ -1,0 +1,10 @@
+{
+  "id": "ast-zip-slip",
+  "title": "压缩包条目名直接拼落盘路径（Zip Slip）",
+  "layer": "code",
+  "cwe": "CWE-22",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_ZIP_SLIP"], "mustNotFire": [] },
+  "target": { "rules": ["AST_ZIP_SLIP"], "owner": "astgrep", "status": "covered" }
+}

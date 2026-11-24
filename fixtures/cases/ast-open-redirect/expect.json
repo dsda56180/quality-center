@@ -1,0 +1,10 @@
+{
+  "id": "ast-open-redirect",
+  "title": "sendRedirect 目标来自变量（开放重定向）",
+  "layer": "code",
+  "cwe": "CWE-601",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_OPEN_REDIRECT"], "mustNotFire": [] },
+  "target": { "rules": ["AST_OPEN_REDIRECT"], "owner": "astgrep", "status": "covered" }
+}

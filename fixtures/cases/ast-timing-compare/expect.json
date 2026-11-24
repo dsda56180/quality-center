@@ -1,0 +1,10 @@
+{
+  "id": "ast-timing-compare",
+  "title": "口令用 equals 比较（时序攻击面）",
+  "layer": "code",
+  "cwe": "CWE-208",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_TIMING_UNSAFE_COMPARE"], "mustNotFire": [] },
+  "target": { "rules": ["AST_TIMING_UNSAFE_COMPARE"], "owner": "astgrep", "status": "covered" }
+}

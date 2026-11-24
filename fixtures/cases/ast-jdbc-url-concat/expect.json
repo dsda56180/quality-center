@@ -1,0 +1,10 @@
+{
+  "id": "ast-jdbc-url-concat",
+  "title": "JDBC 连接地址由拼接构造",
+  "layer": "code",
+  "cwe": "CWE-74",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_JDBC_URL_INJECTION"], "mustNotFire": [] },
+  "target": { "rules": ["AST_JDBC_URL_INJECTION"], "owner": "astgrep", "status": "covered" }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "ast-sql-concat-relay",
+  "title": "SQL 先赋给变量再执行（变量中转）",
+  "layer": "code",
+  "cwe": "CWE-89",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_SQL_STRING_CONCAT"], "mustNotFire": [] },
+  "target": { "rules": ["AST_SQL_STRING_CONCAT"], "owner": "astgrep", "status": "covered" }
+}

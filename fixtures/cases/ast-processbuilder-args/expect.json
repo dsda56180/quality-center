@@ -1,0 +1,10 @@
+{
+  "id": "ast-processbuilder-args",
+  "title": "ProcessBuilder 参数列表里带变量（非 -c 包装）",
+  "layer": "code",
+  "cwe": "CWE-78",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_RUNTIME_EXEC_CONCAT"], "mustNotFire": [] },
+  "target": { "rules": ["AST_RUNTIME_EXEC_CONCAT"], "owner": "astgrep", "status": "covered" }
+}
