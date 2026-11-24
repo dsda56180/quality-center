@@ -117,8 +117,6 @@ private class DeepFixPreviewDialog(
     private val nativeCards = LinkedHashMap<String, com.intellij.diff.DiffRequestPanel>()
     private val nativeCardNames = LinkedHashMap<String, String>()
     private var nativeCardSeq = 0
-    /** 预取下一个文件的面板（用户看完当前这个时，下一个已经准备好了） */
-    private val prefetchAlarm = com.intellij.util.Alarm(com.intellij.util.Alarm.ThreadToUse.SWING_THREAD, null)
     /** 所有原生面板的父 Disposable：对话框关闭时一次性回收 */
     private val panelDisposer = com.intellij.openapi.util.Disposer.newDisposable("quality-center-diff-panels")
     /** 原生面板构造失败后置位，后续一律回退内置渲染，避免反复抛异常 */
@@ -513,7 +511,6 @@ private class DeepFixPreviewDialog(
             touchNative(path)
             updatePathLabel(path)
             nativeHost.repaint()
-            schedulePrefetch()
             return
         }
         if (createNativeCard(path, texts) == null) {
@@ -525,7 +522,6 @@ private class DeepFixPreviewDialog(
         updatePathLabel(path)
         nativeHost.revalidate()
         nativeHost.repaint()
-        schedulePrefetch()
     }
 
     /** 创建并挂一个按文件的原生面板；失败置 nativeFailed 让上层回退内置渲染 */
@@ -585,9 +581,13 @@ private class DeepFixPreviewDialog(
             ?: throw IllegalStateException("createRequestPanel 返回 null")
     }
 
-    /** 缓存最多 2 个文件的面板（当前 + 预取的下一个），超出就 dispose 最久未用的 */
+    /**
+     * 缓存最多 CACHED_PANELS 个文件的面板。
+     * 之前只留 2 个：随机来回点 3 个文件时每一下都在「建一个 / 销毁一个」，
+     * 创建 60–200ms、销毁还要排进 EDT 队列，点得越多队列越长——这就是"越点越卡"的来源。
+     */
     private fun evictNativeCards(current: String) {
-        while (nativeCards.size > 2) {
+        while (nativeCards.size > CACHED_PANELS) {
             val eldest = nativeCards.keys.firstOrNull { it != current } ?: return
             val panel = nativeCards.remove(eldest) ?: return
             val name = nativeCardNames.remove(eldest)
@@ -606,23 +606,6 @@ private class DeepFixPreviewDialog(
             nativeCardNames.remove(path)
             nativeCardNames[path] = name
         }
-    }
-
-    /** 用户停在这个文件上时，把列表里下一个文件的面板也建好，连续点击下一个就是瞬切 */
-    private fun schedulePrefetch() {
-        prefetchAlarm.cancelAllRequests()
-        prefetchAlarm.addRequest({ prefetchNext() }, PREFETCH_DELAY_MS)
-    }
-
-    private fun prefetchNext() {
-        if (nativeFailed || !useNative) return
-        val current = selectedPath ?: return
-        val index = info.files.indexOf(current)
-        if (index < 0) return
-        val next = info.files.getOrNull(index + 1) ?: return
-        if (nativeCards.containsKey(next)) return
-        val texts = synchronized(nativeCache) { nativeCache[next] } ?: return
-        createNativeCard(next, texts)
     }
 
     private fun updatePathLabel(path: String) {
@@ -793,8 +776,6 @@ private class DeepFixPreviewDialog(
     override fun dispose() {
         renderAlarm.cancelAllRequests()
         runCatching { renderAlarm.dispose() }
-        prefetchAlarm.cancelAllRequests()
-        runCatching { prefetchAlarm.dispose() }
         nativeCards.values.forEach { runCatching { it.dispose() } }
         nativeCards.clear()
         nativeCardNames.clear()
@@ -1008,8 +989,8 @@ private class DeepFixPreviewDialog(
         const val MAX_LINE_LENGTH = 400
         /** 渲染已足够便宜，只留很小的合并窗口，避免出现「点了要等一下才跳」的手感 */
         const val RENDER_DEBOUNCE_MS = 30
-        /** 用户在一个文件上停留多久后，开始预取下一个文件的原生面板 */
-        const val PREFETCH_DELAY_MS = 250
+        /** 原生面板缓存槽位：随机来回点的文件一般就几个，缓存 6 个基本不会再触发重建 */
+        const val CACHED_PANELS = 6
     }
 }
 
