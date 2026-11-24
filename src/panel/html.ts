@@ -301,7 +301,7 @@ export function getHtml(nonce: string): string {
   .sug-title { font-weight: 600; line-height: 1.4; }
   .sug-detail { margin-top: 4px; line-height: 1.55; color: var(--vscode-descriptionForeground); }
   .sug-actions { margin-top: 6px; }
-  .copy-sug {
+  .copy-sug, .plan-upgrade {
     flex: none; padding: 1px 6px; font-size: 10px;
     background: transparent; color: var(--vscode-textLink-foreground);
     border: 1px solid var(--vscode-panel-border); border-radius: 3px;
@@ -895,7 +895,10 @@ export function getHtml(nonce: string): string {
               + '<div class="sug-head"><span class="sug-tag">' + (SUG_LABEL[s.category] || esc(s.category)) + '</span>'
               + '<span class="sug-title">' + esc(s.title) + '</span></div>'
               + '<div class="sug-detail">' + esc(s.detail) + '</div>'
-              + '<div class="sug-actions"><button class="copy-sug" data-sug="' + (i + 1) + '">复制建议</button>'
+              + '<div class="sug-actions">'
+              + (s.category === 'framework' || s.category === 'dependency'
+                  ? '<button class="plan-upgrade">按建议升级</button>' : '')
+              + '<button class="copy-sug" data-sug="' + (i + 1) + '">复制建议</button>'
               + '<span class="sug-impact"> 可覆盖 ' + s.impact + ' 项问题</span></div></div>';
           }).join('')
         : '<div class="empty">暂无可推导的修复建议</div>';
@@ -1228,6 +1231,11 @@ export function getHtml(nonce: string): string {
       const key = groupEl.getAttribute('data-group') || '';
       groupEl.classList.toggle('collapsed');
       collapsed[key] = groupEl.classList.contains('collapsed');
+      return;
+    }
+    if (e.target.classList && e.target.classList.contains('plan-upgrade')) {
+      vscode.postMessage({ type: 'upgradeDeps' });
+      e.stopPropagation();
       return;
     }
     if (e.target.classList && e.target.classList.contains('copy-sug')) {

@@ -78,6 +78,18 @@
       {
         "command": "qualityCenter.openSettings",
         "title": "质量中心：打开设置"
+      },
+      {
+        "command": "qualityCenter.upgradeDeps",
+        "title": "质量中心：生成升级计划并预览"
+      },
+      {
+        "command": "qualityCenter.integrate",
+        "title": "质量中心：接入编辑器 AI（策略/Skill/规则/MCP）"
+      },
+      {
+        "command": "qualityCenter.integrateAll",
+        "title": "质量中心：为所有编辑器生成配置"
       }
     ],
     "configuration": {

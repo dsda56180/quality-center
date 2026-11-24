@@ -7,6 +7,7 @@
  * - 启动器 shim 让 MCP 配置不再带扩展版本号，升级扩展不需要改五个编辑器。
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { defaultPolicyDocument } from './upgradePolicy';
 import { PACKAGE_ROOT } from './agentOps';
@@ -238,6 +239,15 @@ function detect(root: string): Set<string> {
   }
   if (fs.existsSync(path.join(root, '.github'))) {
     found.add('github');
+  }
+  // 项目里还没有对应目录，但本机装了该编辑器时也算使用方：
+  // Trae 的项目规则目录要等首次写入才出现，只靠目录判断会漏掉真实用户。
+  const home = os.homedir();
+  if (!found.has('trae') && (fs.existsSync(path.join(home, '.trae-cn')) || fs.existsSync(path.join(home, '.trae')))) {
+    found.add('trae');
+  }
+  if (!found.has('cursor') && fs.existsSync(path.join(home, '.cursor'))) {
+    found.add('cursor');
   }
   return found;
 }
