@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.27.0
+
+**一次性补齐高危语义规则与配置层规则，并把「能力开关」交到使用者手里。**
+
+- 源码语义层新增 15 条规则：`AST_ZIP_SLIP`、`AST_OPEN_REDIRECT`、`AST_XXE_UNHARDENED`、`AST_INSECURE_RANDOM`、`AST_JWT_NO_VERIFY`、`AST_TIMING_UNSAFE_COMPARE`、`AST_COOKIE_FLAGS_MISSING`、`AST_ARBITRARY_FILE_READ`、`AST_TEMPLATE_INJECTION`（含 FreeMarker / Velocity 的 `evaluate`/`getTemplate`/`new Template(StringReader)`）、`AST_LDAP_INJECTION`、`AST_JDBC_URL_INJECTION`、`AST_LOG_INJECTION`、`AST_CONSOLE_SENSITIVE_OUTPUT`、`AST_UNSAFE_DESERIALIZATION`、`AST_UPLOAD_EXTENSION_UNCHECKED`
+- 数据流补强：同方法内 `String sql = "…" + name` 再执行、`ProcessBuilder` 传变量参数、`webClient.get().uri(var)` 都能命中；`StringBuilder` 只在 append 出现非字面量时才记为污点（修掉一处误报）
+- 配置层新增 16 条规则：Druid `filters: config` 与 `allow:` 留空、Nacos 身份标识未换、Spring Security 内置账号、`health.show-details: always`、`management.base-path: /`、错误堆栈回传、SQL / 根日志 DEBUG、默认激活 dev profile、会话 Cookie 关 HttpOnly/Secure、会话超时 ≥8h、`static-locations` 映射本地目录、MySQL `allowPublicKeyRetrieval` + 明文链路、springdoc 暴露 actuator、Knife4j 关 Basic 认证
+- yml 解析器现在能区分「空值叶子」与「嵌套映射」，`allow:` 这种空值写法不再漏检
+- Mapper `${}` 支持位置分级（ORDER BY / LIMIT 降为中危）与片段归属（标注 `<sql id>` 及引用它的 `<select id>`）
+- 新增单规则开关 `qualityCenter.rules.mute` / `--mute`（规则 id、`SEC_*` 前缀通配、来源名），静音条数写入 `summary.mutedByRule`
+- 新增 SARIF 2.1.0 导出（`--sarif`，并默认写 `.quality-center/report.sarif`）、GitHub Actions 注解（`--gha`）与同文件聚合（`qualityCenter.aggregate` / `--aggregate`，仅 medium 及以下）
+- 靶场新增 34 个用例（含 `ast-misc-safe` / `ast-template-engine-safe` / `config-safe-baseline` 三个负例集合），矩阵扩到 **91 个用例，PASS 91 / GAP 0 / FAIL 0**
+- 文档：README 与 `docs/RULES.md` 同步到 36 条配置 + 2 条 Mapper + 27 条 AST，新增「工程质量能力」表与逐条规则表
+
 ## 0.26.0
 
 **把两条已有规则的数据流补上，再加两条配置组合。**

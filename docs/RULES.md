@@ -6,8 +6,8 @@
 ## 覆盖口径
 
 - **代码层**（Java 源码 / 字节码）：由 `SpotBugs + FindSecBugs 1.14`（144 个 pattern）承担，`PERMISSIVE_CORS`、`SPRING_CSRF_*` 等由字节码 + Spring 语义检测。
-- **源码语义层**（Java AST + 模板）：由 `astgrep` 承担（`@ast-grep/napi` + `@ast-grep/lang-java`），用于「方法链 + 字符串字面量」这类字节码会丢失语义、正则又容易误报的规则；当前 12 条规则（含 Thymeleaf / JSP 未转义输出），全部有正例/反例靶场。
-- **配置层**（`application*.yml/yaml/properties`、`bootstrap*.yml`、MyBatis Mapper XML）：由内置扫描器 `qcsec` 承担，把配置拍平成「键路径 + 值 + 行号」或按 XML 行号定位，支持跨键组合判断（Druid 面板开启但未设口令这类），不依赖任何外部二进制。当前 20 条配置规则 + 2 条 Mapper 规则，全部实现且有靶场。
+- **源码语义层**（Java AST + 模板）：由 `astgrep` 承担（`@ast-grep/napi` + `@ast-grep/lang-java`），用于「方法链 + 字符串字面量」这类字节码会丢失语义、正则又容易误报的规则；当前 27 条规则（含 Thymeleaf / JSP 未转义输出、FreeMarker / Velocity 模板注入），全部有正例/反例靶场。
+- **配置层**（`application*.yml/yaml/properties`、`bootstrap*.yml`、MyBatis Mapper XML）：由内置扫描器 `qcsec` 承担，把配置拍平成「键路径 + 值 + 行号」或按 XML 行号定位，支持跨键组合判断（Druid 面板开启但未设口令这类），不依赖任何外部二进制。当前 36 条配置规则 + 2 条 Mapper 规则，全部实现且有靶场。
 - **依赖层**：`Trivy --scanners vuln`，按依赖坐标查漏洞库（CVE），只能回答"这个版本有没有已知漏洞"。
 - 覆盖度不是承诺"100%"，而是：清单条目 → 规则 ID → fixture 用例，一一对应，可跑可查；缺口在表里写明。
 
@@ -69,6 +69,59 @@
 | SQL 由字符串拼接/格式化构造后执行 | 89 | `AST_SQL_STRING_CONCAT`（astgrep：`+` 拼接、`String.format` 的 SQL 模板带非字面量参数、`StringBuilder` 逐段或链式 `append`（含直接塞进执行调用）后执行） | 已覆盖 | `ast-sql-string-concat` / `ast-sql-format-building` / `ast-sql-append-chain` / `ast-sql-building-hardened` |
 | 关闭 HTTPS / `server.ssl.enabled: false` | 319 | `SEC_SSL_DISABLED` | 已覆盖 | `config-hardening-mixed` |
 
+## 0.27.0 新增：高危语义规则
+
+| 风险 | CWE | 规则 ID | 状态 | 用例 |
+| --- | --- | --- | --- | --- |
+| Zip 解压未校验条目路径（Zip Slip） | 22 | `AST_ZIP_SLIP`（`ZipEntry.getName()` 或其同方法局部变量参与目标路径构造，且未 `normalize()` + 前缀比较） | 已覆盖 | `ast-zip-slip` |
+| 重定向目标来自请求参数（开放重定向） | 601 | `AST_OPEN_REDIRECT`（`sendRedirect` / `RedirectView` 目标不是常量且未走白名单映射） | 已覆盖 | `ast-open-redirect` / `ast-misc-safe` |
+| XML 解析器未禁用 DOCTYPE（XXE） | 611 | `AST_XXE_UNHARDENED`（`DocumentBuilderFactory/SAXParserFactory/XMLInputFactory/TransformerFactory` 的 `newInstance()` 链上没有 `disallow-doctype-decl` 等加固调用） | 已覆盖 | `ast-xxe-source` / `ast-misc-safe` |
+| 用 `Random` 生成令牌/验证码 | 338 | `AST_INSECURE_RANDOM`（`new Random()` / `Math.random()` 结果流入 token/password/nonce 等命名） | 已覆盖 | `ast-insecure-random` / `ast-misc-safe` |
+| 解析 JWT 但未验签 | 347 | `AST_JWT_NO_VERIFY`（`parseClaimsJwt`、`setSigningKey` 前置缺失的 `parse`） | 已覆盖 | `ast-jwt-no-verify` / `ast-misc-safe` |
+| 口令/令牌用 `==`/`equals` 比较（时序侧信道） | 208 | `AST_TIMING_UNSAFE_COMPARE`（敏感字段名的 `equals`/`==` 比较，未用 `MessageDigest.isEqual`） | 已覆盖 | `ast-timing-compare` / `ast-misc-safe` |
+| 会话 Cookie 缺 HttpOnly/Secure | 1004 | `AST_COOKIE_FLAGS_MISSING`（`new Cookie(会话名, 值)` 后没有 `setHttpOnly(true)`/`setSecure(true)`） | 已覆盖 | `ast-cookie-flags` / `ast-misc-safe` |
+| 下载/读取路径来自请求参数（任意文件读取） | 22 | `AST_ARBITRARY_FILE_READ`（`FileInputStream`/`Files.read*`/`ResourceUtils` 参数来自请求参数且无 `..` 过滤） | 已覆盖 | `ast-download-traversal` |
+| 模板引擎把外部输入当模板源码（SSTI） | 94 | `AST_TEMPLATE_INJECTION`（`TemplateEngine.process(变量)`、Velocity `evaluate`/`getTemplate` 末参非常量、`new Template(name, new StringReader(变量))`；常量字段与字面量放行） | 已覆盖 | `ast-ssti` / `ast-template-engine-source` / `ast-template-engine-safe` / `ast-misc-safe` |
+| LDAP 过滤器字符串拼接 | 90 | `AST_LDAP_INJECTION`（接收者/形参为 `DirContext`/`LdapTemplate` 且过滤器参数非字面量） | 已覆盖 | `ast-ldap-injection` |
+| JDBC 连接地址由拼接构造 | 74 | `AST_JDBC_URL_INJECTION`（`getConnection` 的 URL 含 `+` 与标识符） | 已覆盖 | `ast-jdbc-url-concat` |
+| 日志拼接未过滤的请求参数（日志注入） | 117 | `AST_LOG_INJECTION`（`log.*` 参数里直接拼请求参数，未替换换行符） | 已覆盖 | `ast-log-injection` |
+| `System.out` 打印口令等敏感字段 | 532 | `AST_CONSOLE_SENSITIVE_OUTPUT`（`System.out/err` 输出参数含敏感字段名或请求参数） | 已覆盖 | `ast-console-sensitive` |
+| 反序列化不可信数据 | 502 | `AST_UNSAFE_DESERIALIZATION`（`ObjectInputStream.readObject`、`XStream.fromXML`、`readValue` 配合默认类型） | 已覆盖 | `ast-deserialization` |
+| 上传只校验大小/类型，没有扩展名校验 | 434 | `AST_UPLOAD_EXTENSION_UNCHECKED`（方法内已有 `getSize`/`getContentType` 但没有扩展名白名单） | 已覆盖 | `ast-upload-ext` |
+
+## 0.27.0 新增：配置层规则
+
+| 风险 | CWE | 规则 ID | 状态 | 用例 |
+| --- | --- | --- | --- | --- |
+| Druid `filters` 注册 `config`（暴露连接串/会话配置） | 200 | `SEC_DRUID_FILTERS_CONFIG` | 已覆盖 | `config-druid-filters` |
+| Druid 面板 `allow` 留空（不限制来源） | 668 | `SEC_DRUID_STATVIEW_ALLOW_EMPTY`（yml 空值叶子也能识别） | 已覆盖 | `config-druid-filters` |
+| Nacos 集群身份标识仍是示例 `nacos` | 1392 | `SEC_NACOS_DEFAULT_IDENTITY` | 已覆盖 | `config-nacos-identity` |
+| Spring Security 内置账号默认 `user` / 固定口令 | 1392 | `SEC_SPRING_SECURITY_DEFAULT_USER` | 已覆盖 | `config-security-default-user` |
+| 健康检查 `show-details/show-components: always` | 497 | `SEC_HEALTH_SHOW_DETAILS` | 已覆盖 | `config-actuator-details` |
+| Actuator `base-path` 改成根路径 | 668 | `SEC_MANAGEMENT_BASE_PATH_ROOT`（需同时配了 exposure，避免默认配置误报） | 已覆盖 | `config-actuator-details` |
+| 错误响应回传堆栈/异常消息 | 209 | `SEC_ERROR_STACKTRACE`（`always` 记中危，`on_param` 与 `include-message` 记低危；dev profile 豁免） | 已覆盖 | `config-error-stacktrace` |
+| SQL/ORM 日志开到 DEBUG/TRACE | 532 | `SEC_SQL_LOG_DEBUG`（dev profile 豁免） | 已覆盖 | `config-logging-debug` |
+| 根日志级别 DEBUG/TRACE | 532 | `SEC_ROOT_LOG_DEBUG`（dev profile 豁免） | 已覆盖 | `config-logging-debug` |
+| 默认激活 dev/local/test profile | 489 | `SEC_PROFILE_DEV_ACTIVE`（dev profile 文件内豁免） | 已覆盖 | `config-profile-dev` |
+| 会话 Cookie 关闭 HttpOnly / Secure | 1004 | `SEC_COOKIE_FLAGS_WEAK`（仅显式 `false` 才报） | 已覆盖 | `config-session-cookie` |
+| 会话超时 ≥ 8 小时 | 613 | `SEC_SESSION_TIMEOUT_LONG`（支持 `30m`/`8h`/`1d`/`86400s` 写法） | 已覆盖 | `config-session-cookie` |
+| 静态资源目录映射本地文件系统 | 22 | `SEC_STATIC_LOCATIONS_FILE`（`static-locations` 含 `file:`） | 已覆盖 | `config-session-cookie` |
+| MySQL `allowPublicKeyRetrieval=true` + 明文链路 | 319 | `SEC_MYSQL_PUBLIC_KEY_RETRIEVAL`（必须同时 `useSSL=false`/`sslMode=DISABLED` 才报） | 已覆盖 | `config-mysql-public-key` |
+| springdoc 把 Actuator 纳入文档 | 497 | `SEC_SPRINGDOC_ACTUATOR` | 已覆盖 | `config-actuator-details` |
+| Knife4j 显式关闭 Basic 认证 | 306 | `SEC_KNIFE4J_NO_AUTH` | 已覆盖 | `config-knife4j-no-auth` |
+
+## 工程质量能力（0.27.0）
+
+| 能力 | 入口 | 说明 |
+| --- | --- | --- |
+| 单规则开关 | `qualityCenter.rules.mute` / `--mute` | 支持规则 id、前缀通配 `SEC_DRUID_*`、来源名 `trivy`；被静音条数记入 `summary.mutedByRule`，不进入面板与报告 |
+| SARIF 导出 | `--sarif [路径]` / 自动写 `.quality-center/report.sarif` | SARIF 2.1.0，可直接上传 GitHub code scanning |
+| CI 注解 | `--gha` | 输出 `::error/::warning file=…,line=…,title=规则::消息`，PR 里直接落到代码行 |
+| 同文件聚合 | `qualityCenter.aggregate` / `--aggregate` | 同规则同文件 ≥3 处合并（仅 medium 及以下，高危逐条） |
+| 基线忽略 | 面板「忽略」/ `baseline.json` | 已有能力，与静音互补：基线按单条指纹，静音按规则 |
+| 扫描缓存 | 面板扫描器级缓存 + `.quality-center/scan-cache.json` | 源码/依赖清单/配置未变时跳过重扫 |
+| Mapper 片段归属 | `SEC_MYBATIS_DOLLAR_SUBSTITUTION` 消息 | `${}` 落在 `<sql id>` 片段时标注「被 `<select id=…>` 引用」，并按 ORDER BY/LIMIT 位置降到中危 |
+
 ## 接线现状与局限
 
 FindSecBugs 必须写进 pom 的 `<build><plugins>` 才生效（`spotbugs-maven-plugin` 的 `plugins` 参数没有 userProperty，`-Dspotbugs.plugins` 传不进去）。插件现在的做法：
@@ -81,5 +134,5 @@ FindSecBugs 必须写进 pom 的 `<build><plugins>` 才生效（`spotbugs-maven-
 
 - **多模块工程**：只注入根 pom，SpotBugs 在子模块上运行时不会带上 FindSecBugs（后续计划改用 SpotBugs 独立发行版 + `-pluginList` 解决）。
 - 需要 `target/classes`（或先执行构建），否则 SpotBugs 直接跳过。
-- 配置层由 `qcsec` 覆盖，但它只解析配置文本、不做运行期验证：`${ENV}` 占位视为已外部化（`ENC(...)`、`{cipher}`、`sm:/vault:` 等密钥托管写法同样放行），不会跟进到实际生效值；profile 差异按文件计，不会合并 `application-*.yml` 的覆盖关系；`dev/local/test/it` profile 里的 Swagger、devtools 与「Redis 空口令」按正常用法忽略；Swagger 规则只认显式 enabled 开关，依赖引入但未显式配置时不会报；MyBatis 只认 XML 与注解里的 `${}`、`statementType="STATEMENT"`，白名单豁免要求 `<if test>` 里对同一表达式做字面量 `==`/`eq` 比较且不与其他变量比较，写成 `x > 'a'` 之类范围判断仍会报。
-- 语义层由 `astgrep` 覆盖，局限是：只解析 Java 源码（不处理 Kotlin / Groovy / 编译产物）；不解析 Spring 继承与 `@Configuration` 装配关系，`/actuator` 这类路径靠字面量匹配；`anyRequest()` / 匹配器判断只看同一条方法链，常量只展开一层（字段常量全文件、局部变量限同方法、`@Value` 只取默认值），跨类常量、配置中心实际取值、`@ConfigurationProperties` 绑定会漏报；`MultipartFile` 校验只看方法体内关键字，跨方法封装的校验会判为缺失；SQL 拼接覆盖 `+` 拼进执行调用、`String.format` 的 SQL 模板带变量参数、同一方法内 `StringBuilder/StringBuffer` 逐段或链式 append（含直接塞进执行调用）后整体交给执行调用，但 `String sql = ... + x` 再执行的变量中转、跨方法的 builder、先 `append` 再 `replace` 的写法会漏报；路径穿越覆盖 `getOriginalFilename()` 直接出现在落盘调用、以及同方法内局部变量中转的写法，跨方法/字段中转和先做字符串替换再落盘的会漏报；`@CrossOrigin` 只认注解本身，不合并全局 CORS 配置；SSRF 与命令执行只放行字面量参数，常量中转会报（可用 `baseline` 忽略）；XSS 覆盖 `getWriter()` 直连与同方法内 `PrintWriter` 变量中转，跨方法传递的输出流不在范围；模板层只认 Thymeleaf `th:utext` 与 JSP 里 `<%= %>` 直出请求参数，FreeMarker/Velocity 与自定义标签不在范围。以上都可用 `baseline` 忽略。
+- 配置层由 `qcsec` 覆盖，但它只解析配置文本、不做运行期验证：`${ENV}` 占位视为已外部化（`ENC(...)`、`{cipher}`、`sm:/vault:` 等密钥托管写法同样放行），不会跟进到实际生效值；profile 差异按文件计，不会合并 `application-*.yml` 的覆盖关系；`dev/local/test/it` profile 里的 Swagger、devtools、「Redis 空口令」按正常用法忽略，0.27.0 新增的 SQL 日志、根日志、错误堆栈与 `spring.profiles.active` 也在 dev profile 文件内豁免（避免「开发配置报生产问题」的误报）。Swagger 规则只认显式 enabled 开关，依赖引入但未显式配置时不会报；MyBatis 只认 XML 与注解里的 `${}`、`statementType="STATEMENT"`，白名单豁免要求 `<if test>` 里对同一表达式做字面量 `==`/`eq` 比较且不与其他变量比较，写成 `x > 'a'` 之类范围判断仍会报。
+- 语义层由 `astgrep` 覆盖，局限是：只解析 Java 源码（不处理 Kotlin / Groovy / 编译产物）；不解析 Spring 继承与 `@Configuration` 装配关系，`/actuator` 这类路径靠字面量匹配；`anyRequest()` / 匹配器判断只看同一条方法链，常量只展开一层（字段常量全文件、局部变量限同方法、`@Value` 只取默认值），跨类常量、配置中心实际取值、`@ConfigurationProperties` 绑定会漏报；`MultipartFile` 校验只看方法体内关键字，跨方法封装的校验会判为缺失；SQL 拼接覆盖 `+` 拼进执行调用、`String.format` 的 SQL 模板带变量参数、同一方法内 `StringBuilder/StringBuffer` 逐段或链式 append（含直接塞进执行调用）后整体交给执行调用，但同方法内的 `String sql = ... + x` 变量中转与 `StringBuilder` 链式 append 已覆盖，跨方法的 builder、先 `append` 再 `replace`、跨方法拼接仍会漏报；路径穿越覆盖 `getOriginalFilename()` 直接出现在落盘调用、以及同方法内局部变量中转的写法，跨方法/字段中转和先做字符串替换再落盘的会漏报；`@CrossOrigin` 只认注解本身，不合并全局 CORS 配置；SSRF 与命令执行只放行字面量参数，常量中转会报（可用 `baseline` 忽略）；XSS 覆盖 `getWriter()` 直连与同方法内 `PrintWriter` 变量中转，跨方法传递的输出流不在范围；模板层覆盖 Thymeleaf `th:utext`、JSP `<%= %>` 直出请求参数，以及 FreeMarker/Velocity 的源码级注入（`evaluate`/`getTemplate` 末参非常量、`new Template(name, new StringReader(变量))`）；自定义标签、`spring.freemarker` 的模板目录配置、以及把用户数据当模型传入的正常用法不在范围（后者本就不该报）。0.27.0 的高危规则靠「方法名 + 接收者/类型 + 实参形状」判定，自研封装（包装过的日志门面、自研模板引擎、抽象后的 LDAP 工具类）可能漏报；为了避免误报，Cookie、SqlSession、上传扩展名等规则只在「明确具备前置特征」时才报（例如先有 `new Cookie(会话名, …)`、先有大小/类型校验），宁可少报也不硬报。以上都可用 `baseline` 忽略。
