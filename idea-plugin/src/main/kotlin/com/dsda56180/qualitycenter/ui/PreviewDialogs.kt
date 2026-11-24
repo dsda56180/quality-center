@@ -264,18 +264,21 @@ private class DeepFixPreviewDialog(
             } catch (_: Throwable) {
                 null
             }
-            app.invokeLater {
-                if (token != renderToken || rendered == null) return@invokeLater
+            // 预览是模态对话框：从后台线程直接 invokeLater 用的是 NON_MODAL 模态状态，
+            // 会被模态对话框挡在队列里不执行（表现为面板一直空白），必须用 ModalityState.any()
+            app.invokeLater({
+                if (token != renderToken) return@invokeLater
+                val result = rendered ?: (if (side) buildSideBySide(lines) else buildUnified(path, lines))
                 if (side) {
-                    leftPane.document = rendered.primary
-                    rightPane.document = rendered.secondary ?: javax.swing.text.DefaultStyledDocument()
+                    leftPane.document = result.primary
+                    rightPane.document = result.secondary ?: javax.swing.text.DefaultStyledDocument()
                     leftPane.caretPosition = 0
                     rightPane.caretPosition = 0
                 } else {
-                    unifiedPane.document = rendered.primary
+                    unifiedPane.document = result.primary
                     unifiedPane.caretPosition = 0
                 }
-            }
+            }, com.intellij.openapi.application.ModalityState.any())
         }
     }
 
