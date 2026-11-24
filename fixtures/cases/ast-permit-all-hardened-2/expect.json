@@ -1,0 +1,10 @@
+{
+  "id": "ast-permit-all-hardened-2",
+  "title": "白名单常量只含公开路径、ignoring 只含静态资源（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-284",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["AST_PERMIT_ALL_SENSITIVE_PATH"] },
+  "target": { "rules": [], "owner": "astgrep", "status": "covered" }
+}

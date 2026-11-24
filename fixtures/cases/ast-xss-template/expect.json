@@ -1,0 +1,10 @@
+{
+  "id": "ast-xss-template",
+  "title": "Thymeleaf th:utext 与 JSP 脚本直接输出请求参数",
+  "layer": "code",
+  "cwe": "CWE-79",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_XSS_TEMPLATE_UNESCAPED"], "mustNotFire": [] },
+  "target": { "rules": ["AST_XSS_TEMPLATE_UNESCAPED"], "owner": "astgrep", "status": "covered" }
+}

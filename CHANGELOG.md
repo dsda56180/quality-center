@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.23.0
+
+**按「覆盖做全做深 + 不失准」继续补齐：Spring Security 常量白名单与 `web.ignoring()`、PrintWriter 变量中转、模板层未转义输出、MyBatis `<if>` 白名单上下文、Redis／Nacos／RabbitMQ／Kafka 配置风险。**
+
+- `AST_PERMIT_ALL_SENSITIVE_PATH` 扩展：
+  - 匹配器参数是 `static final String[]` 或局部常量时，先把同文件常量字面量展开再判断，`antMatchers(WHITELIST).permitAll()` 不再漏检
+  - 新增 `web.ignoring().antMatchers(...)` 判定——它绕过整个过滤器链，按高危报
+  - 敏感路径清单补 `/management`、`/nacos`、`/sentinel`、`/heapdump`、`/threaddump`、`/configprops`、`/prometheus`、`/eureka`、`/jmx`
+- `AST_XSS_RESPONSE_WRITE` 扩展：
+  - 覆盖同方法内 `PrintWriter out = resp.getWriter()` 的变量中转（`write/print/println/append/printf/format`）
+  - 已有 `HtmlUtils.htmlEscape` / `StringEscapeUtils` / `Encode.forHtml` / `sanitize` 等转义处理的写法不再报
+- 新增 `AST_XSS_TEMPLATE_UNESCAPED`：Thymeleaf `th:utext` 渲染动态表达式、JSP `<%= %>` 直出请求参数/请求头；`th:text`、`escapeXml`、JSTL `c:out` 的写法不报
+- `SEC_MYBATIS_DOLLAR_SUBSTITUTION` 上下文判断：
+  - `<if test="x == 'a' or x == 'b'">` 这类字面量白名单约束下的 `${x}` 放行；只判空（`x != null`）或与其他变量比较仍报
+  - MyBatis-Plus 的 `${ew.customSqlSegment}` / `${ew.sqlSegment}` / `${ew.paramNameValuePairs...}` 放行
+- 新增 4 条中间件配置规则：`SEC_REDIS_NO_PASSWORD`（空口令或远端实例未配 password，dev/test profile 豁免）、`SEC_DEFAULT_CREDENTIAL_USERNAME`（Nacos `nacos`、RabbitMQ `guest`）、`SEC_NACOS_AUTH_DISABLED`（`nacos.core.auth.enabled=false`）、`SEC_MQ_SASL_PLAINTEXT`（Kafka SASL JAAS 明文口令）
+- 靶场新增 11 个用例（6 正例 + 5 个误报回归集合），矩阵扩到 **39 个用例，PASS 39 / GAP 0 / FAIL 0**
+- 文档：`docs/RULES.md` 补 8 行并更新局限（常量只展开同文件一层、模板只认 Thymeleaf/JSP、白名单豁免要求字面量 `==`/`eq`），README/配置项说明同步为 14 条配置 + 2 条 Mapper + 11 条 AST
+
 ## 0.22.0
 
 **能力继续做深：注解 SQL、`statementType=STATEMENT`、SSRF、反射型 XSS 四条新规则，同时专门做了一轮误报治理。**

@@ -1,0 +1,10 @@
+{
+  "id": "mybatis-if-user-input",
+  "title": "if 只判空、没有白名单，仍用 ${} 拼接排序字段",
+  "layer": "code",
+  "cwe": "CWE-89",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_MYBATIS_DOLLAR_SUBSTITUTION"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_MYBATIS_DOLLAR_SUBSTITUTION"], "owner": "qcsec", "status": "covered" }
+}

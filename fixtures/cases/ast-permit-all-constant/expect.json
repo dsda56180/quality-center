@@ -1,0 +1,10 @@
+{
+  "id": "ast-permit-all-constant",
+  "title": "permitAll 的匹配器参数是白名单常量，常量里含 /actuator/**",
+  "layer": "code",
+  "cwe": "CWE-284",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_PERMIT_ALL_SENSITIVE_PATH"], "mustNotFire": [] },
+  "target": { "rules": ["AST_PERMIT_ALL_SENSITIVE_PATH"], "owner": "astgrep", "status": "covered" }
+}

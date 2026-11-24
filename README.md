@@ -11,8 +11,8 @@
 - **代码质量**：调用 Maven Checkstyle 规则扫描 Java 项目
 - **密钥泄露**：调用 Gitleaks 检测硬编码的 API Key、Token、密码
 - **依赖漏洞**：调用 Trivy 扫描 pom.xml / jar，列出 CVE、受影响版本和修复版本
-- **配置安全（qcsec）**：内置扫描器直接解析 `application*.yml` / `.properties` / `bootstrap*.yml` 与 MyBatis Mapper XML，不用装任何外部工具，检出 Druid 面板默认口令与 `0.0.0.0` 绑定、`allowMultiQueries=true`、Actuator 全端点暴露、CORS 通配源（含允许凭证）、明文口令、devtools 开启、`server.ssl.enabled: false`、Swagger/Knife4j 文档开放、Mapper 里 `${}` 字符串替换与 `statementType="STATEMENT"`
-- **AST 语义规则（astgrep）**：用 ast-grep 解析 Java 语法树（引擎随扩展打包，逐平台二进制），检查 `permitAll()` 是否覆盖 `/actuator`、`/admin`、`/druid` 等敏感路径或 `anyRequest().permitAll()`、日志是否直接输出口令/令牌、`MultipartFile` 参数所在方法是否缺少大小与类型校验、SQL 是否由「字面量 + 变量」拼接后执行、`@CrossOrigin` 是否通配来源、SpEL/OGNL 是否用外部输入构造表达式、`Runtime.exec` / `ProcessBuilder -c` 是否拼接命令、MyBatis 注解 SQL 是否含 `${}`、`new URL` 与 `RestTemplate` 的地址是否来自变量（SSRF）、`getWriter()` 是否直接写外部输入（XSS）；平台不支持时只跳过这一层并说明原因
+- **配置安全（qcsec）**：内置扫描器直接解析 `application*.yml` / `.properties` / `bootstrap*.yml` 与 MyBatis Mapper XML，不用装任何外部工具，检出 Druid 面板默认口令与 `0.0.0.0` 绑定、`allowMultiQueries=true`、Actuator 全端点暴露、CORS 通配源（含允许凭证）、明文口令、devtools 开启、`server.ssl.enabled: false`、Swagger/Knife4j 文档开放、Mapper 里 `${}` 字符串替换与 `statementType="STATEMENT"`、Redis 空口令、Nacos 默认账号与关闭鉴权、RabbitMQ guest 账号、Kafka SASL 明文口令
+- **AST 语义规则（astgrep）**：用 ast-grep 解析 Java 语法树（引擎随扩展打包，逐平台二进制），检查 `permitAll()` 是否覆盖 `/actuator`、`/admin`、`/druid`、`/nacos` 等敏感路径或 `anyRequest().permitAll()`（含匹配器参数为常量白名单、`web.ignoring()` 绕过滤器链两种写法）、日志是否直接输出口令/令牌、`MultipartFile` 参数所在方法是否缺少大小与类型校验、SQL 是否由「字面量 + 变量」拼接后执行、`@CrossOrigin` 是否通配来源、SpEL/OGNL 是否用外部输入构造表达式、`Runtime.exec` / `ProcessBuilder -c` 是否拼接命令、MyBatis 注解 SQL 是否含 `${}`、`new URL` 与 `RestTemplate` 的地址是否来自变量（SSRF）、`getWriter()` / `PrintWriter` 是否直接写外部输入、Thymeleaf `th:utext` 与 JSP 是否未转义输出（XSS）；平台不支持时只跳过这一层并说明原因
 - **依赖一键升级**：把有修复版本的直接依赖写回 pom，编译失败自动还原
 - **面板内设置**：点「设置」勾选扫描类型，或一键切换快速 / 完整模式
 - **扫描控制**：图标工具栏支持开始、暂停、继续、终止；暂停在扫描器边界生效，终止会结束 Maven / Trivy 进程树
@@ -121,7 +121,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.trivy.preferMirror` | `true` | 未配置仓库时优先走 daocloud 镜像，避免 ghcr.io 不可达导致长时间等待 |
 | `qualityCenter.spotbugs.enabled` | `true` | 启用 SpotBugs + FindSecBugs 字节码检测 |
 | `qualityCenter.qcsec.enabled` | `true` | 启用配置安全扫描（qcsec），无需外部工具 |
-| `qualityCenter.astgrep.enabled` | `true` | 启用 AST 语义规则（astgrep）：解析 Java 语法树检查 permitAll 敏感路径、日志敏感字段、上传缺少校验、SQL 拼接、@CrossOrigin 通配、SpEL 注入、命令执行拼接、MyBatis 注解 SQL、SSRF、XSS |
+| `qualityCenter.astgrep.enabled` | `true` | 启用 AST 语义规则（astgrep）：解析 Java 语法树与 Thymeleaf/JSP 模板，检查 permitAll 敏感路径（含常量白名单、web.ignoring）、日志敏感字段、上传缺少校验、SQL 拼接、@CrossOrigin 通配、SpEL 注入、命令执行拼接、MyBatis 注解 SQL、SSRF、PrintWriter 与模板的未转义输出 |
 | `qualityCenter.dependencyUpgrade.enabled` | `true` | 显示「升级依赖」按钮，允许一键改写 pom 版本 |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
 | `qualityCenter.openRewrite.recipes` | `[]` | 手动启用的进阶配方；面板「设置」里按风险分组勾选，且只展示当前项目适用的配方 |
@@ -225,7 +225,7 @@ node <扩展目录>/out/cli.js report --md                  # 复用已有结果
 npm run rules:matrix        # 跑 fixtures/ 下的正例与反例，输出 PASS / GAP / FAIL
 ```
 
-代码层由 SpotBugs + FindSecBugs 1.14（144 个 pattern）承担，可检出宽松 CORS（`PERMISSIVE_CORS`）、关闭 CSRF（`SPRING_CSRF_PROTECTION_DISABLED`）、硬编码口令、SQL 注入、XXE、反序列化、路径穿越等；配置层由内置 `qcsec` 承担，覆盖 Druid 面板默认口令与公网绑定、`allowMultiQueries`、Actuator 全暴露、CORS 通配源、明文口令、devtools、SSL 关闭、Swagger/Knife4j 文档开放共 10 条配置规则，外加 MyBatis 的 `${}` 与 `statementType="STATEMENT"` 2 条 Mapper 规则；源码语义层由 `astgrep` 承担，覆盖 `permitAll()` 敏感路径、日志敏感字段、上传缺少校验、SQL 字符串拼接、`@CrossOrigin` 通配、SpEL/OGNL 注入、命令执行拼接、MyBatis 注解 SQL、SSRF、XSS 共 10 条规则。当前矩阵 28 个用例全部转绿（`PASS 28 / GAP 0 / FAIL 0`）。
+代码层由 SpotBugs + FindSecBugs 1.14（144 个 pattern）承担，可检出宽松 CORS（`PERMISSIVE_CORS`）、关闭 CSRF（`SPRING_CSRF_PROTECTION_DISABLED`）、硬编码口令、SQL 注入、XXE、反序列化、路径穿越等；配置层由内置 `qcsec` 承担，覆盖 Druid 面板默认口令与公网绑定、`allowMultiQueries`、Actuator 全暴露、CORS 通配源、明文口令、devtools、SSL 关闭、Swagger/Knife4j 文档开放、Redis 空口令、中间件默认账号、Nacos 关闭鉴权、Kafka SASL 明文口令共 14 条配置规则，外加 MyBatis 的 `${}` 与 `statementType="STATEMENT"` 2 条 Mapper 规则；源码语义层由 `astgrep` 承担，覆盖 `permitAll()` 敏感路径（含常量白名单与 `web.ignoring()`）、日志敏感字段、上传缺少校验、SQL 字符串拼接、`@CrossOrigin` 通配、SpEL/OGNL 注入、命令执行拼接、MyBatis 注解 SQL、SSRF、PrintWriter 与 Thymeleaf/JSP 未转义输出共 11 条规则。当前矩阵 39 个用例全部转绿（`PASS 39 / GAP 0 / FAIL 0`）。
 
 `astgrep` 的引擎是 `@ast-grep/napi` + `@ast-grep/lang-java`（Java 语法为 wasm），打包时会把 Windows x64/arm64、macOS x64/arm64、Linux x64/arm64 六个平台的二进制一起放进 vsix（约 13 MB），用户侧无需再下载；第三方平台（如 musl 发行版）会在「已跳过」里注明「AST 引擎不可用」，其余五类扫描照常。
 

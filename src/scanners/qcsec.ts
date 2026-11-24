@@ -366,8 +366,98 @@ const RULES: RuleDef[] = [
           message: '显式关闭了 server.ssl.enabled，服务将以明文 HTTP 暴露',
           advice: '在网关或应用层启用 TLS；确属内网调试，请限定在 dev profile 并确保不外发。'
         }))
+  },
+  {
+    id: 'SEC_REDIS_NO_PASSWORD',
+    cwe: 'CWE-306',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      const passwords = index.byKeySuffix(/redis\.password$/);
+      for (const entry of passwords) {
+        if (entry.value.trim() === '') {
+          drafts.push({
+            line: entry.line,
+            severity: 'medium',
+            message: 'Redis 未配置口令（password 为空），能连上端口的客户端可直接读写全部数据',
+            advice: '设置强口令并外部化（`spring.data.redis.password: ${REDIS_PASSWORD}` 或 `spring.redis.password`），同时只监听内网并开启 ACL。'
+          });
+        }
+      }
+      if (passwords.length === 0) {
+        const host = index.byKeySuffix(/redis\.host$/)[0];
+        if (host && !/localhost|127\.0\.0\.1|::1/i.test(host.value)) {
+          drafts.push({
+            line: host.line,
+            severity: 'medium',
+            message: `Redis 指向了非本机地址（${host.value}）但完全没有配置 password，未鉴权的 Redis 是常见横向移动入口`,
+            advice: '为 Redis 设置 requirepass/ACL 并外部化口令；生产实例不要暴露在可被任意主机访问的网络段。'
+          });
+        }
+      }
+      return drafts;
+    }
+  },
+  {
+    id: 'SEC_DEFAULT_CREDENTIAL_USERNAME',
+    cwe: 'CWE-1392',
+    match: (index) => {
+      const defaults = new Set(['nacos', 'guest']);
+      return index
+        .all()
+        .filter((entry) => /(^|\.)(username|user)$/i.test(entry.key))
+        .filter((entry) => !/stat-view-servlet/.test(entry.key))
+        .filter((entry) => defaults.has(entry.value.trim().toLowerCase()))
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'medium' as Severity,
+          message: `中间件仍在用默认账号「${entry.value.trim()}」`,
+          advice: '改成业务专用账号并外部化账号口令；Nacos 需同时开启 `nacos.core.auth.enabled=true`，RabbitMQ 不要用 guest 远程登录。'
+        }));
+    }
+  },
+  {
+    id: 'SEC_NACOS_AUTH_DISABLED',
+    cwe: 'CWE-306',
+    match: (index) =>
+      index
+        .byKeySuffix(/nacos\.core\.auth\.enabled$/)
+        .filter((entry) => entry.value.toLowerCase() === 'false')
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'high' as Severity,
+          message: 'Nacos 显式关闭了鉴权（nacos.core.auth.enabled=false），任何能访问 8848 的客户端都能改配置、注册服务',
+          advice: '开启 `nacos.core.auth.enabled=true` 并配置 token/身份密钥；对外只暴露必要端口，管理面走内网。'
+        }))
+  },
+  {
+    id: 'SEC_MQ_SASL_PLAINTEXT',
+    cwe: 'CWE-798',
+    match: (index) =>
+      index
+        .byKeySuffix(/sasl\.jaas\.config$/)
+        .filter((entry) => {
+          const match = /password\s*=\s*['"]([^'"]*)['"]/i.exec(entry.value);
+          if (!match) {
+            return false;
+          }
+          const secret = match[1];
+          return !/\$\{|^ENC\(|^(sm|vault|sops|aws|kms):/i.test(secret);
+        })
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'high' as Severity,
+          message: 'Kafka SASL JAAS 配置里直接写了明文口令，随配置下发即等同于账号泄露',
+          advice: '把 JAAS 口令改成 `${KAFKA_SASL_PASSWORD}` 等占位，或使用 Kerberos/SCRAM 凭证文件并从环境变量注入。'
+        }))
   }
 ];
+
+/** dev/local/test profile 里属于正常调试用法，不按生产问题报 */
+const DEV_EXEMPT_RULES = new Set([
+  'SEC_SWAGGER_PUBLIC',
+  'SEC_DEVTOOLS_ENABLED',
+  'SEC_REDIS_NO_PASSWORD'
+]);
 
 function collectConfigFiles(root: string): string[] {
   const files: string[] = [];
@@ -443,6 +533,14 @@ function scanMapperDollar(file: string, text: string): Issue[] {
   let match: RegExpExecArray | null;
   while ((match = regex.exec(masked)) !== null) {
     const expression = match[1].trim();
+    // MyBatis-Plus 的 wrapper 片段由框架按类型安全方式生成，属于已知安全写法
+    if (/^(ew\.(customSqlSegment|sqlSegment)|ew\.paramNameValuePairs|_parameter)/.test(expression)) {
+      continue;
+    }
+    // `<if test="orderBy == 'id' or orderBy == 'name'">` 这类「白名单枚举」保护下的拼接不算注入
+    if (isWhitelistGuarded(masked, match.index, expression)) {
+      continue;
+    }
     const line = masked.slice(0, match.index).split('\n').length;
     issues.push({
       source: 'qcsec',
@@ -457,6 +555,42 @@ function scanMapperDollar(file: string, text: string): Issue[] {
     });
   }
   return issues;
+}
+
+/**
+ * 判断 `${expr}` 是否被外层 `<if test="...">` 用字面量白名单保护：
+ * 只认「同一表达式与字符串字面量做 == / eq 比较，且没有和其他变量比较」的写法。
+ */
+function isWhitelistGuarded(text: string, position: number, expression: string): boolean {
+  const openRegex = /<if\b[^>]*\btest\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>/gi;
+  let lastOpen: RegExpExecArray | null = null;
+  let current: RegExpExecArray | null;
+  while ((current = openRegex.exec(text)) !== null && current.index < position) {
+    lastOpen = current;
+  }
+  if (!lastOpen) {
+    return false;
+  }
+  // 已经闭合的 <if> 不算包住当前片段
+  if (/<\/if>/i.test(text.slice(lastOpen.index, position))) {
+    return false;
+  }
+  const test = (lastOpen[1] ?? lastOpen[2] ?? '').trim();
+  if (!test || test.includes('${')) {
+    return false;
+  }
+  const escaped = expression.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const literalCompare = (test.match(new RegExp(`${escaped}\\s*(==|eq)\\s*(?:'[^']*'|"[^"]*")`, 'g')) ?? [])
+    .length;
+  if (literalCompare === 0) {
+    return false;
+  }
+  // 与变量比较、参与拼接或作为方法调用参数时，白名单不成立
+  const risky =
+    new RegExp(`${escaped}\\s*(?:\\+|\\()`).test(test) ||
+    new RegExp(`${escaped}\\s*(?:==|eq|!=|ne)\\s*[A-Za-z_$]`).test(test) ||
+    new RegExp(`[A-Za-z_$][\\w$]*\\s*(?:==|eq|!=|ne)\\s*${escaped}`).test(test);
+  return !risky;
 }
 
 /** `statementType="STATEMENT"` 会退回非预编译 Statement，`#{}` 也失去参数绑定保护 */
@@ -506,7 +640,7 @@ export async function scanQcsec(root: string): Promise<QcsecResult> {
     // dev/test profile 里开文档与 devtools 属于正常用法，避免把这些当生产问题误报
     const isDevProfile = /-(dev|local|test|it|integration)\.(ya?ml|properties)$/i.test(file);
     for (const rule of RULES) {
-      if (isDevProfile && (rule.id === 'SEC_SWAGGER_PUBLIC' || rule.id === 'SEC_DEVTOOLS_ENABLED')) {
+      if (isDevProfile && DEV_EXEMPT_RULES.has(rule.id)) {
         continue;
       }
       let drafts: IssueDraft[];

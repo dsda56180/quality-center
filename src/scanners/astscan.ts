@@ -60,7 +60,16 @@ const SENSITIVE_PATHS = [
   'jolokia',
   'monitor',
   'manage',
-  'internal'
+  'internal',
+  'management',
+  'nacos',
+  'sentinel',
+  'heapdump',
+  'threaddump',
+  'configprops',
+  'prometheus',
+  'eureka',
+  'jmx'
 ];
 
 const SENSITIVE_FIELDS = /password|passwd|pwd|token|secret|credential|idcard|idno|mobile|phone|email|session/i;
@@ -122,7 +131,61 @@ function collectJavaFiles(root: string): string[] {
   return files;
 }
 
+/** 模板文件（Thymeleaf / JSP）单独收集，用于检查未转义输出 */
+function collectTemplateFiles(root: string): string[] {
+  const files: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 12) {
+      return;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
+          walk(path.join(dir, entry.name), depth + 1);
+        }
+        continue;
+      }
+      if (/\.(html|htm|jsp)$/i.test(entry.name)) {
+        files.push(path.join(dir, entry.name));
+      }
+    }
+  };
+  walk(root, 0);
+  return files;
+}
+
 const lineOf = (node: SgNode): number => node.range().start.line + 1;
+
+/**
+ * 匹配器参数里常见「白名单常量」写法：`antMatchers(WHITELIST).permitAll()`。
+ * 只按参数文本判断会漏掉这类写法，这里把同文件里同名常量/局部变量的字面量值展开进来。
+ * 只展开一层，够覆盖 `String[]` / `String` 常量两类常见写法。
+ */
+function expandConstantArgs(root: SgNode, argsText: string): string {
+  const names = new Set(argsText.match(/[A-Za-z_$][\w$]*/g) ?? []);
+  const parts = [argsText];
+  const declarations = root
+    .findAll({ rule: { kind: 'field_declaration' } })
+    .concat(root.findAll({ rule: { kind: 'local_variable_declaration' } }));
+  for (const declaration of declarations) {
+    const declarator = declaration.field('declarator');
+    const name = declarator?.field('name')?.text();
+    if (!name || !names.has(name)) {
+      continue;
+    }
+    const value = declarator?.field('value')?.text() ?? '';
+    if (value) {
+      parts.push(value);
+    }
+  }
+  return parts.join(' ');
+}
 
 /** 向上找到最近的指定类型节点，用于把「调用」升级成整条语句 / 整个方法 */
 function climb(node: SgNode, kinds: string[]): SgNode | undefined {
@@ -202,6 +265,7 @@ function checkPermitAll(file: string, root: SgNode): Issue[] {
     if (!matcherArgs) {
       continue;
     }
+    matcherArgs = expandConstantArgs(root, matcherArgs);
     const hit = SENSITIVE_PATHS.find((name) => new RegExp(`["']\\S*${name}`, 'i').test(matcherArgs!));
     if (!hit) {
       continue;
@@ -215,6 +279,34 @@ function checkPermitAll(file: string, root: SgNode): Issue[] {
         'CWE-284',
         `permitAll() 覆盖了敏感路径（含「${hit}」），管理/调试端点会绕过鉴权`,
         '把该路径改为 hasRole/hasAuthority 或显式 IP 白名单；运维端点应走独立的管理端口与认证。'
+      )
+    );
+  }
+
+  // `web.ignoring().antMatchers(...)` 直接跳过整个安全过滤器链，后果比 permitAll 更重
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    if (!name || !/^(antMatchers|mvcMatchers|requestMatchers|regexMatchers)$/.test(name)) {
+      continue;
+    }
+    const chain = call.field('object')?.text() ?? '';
+    if (!/ignoring\s*\(\s*\)/.test(chain)) {
+      continue;
+    }
+    const args = expandConstantArgs(root, call.field('arguments')?.text() ?? '');
+    const hit = SENSITIVE_PATHS.find((item) => new RegExp(`["']\\S*${item}`, 'i').test(args));
+    if (!hit) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_PERMIT_ALL_SENSITIVE_PATH',
+        'high',
+        'CWE-284',
+        `web.ignoring() 让敏感路径（含「${hit}」）完全绕过 Spring Security 过滤器链`,
+        'web.ignoring() 只用于静态资源；管理/调试路径应留在过滤器链内并显式要求角色。'
       )
     );
   }
@@ -555,20 +647,63 @@ function checkSsrf(file: string, root: SgNode): Issue[] {
   return issues;
 }
 
-/** 规则 10：把外部输入直接写进响应（反射型 XSS） */
+/** 规则 10：把外部输入直接写进响应（反射型 XSS），含 PrintWriter 变量中转 */
+const XSS_WRITE_METHODS = ['write', 'print', 'println', 'append', 'printf', 'format'];
+/** 已有转义/净化处理的不报，避免把正确写法当成漏洞 */
+const ESCAPE_GUARD = /escapeHtml|htmlEscape|escapeXml|StringEscapeUtils|HtmlUtils|Encode\.forHtml|sanitize|OWASP|HtmlEscapers/i;
+
+/** 方法体里由 `response.getWriter()` 赋值的局部 PrintWriter 变量 */
+function writerVarsOf(method: SgNode): Set<string> {
+  const vars = new Set<string>();
+  const body = method.field('body');
+  if (!body) {
+    return vars;
+  }
+  for (const declaration of body.findAll({ rule: { kind: 'local_variable_declaration' } })) {
+    const declarator = declaration.field('declarator');
+    const name = declarator?.field('name')?.text();
+    const value = declarator?.field('value')?.text() ?? '';
+    if (name && /getWriter\s*\(\)/.test(value)) {
+      vars.add(name);
+    }
+  }
+  return vars;
+}
+
 function checkXssWriter(file: string, root: SgNode): Issue[] {
   const issues: Issue[] = [];
+  const cache = new Map<string, Set<string>>();
   for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
     const name = call.field('name')?.text();
-    if (!name || !['write', 'print', 'println'].includes(name)) {
+    if (!name || !XSS_WRITE_METHODS.includes(name)) {
       continue;
     }
     const receiver = call.field('object')?.text() ?? '';
-    if (!/getWriter\s*\(\)/.test(receiver)) {
+    if (/getOutputStream\s*\(\)/.test(receiver)) {
+      continue;
+    }
+    let isWriter = /getWriter\s*\(\)/.test(receiver);
+    if (!isWriter) {
+      const method = climb(call, ['method_declaration', 'constructor_declaration']);
+      if (!method) {
+        continue;
+      }
+      const key = `${method.range().start.line}:${method.range().start.column}`;
+      let vars = cache.get(key);
+      if (!vars) {
+        vars = writerVarsOf(method);
+        cache.set(key, vars);
+      }
+      isWriter = vars.has(receiver);
+    }
+    if (!isWriter) {
       continue;
     }
     const args = call.field('arguments')?.text() ?? '';
     if (/^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)$/.test(args)) {
+      continue;
+    }
+    if (ESCAPE_GUARD.test(args)) {
       continue;
     }
     issues.push(
@@ -582,6 +717,64 @@ function checkXssWriter(file: string, root: SgNode): Issue[] {
         '改用模板引擎（默认转义）或先做 HTML 实体编码；设置 `Content-Type: text/html; charset=UTF-8` 不能替代转义。'
       )
     );
+  }
+  return issues;
+}
+
+/** 规则 11：Thymeleaf `th:utext` 与 JSP 脚本直接输出未转义内容 */
+function checkThymeleafUtext(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const attrName of root.findAll({ rule: { kind: 'attribute_name' } })) {
+    if (attrName.text().toLowerCase() !== 'th:utext') {
+      continue;
+    }
+    const attribute = attrName.parent();
+    const valueText = attribute?.text() ?? '';
+    // th:utext 本身就是「不转义」；只关心真的渲染了动态内容的情况
+    if (!/\$\{|\*\{/.test(valueText) || ESCAPE_GUARD.test(valueText)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        attrName,
+        'AST_XSS_TEMPLATE_UNESCAPED',
+        'medium',
+        'CWE-79',
+        'Thymeleaf 使用 th:utext 渲染动态内容，模板不会做 HTML 转义，内容可控时可注入脚本',
+        '改用 th:text（默认转义）；确需富文本时先用 OWASP Sanitizer 白名单净化，再交给 th:utext。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** JSP 里 `<%= %>` 直接输出请求参数（占位正则版，只认明确的外部输入 API） */
+function checkJspOutput(file: string, text: string): Issue[] {
+  const issues: Issue[] = [];
+  const masked = text.replace(/<%--[\s\S]*?--%>/g, (block) => block.replace(/[^\n]/g, ' '));
+  const regex = /<%=\s*([\s\S]*?)%>/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(masked)) !== null) {
+    const expression = match[1].trim();
+    if (!/getParameter|getHeader|getAttribute|request\./i.test(expression)) {
+      continue;
+    }
+    if (ESCAPE_GUARD.test(expression)) {
+      continue;
+    }
+    const line = masked.slice(0, match.index).split('\n').length;
+    issues.push({
+      source: 'astgrep',
+      severity: 'medium',
+      file,
+      line,
+      column: 1,
+      rule: 'AST_XSS_TEMPLATE_UNESCAPED',
+      message: 'JSP 脚本直接输出了请求参数或请求头，未经转义会造成反射型 XSS',
+      advice: '改用 JSTL `<c:out>` 或先 `HtmlUtils.htmlEscape(...)` 再输出，不要直接写 `<%= %>`。',
+      cwe: ['CWE-79']
+    });
   }
   return issues;
 }
@@ -632,5 +825,32 @@ export async function scanAstgrep(root: string): Promise<AstscanResult> {
     issues.push(...checkXssWriter(file, treeRoot));
   }
 
-  return { issues, files: parsed };
+  // 模板层：Thymeleaf 的 th:utext 与 JSP 脚本输出，同样属于「源码可控 + 不转义」
+  let templateParsed = 0;
+  for (const file of collectTemplateFiles(root)) {
+    let text: string;
+    try {
+      const stat = fs.statSync(file);
+      if (stat.size > MAX_BYTES) {
+        continue;
+      }
+      text = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    if (/\.jsp$/i.test(file)) {
+      issues.push(...checkJspOutput(file, text));
+      templateParsed += 1;
+      continue;
+    }
+    try {
+      const tree = ast.parse('Html', text);
+      issues.push(...checkThymeleafUtext(file, tree.root()));
+      templateParsed += 1;
+    } catch {
+      continue;
+    }
+  }
+
+  return { issues, files: parsed + templateParsed };
 }

@@ -1,0 +1,10 @@
+{
+  "id": "ast-xss-writer-hardened",
+  "title": "PrintWriter 只输出字面量或已转义内容（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-79",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["AST_XSS_RESPONSE_WRITE"] },
+  "target": { "rules": [], "owner": "astgrep", "status": "covered" }
+}

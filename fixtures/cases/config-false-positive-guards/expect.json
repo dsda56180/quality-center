@@ -7,7 +7,12 @@
   "requiresBuild": false,
   "expect": {
     "mustFire": [],
-    "mustNotFire": ["SEC_SWAGGER_PUBLIC", "SEC_DEVTOOLS_ENABLED", "SEC_PLAINTEXT_PASSWORD_PROPERTY"]
+    "mustNotFire": [
+      "SEC_SWAGGER_PUBLIC",
+      "SEC_DEVTOOLS_ENABLED",
+      "SEC_PLAINTEXT_PASSWORD_PROPERTY",
+      "SEC_REDIS_NO_PASSWORD"
+    ]
   },
   "target": { "rules": [], "owner": "qcsec", "status": "covered" }
 }

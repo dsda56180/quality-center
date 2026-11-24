@@ -1,0 +1,10 @@
+{
+  "id": "mybatis-if-whitelist",
+  "title": "if 里用字面量白名单约束动态字段，且使用 MyBatis-Plus wrapper 片段（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-89",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["SEC_MYBATIS_DOLLAR_SUBSTITUTION"] },
+  "target": { "rules": [], "owner": "qcsec", "status": "covered" }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "middleware-config-hardened",
+  "title": "Redis / Nacos / Kafka 口令全部外部化、Nacos 开启鉴权（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-306",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": [],
+    "mustNotFire": [
+      "SEC_REDIS_NO_PASSWORD",
+      "SEC_DEFAULT_CREDENTIAL_USERNAME",
+      "SEC_NACOS_AUTH_DISABLED",
+      "SEC_MQ_SASL_PLAINTEXT",
+      "SEC_PLAINTEXT_PASSWORD_PROPERTY"
+    ]
+  },
+  "target": { "rules": [], "owner": "qcsec", "status": "covered" }
+}

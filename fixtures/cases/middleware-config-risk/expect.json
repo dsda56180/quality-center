@@ -1,0 +1,27 @@
+{
+  "id": "middleware-config-risk",
+  "title": "Redis 空口令、Nacos 默认账号与关闭鉴权、Kafka SASL 明文口令",
+  "layer": "code",
+  "cwe": "CWE-306",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": [
+      "SEC_REDIS_NO_PASSWORD",
+      "SEC_DEFAULT_CREDENTIAL_USERNAME",
+      "SEC_NACOS_AUTH_DISABLED",
+      "SEC_MQ_SASL_PLAINTEXT"
+    ],
+    "mustNotFire": []
+  },
+  "target": {
+    "rules": [
+      "SEC_REDIS_NO_PASSWORD",
+      "SEC_DEFAULT_CREDENTIAL_USERNAME",
+      "SEC_NACOS_AUTH_DISABLED",
+      "SEC_MQ_SASL_PLAINTEXT"
+    ],
+    "owner": "qcsec",
+    "status": "covered"
+  }
+}

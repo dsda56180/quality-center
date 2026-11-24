@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+  <body>
+    <p th:text="${message}">ok</p>
+    <p th:utext="${#strings.escapeXml(message)}">ok</p>
+  </body>
+</html>

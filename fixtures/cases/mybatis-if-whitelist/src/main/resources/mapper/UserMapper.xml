@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="p.UserMapper">
+  <select id="list" resultType="map">
+    select * from users
+    <if test="orderBy == 'id' or orderBy == 'name'">
+      order by ${orderBy}
+    </if>
+  </select>
+  <select id="page" resultType="map">
+    select * from users ${ew.customSqlSegment}
+  </select>
+</mapper>

@@ -1,0 +1,10 @@
+{
+  "id": "ast-xss-template-hardened",
+  "title": "模板使用 th:text、转义函数与 c:out（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-79",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["AST_XSS_TEMPLATE_UNESCAPED"] },
+  "target": { "rules": [], "owner": "astgrep", "status": "covered" }
+}

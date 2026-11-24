@@ -1,0 +1,20 @@
+spring:
+  redis:
+    host: 10.0.0.21
+    port: 6379
+    password: "${REDIS_PASSWORD}"
+  cloud:
+    nacos:
+      discovery:
+        username: svc_quality
+        password: "${NACOS_PASSWORD}"
+  kafka:
+    properties:
+      sasl:
+        jaas:
+          config: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="svc_quality" password="${KAFKA_SASL_PASSWORD}";'
+
+nacos:
+  core:
+    auth:
+      enabled: true

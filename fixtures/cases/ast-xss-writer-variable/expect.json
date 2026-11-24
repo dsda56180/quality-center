@@ -1,0 +1,10 @@
+{
+  "id": "ast-xss-writer-variable",
+  "title": "PrintWriter 变量接收 getWriter()，再直接输出请求参数",
+  "layer": "code",
+  "cwe": "CWE-79",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_XSS_RESPONSE_WRITE"], "mustNotFire": [] },
+  "target": { "rules": ["AST_XSS_RESPONSE_WRITE"], "owner": "astgrep", "status": "covered" }
+}

@@ -6,8 +6,8 @@
 ## 覆盖口径
 
 - **代码层**（Java 源码 / 字节码）：由 `SpotBugs + FindSecBugs 1.14`（144 个 pattern）承担，`PERMISSIVE_CORS`、`SPRING_CSRF_*` 等由字节码 + Spring 语义检测。
-- **源码语义层**（Java AST）：由 `astgrep` 承担（`@ast-grep/napi` + `@ast-grep/lang-java`），用于「方法链 + 字符串字面量」这类字节码会丢失语义、正则又容易误报的规则；当前 10 条规则，全部有正例/反例靶场。
-- **配置层**（`application*.yml/yaml/properties`、`bootstrap*.yml`、MyBatis Mapper XML）：由内置扫描器 `qcsec` 承担，把配置拍平成「键路径 + 值 + 行号」或按 XML 行号定位，支持跨键组合判断（Druid 面板开启但未设口令这类），不依赖任何外部二进制。当前 10 条配置规则 + 2 条 Mapper 规则，全部实现且有靶场。
+- **源码语义层**（Java AST + 模板）：由 `astgrep` 承担（`@ast-grep/napi` + `@ast-grep/lang-java`），用于「方法链 + 字符串字面量」这类字节码会丢失语义、正则又容易误报的规则；当前 11 条规则（含 Thymeleaf / JSP 未转义输出），全部有正例/反例靶场。
+- **配置层**（`application*.yml/yaml/properties`、`bootstrap*.yml`、MyBatis Mapper XML）：由内置扫描器 `qcsec` 承担，把配置拍平成「键路径 + 值 + 行号」或按 XML 行号定位，支持跨键组合判断（Druid 面板开启但未设口令这类），不依赖任何外部二进制。当前 14 条配置规则 + 2 条 Mapper 规则，全部实现且有靶场。
 - **依赖层**：`Trivy --scanners vuln`，按依赖坐标查漏洞库（CVE），只能回答"这个版本有没有已知漏洞"。
 - 覆盖度不是承诺"100%"，而是：清单条目 → 规则 ID → fixture 用例，一一对应，可跑可查；缺口在表里写明。
 
@@ -47,11 +47,18 @@
 | Swagger / knife4j 在生产环境开放 | 200 | `SEC_SWAGGER_PUBLIC`（springdoc / springfox / knife4j 的 enabled 开关为 true，且未用 `knife4j.production=true` 保护） | 已覆盖 | `swagger-public` / `swagger-hardened` |
 | `spring.devtools` 在生产启用 | 489 | `SEC_DEVTOOLS_ENABLED` | 已覆盖 | `config-hardening-mixed` |
 | 配置文件里明文口令（非 `${...}` 占位） | 798 | `SEC_PLAINTEXT_PASSWORD_PROPERTY` | 已覆盖 | `config-hardening-mixed`（反例） |
-| MyBatis Mapper XML 使用 `${}` 字符串替换 | 89 | `SEC_MYBATIS_DOLLAR_SUBSTITUTION`（qcsec：扫描含 `<mapper>` 的 XML，逐行定位 `${...}`，XML 注释内的示例不算） | 已覆盖 | `mybatis-dollar-substitution` / `mybatis-hash-only` |
+| MyBatis Mapper XML 使用 `${}` 字符串替换 | 89 | `SEC_MYBATIS_DOLLAR_SUBSTITUTION`（qcsec：扫描含 `<mapper>` 的 XML，逐行定位 `${...}`；XML 注释、`${ew.customSqlSegment}` 等 MyBatis-Plus wrapper 片段、以及被 `<if test="x == 'a' or x == 'b'">` 字面量白名单约束的拼接都放行） | 已覆盖 | `mybatis-dollar-substitution` / `mybatis-hash-only` / `mybatis-if-whitelist` / `mybatis-if-user-input` |
 | Mapper 使用 `statementType="STATEMENT"` | 89 | `SEC_MYBATIS_STATEMENT_TYPE`（qcsec：退回非预编译 Statement，`#{}` 也失去绑定保护） | 已覆盖 | `mapper-statement-type` |
 | MyBatis 注解 SQL 使用 `${}` | 89 | `AST_MYBATIS_ANNOTATION_SQL`（astgrep：`@Select/@Insert/@Update/@Delete` 注解文本含 `${`） | 已覆盖 | `ast-mybatis-annotation-sql` / `ast-safe-patterns-2` |
 | 外部输入作为请求地址（SSRF） | 918 | `AST_SSRF_EXTERNAL_URL`（astgrep：`new URL(非字面量)`、`RestTemplate/WebClient` 首个参数非字面量） | 已覆盖 | `ast-ssrf-external-url` / `ast-safe-patterns-2` |
-| 响应流直接写入外部输入（反射型 XSS） | 79 | `AST_XSS_RESPONSE_WRITE`（astgrep：`getWriter().write/print/println` 参数非字面量） | 已覆盖 | `ast-xss-response-write` / `ast-safe-patterns-2` |
+| 响应流直接写入外部输入（反射型 XSS） | 79 | `AST_XSS_RESPONSE_WRITE`（astgrep：`getWriter()` 直连或 `PrintWriter` 变量中转的 `write/print/println/append/printf/format`，参数非字面量且未转义） | 已覆盖 | `ast-xss-response-write` / `ast-xss-writer-variable` / `ast-xss-writer-hardened` |
+| 模板层未转义输出（Thymeleaf `th:utext` / JSP `<%= request.getParameter %>`） | 79 | `AST_XSS_TEMPLATE_UNESCAPED`（astgrep：HTML 语法树定位 `th:utext` 动态表达式；JSP 只认请求参数/请求头直出） | 已覆盖 | `ast-xss-template` / `ast-xss-template-hardened` |
+| `web.ignoring()` 让管理路径绕过安全过滤器链 | 284 | `AST_PERMIT_ALL_SENSITIVE_PATH`（astgrep：沿 `ignoring()` 整条链判断匹配器参数，含常量展开） | 已覆盖 | `ast-permit-all-ignore` / `ast-permit-all-hardened-2` |
+| `permitAll()` 的匹配器参数是白名单常量 | 284 | `AST_PERMIT_ALL_SENSITIVE_PATH`（astgrep：把同文件 `static final String[]` / 局部变量常量展开后再匹配敏感路径） | 已覆盖 | `ast-permit-all-constant` / `ast-permit-all-hardened-2` |
+| Redis 空口令或远端实例没配 password | 306 | `SEC_REDIS_NO_PASSWORD`（dev/test profile 不报） | 已覆盖 | `middleware-config-risk` / `middleware-config-hardened` |
+| 中间件默认账号（Nacos `nacos`、RabbitMQ `guest`） | 1392 | `SEC_DEFAULT_CREDENTIAL_USERNAME` | 已覆盖 | `middleware-config-risk` / `middleware-config-hardened` |
+| Nacos 关闭鉴权（`nacos.core.auth.enabled=false`） | 306 | `SEC_NACOS_AUTH_DISABLED` | 已覆盖 | `middleware-config-risk` / `middleware-config-hardened` |
+| Kafka SASL JAAS 里写死明文口令 | 798 | `SEC_MQ_SASL_PLAINTEXT` | 已覆盖 | `middleware-config-risk` / `middleware-config-hardened` |
 | 关闭 HTTPS / `server.ssl.enabled: false` | 319 | `SEC_SSL_DISABLED` | 已覆盖 | `config-hardening-mixed` |
 
 ## 接线现状与局限
@@ -66,5 +73,5 @@ FindSecBugs 必须写进 pom 的 `<build><plugins>` 才生效（`spotbugs-maven-
 
 - **多模块工程**：只注入根 pom，SpotBugs 在子模块上运行时不会带上 FindSecBugs（后续计划改用 SpotBugs 独立发行版 + `-pluginList` 解决）。
 - 需要 `target/classes`（或先执行构建），否则 SpotBugs 直接跳过。
-- 配置层由 `qcsec` 覆盖，但它只解析配置文本、不做运行期验证：`${ENV}` 占位视为已外部化（`ENC(...)`、`{cipher}`、`sm:/vault:` 等密钥托管写法同样放行），不会跟进到实际生效值；profile 差异按文件计，不会合并 `application-*.yml` 的覆盖关系；`dev/local/test/it` profile 里的 Swagger 与 devtools 开关按正常用法忽略；Swagger 规则只认显式 enabled 开关，依赖引入但未显式配置时不会报；MyBatis 规则只认 XML 里的 `${}` 与 `statementType="STATEMENT"`。
-- 语义层由 `astgrep` 覆盖，局限是：只解析 Java 源码（不处理 Kotlin / Groovy / 编译产物）；不解析 Spring 继承与 `@Configuration` 装配关系，`/actuator` 这类路径靠字面量匹配；`anyRequest()` / 匹配器判断只看同一条方法链，路径由常量拼接时会漏报；`MultipartFile` 校验只看方法体内关键字，跨方法封装的校验会判为缺失；SQL 拼接只覆盖「拼接结果直接进执行调用」，`String sql = ... + x` 再执行的变量中转会漏报；`@CrossOrigin` 只认注解本身，不合并全局 CORS 配置；SSRF 与命令执行只放行字面量参数，常量中转会报（可用 `baseline` 忽略）；XSS 只覆盖 `getWriter()` 输出流，模板引擎与 JSP 不在范围。以上都可用 `baseline` 忽略。
+- 配置层由 `qcsec` 覆盖，但它只解析配置文本、不做运行期验证：`${ENV}` 占位视为已外部化（`ENC(...)`、`{cipher}`、`sm:/vault:` 等密钥托管写法同样放行），不会跟进到实际生效值；profile 差异按文件计，不会合并 `application-*.yml` 的覆盖关系；`dev/local/test/it` profile 里的 Swagger、devtools 与「Redis 空口令」按正常用法忽略；Swagger 规则只认显式 enabled 开关，依赖引入但未显式配置时不会报；MyBatis 只认 XML 与注解里的 `${}`、`statementType="STATEMENT"`，白名单豁免要求 `<if test>` 里对同一表达式做字面量 `==`/`eq` 比较且不与其他变量比较，写成 `x > 'a'` 之类范围判断仍会报。
+- 语义层由 `astgrep` 覆盖，局限是：只解析 Java 源码（不处理 Kotlin / Groovy / 编译产物）；不解析 Spring 继承与 `@Configuration` 装配关系，`/actuator` 这类路径靠字面量匹配；`anyRequest()` / 匹配器判断只看同一条方法链，常量只展开同文件一层（跨类常量、`@Value` 注入的路径会漏报）；`MultipartFile` 校验只看方法体内关键字，跨方法封装的校验会判为缺失；SQL 拼接只覆盖「拼接结果直接进执行调用」，`String sql = ... + x` 再执行的变量中转会漏报；`@CrossOrigin` 只认注解本身，不合并全局 CORS 配置；SSRF 与命令执行只放行字面量参数，常量中转会报（可用 `baseline` 忽略）；XSS 覆盖 `getWriter()` 直连与同方法内 `PrintWriter` 变量中转，跨方法传递的输出流不在范围；模板层只认 Thymeleaf `th:utext` 与 JSP 里 `<%= %>` 直出请求参数，FreeMarker/Velocity 与自定义标签不在范围。以上都可用 `baseline` 忽略。
