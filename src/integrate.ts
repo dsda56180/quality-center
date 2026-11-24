@@ -1,10 +1,13 @@
 /**
- * 编辑器集成：单一事实源放在 .quality-center/，各编辑器的规则与 MCP 配置都按它生成。
+ * 编辑器集成：内容全部集中在 .quality-center/，编辑器目录里只留「指针文件」。
  *
  * 设计要点：
+ * - 业务目录零侵入：规则/MCP 都是编辑器强制路径上的薄封装（≤10 行），不复制流程知识；
  * - 生成物可重复执行（幂等），带托管块标记，不覆盖用户自己的规则；
  * - --check 只比对不写，供 CI 发现「策略改了但适配器没同步」；
- * - 启动器 shim 让 MCP 配置不再带扩展版本号，升级扩展不需要改五个编辑器。
+ * - 启动器 shim 让 MCP 配置不再带扩展版本号，升级扩展不需要改五个编辑器；
+ * - 默认只为检测到的编辑器生成适配器；AGENTS.md / .mcp.json 这类兜底文件需显式 --fallback；
+ * - 扫描结果与升级计划都在 .quality-center/ 内，由它自带的 .gitignore 忽略，不污染仓库根。
  */
 import * as fs from 'fs';
 import * as os from 'os';
@@ -17,6 +20,8 @@ export type IntegrateMode = 'auto' | 'all';
 export interface IntegrateOptions {
   mode: IntegrateMode;
   check: boolean;
+  /** 是否额外生成 AGENTS.md / 根 .mcp.json 这类兜底文件（默认否，保持仓库干净） */
+  fallback?: boolean;
 }
 
 export interface IntegrateFile {
@@ -37,19 +42,41 @@ const CLI_REL = path.join('.quality-center', 'bin', 'qc.cjs');
 const BEGIN = '<!-- quality-center:begin (generated, do not edit inside) -->';
 const END = '<!-- quality-center:end -->';
 
-/** 规则只有路由职责，判断细节放 SKILL.md，避免每轮吃满上下文 */
+/**
+ * 规则只做路由：不写流程细节，只告诉 AI 去哪读、先做什么。
+ * 控制在 10 行以内，避免每次对话都把上下文预算吃掉。
+ */
 const RULE_BODY = [
   '# 质量中心：依赖与配置安全整改',
   '',
-  '遇到 CVE、依赖升级、Spring Boot 升级、配置安全整改时，按下面顺序执行，不要凭经验直接改 pom：',
+  '遇到 CVE、依赖升级、框架升级或配置安全整改时：',
   '',
-  '1. 先出计划：`node .quality-center/bin/qc.cjs upgrade plan`（或用 MCP 工具 `quality_upgrade_plan`）。',
-  '2. 只审 `.quality-center/upgrade/<planId>/plan.json` 与 `pom.diff`，**不要手改 pom.xml**；计划里的 skipped 要逐条解释。',
-  '3. 落盘：`node .quality-center/bin/qc.cjs upgrade apply --plan <planId> --write --hash <pomHash>`（MCP 用 `quality_upgrade_apply`，必须带 `pomHash`）。',
-  '4. 代码级判断（组件替换、死代码、CORS 过滤器链、凭证占位）按 `.quality-center/skills/quality-center-java-upgrade/SKILL.md` 执行。',
-  '5. 收尾：`upgrade check` 必须通过，再跑构建门禁与 `scan --only trivy` 复扫；汇报写「问题 · 组件 当前→目标 · 理由 · 已验证」。',
+  '1. 先读 `.quality-center/skills/quality-center-java-upgrade/SKILL.md` 与 `.quality-center/upgrade-policy.json`；',
+  '2. 先调用 `quality_upgrade_plan` 出计划，**不要手改 pom**；只审 `plan.json` 与 `pom.diff`；',
+  '3. 落盘必须用 `quality_upgrade_apply`（带 planId + pomHash），再用 `quality_build` 与 `quality_scan` 复扫；',
+  '4. 计划里的 skipped / 跨大版本项要逐条解释，未跑通构建不得说「已完成」。',
   '',
-  '禁止：为让扫描变干净而改 `.trivyignore` / `baseline.json`；不说明风险就跨大版本；没跑构建就说升级完成。'
+  '禁止：为过扫描改 `.trivyignore` / `baseline.json`。'
+].join('\n');
+
+/** 数据目录自带的忽略清单：只留策略与技能，扫描/计划产物全部不入库 */
+const NESTED_GITIGNORE = [
+  '# 由 quality-center 生成：本目录只提交策略、启动器与技能，其余是运行产物',
+  'issues.json',
+  'report.md',
+  'report.sarif',
+  'scans/',
+  'upgrade/',
+  '*.log',
+  '',
+  '# 需要提交的内容（显式放行）',
+  '!upgrade-policy.json',
+  '!bin/',
+  '!bin/**',
+  '!skills/',
+  '!skills/**',
+  '!.gitignore',
+  ''
 ].join('\n');
 
 const LAUNCHER_CJS = [
@@ -277,6 +304,10 @@ export function integrate(root: string, options: IntegrateOptions): IntegrateRes
   record(path.join(root, CLI_REL), writeManaged(path.join(root, CLI_REL), LAUNCHER_CJS, check));
   record(path.join(root, '.quality-center', 'bin', 'qc.cmd'), writeManaged(path.join(root, '.quality-center', 'bin', 'qc.cmd'), LAUNCHER_CMD, check));
   record(path.join(root, '.quality-center', 'bin', 'qc.sh'), writeManaged(path.join(root, '.quality-center', 'bin', 'qc.sh'), LAUNCHER_SH, check));
+  record(
+    path.join(root, '.quality-center', '.gitignore'),
+    writeManaged(path.join(root, '.quality-center', '.gitignore'), NESTED_GITIGNORE, check)
+  );
 
   const skillSource = path.join(PACKAGE_ROOT, 'skills', 'quality-center-java-upgrade', 'SKILL.md');
   const skillTarget = path.join(root, SKILL_REL);
@@ -287,10 +318,10 @@ export function integrate(root: string, options: IntegrateOptions): IntegrateRes
     record(skillTarget, 'missing');
   }
 
-  // 2. 编辑器适配器
+  // 2. 编辑器适配器（只写检测到的编辑器；内容都指向 .quality-center/，这里只是薄封装）
   const targets = options.mode === 'all' ? new Set(['trae', 'cursor', 'vscode', 'github']) : detect(root);
   if (options.mode === 'auto' && targets.size === 0) {
-    notes.push('未检测到 .trae/.cursor/.vscode/.github；只写了 AGENTS.md 与 .mcp.json，可用 integrate --all 全量铺开');
+    notes.push('未检测到任何编辑器；只写了 .quality-center/ 数据目录，可用 integrate --all 全量铺开');
   }
 
   const rule = ruleDocument();
@@ -313,9 +344,13 @@ export function integrate(root: string, options: IntegrateOptions): IntegrateRes
     );
   }
 
-  // 3. 最低公分母：任何 agent 都能读的 .mcp.json 与 AGENTS.md
-  record(path.join(root, '.mcp.json'), upsertMcpJson(path.join(root, '.mcp.json'), 'mcpServers', check));
-  record(path.join(root, 'AGENTS.md'), upsertBlock(path.join(root, 'AGENTS.md'), agentsBlock(), check));
+  // 3. 兜底文件：仅当显式要求时生成，避免在仓库根多出 AGENTS.md / .mcp.json
+  if (options.fallback) {
+    record(path.join(root, '.mcp.json'), upsertMcpJson(path.join(root, '.mcp.json'), 'mcpServers', check));
+    record(path.join(root, 'AGENTS.md'), upsertBlock(path.join(root, 'AGENTS.md'), agentsBlock(), check));
+  } else {
+    notes.push('未写 AGENTS.md / 根 .mcp.json（兜底文件默认关闭）；需要时加 --fallback');
+  }
 
   const drifted = files.filter((item) => item.action === 'drift' || item.action === 'missing');
   const notGenerated: string[] = [];

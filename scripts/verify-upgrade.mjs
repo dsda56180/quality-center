@@ -227,10 +227,19 @@ async function main() {
   check('状态为 applied', checkRun.out.includes('applied'));
 
   console.log('6) integrate：生成、幂等、漂移');
-  const integrateRun = run(['integrate', dir, '--all']);
+  const plainDir = prepare();
+  const autoRun = run(['integrate', plainDir]);
+  check('默认 auto 退出码 0', autoRun.code === 0, autoRun.err.trim());
+  check('默认不生成 AGENTS.md', !fs.existsSync(path.join(plainDir, 'AGENTS.md')));
+  check('默认不生成根 .mcp.json', !fs.existsSync(path.join(plainDir, '.mcp.json')));
+  check('默认仍生成数据目录', fs.existsSync(path.join(plainDir, '.quality-center/upgrade-policy.json')));
+  check('默认自带忽略清单', fs.existsSync(path.join(plainDir, '.quality-center/.gitignore')));
+
+  const integrateRun = run(['integrate', dir, '--all', '--fallback']);
   check('integrate 退出码 0', integrateRun.code === 0, integrateRun.err.trim());
   for (const rel of [
     '.quality-center/upgrade-policy.json',
+    '.quality-center/.gitignore',
     '.quality-center/bin/qc.cjs',
     '.quality-center/skills/quality-center-java-upgrade/SKILL.md',
     '.trae/rules/quality-center.md',
@@ -244,6 +253,7 @@ async function main() {
   ]) {
     check(`生成 ${rel}`, fs.existsSync(path.join(dir, rel)));
   }
+  check('数据目录自带忽略清单', fs.readFileSync(path.join(dir, '.quality-center/.gitignore'), 'utf8').includes('upgrade/'));
   const traeMcp = JSON.parse(fs.readFileSync(path.join(dir, '.trae/mcp.json'), 'utf8'));
   check(
     'Trae MCP 指向启动器而非版本目录',
@@ -252,25 +262,25 @@ async function main() {
   const vscodeMcp = JSON.parse(fs.readFileSync(path.join(dir, '.vscode/mcp.json'), 'utf8'));
   check('VS Code 用 servers + type=stdio', vscodeMcp.servers?.['quality-center']?.type === 'stdio');
 
-  const checkClean = run(['integrate', dir, '--all', '--check']);
+  const checkClean = run(['integrate', dir, '--all', '--fallback', '--check']);
   check('--check 干净时退出码 0', checkClean.code === 0, checkClean.out.trim());
 
   const policyFile = path.join(dir, '.quality-center', 'upgrade-policy.json');
   const policy = JSON.parse(fs.readFileSync(policyFile, 'utf8'));
   policy.forbiddenPackages = ['com.alibaba:fastjson'];
   fs.writeFileSync(policyFile, `${JSON.stringify(policy, null, 2)}\n`, 'utf8');
-  const drift = run(['integrate', dir, '--all', '--check']);
+  const drift = run(['integrate', dir, '--all', '--fallback', '--check']);
   check('策略变更后 --check 仍为 0（适配器不内嵌策略）', drift.code === 0, drift.out.trim());
 
   const ruleFile = path.join(dir, '.trae/rules/quality-center.md');
   const MARK = '<!-- 用户手改 -->';
   fs.writeFileSync(ruleFile, `${fs.readFileSync(ruleFile, 'utf8')}\n${MARK}\n`, 'utf8');
-  const drift2 = run(['integrate', dir, '--all', '--check']);
+  const drift2 = run(['integrate', dir, '--all', '--fallback', '--check']);
   check('规则被手改后 --check 报漂移（退出码 1）', drift2.code === 1);
 
-  const again = run(['integrate', dir, '--all']);
+  const again = run(['integrate', dir, '--all', '--fallback']);
   check('重新生成退出码 0', again.code === 0);
-  check('--check 恢复 0', run(['integrate', dir, '--all', '--check']).code === 0);
+  check('--check 恢复 0', run(['integrate', dir, '--all', '--fallback', '--check']).code === 0);
   check('手改内容被覆盖', !fs.readFileSync(ruleFile, 'utf8').includes(MARK));
 
   console.log('7) MCP：工具可见 + 哈希拒绝');
@@ -301,3 +311,4 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 2;
 });
+

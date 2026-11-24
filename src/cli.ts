@@ -64,6 +64,7 @@ upgrade 选项:
 
 integrate 选项:
   --all                  为 Trae / Cursor / VS Code / Copilot 全量生成适配器
+  --fallback             额外生成 AGENTS.md 与根 .mcp.json（默认关闭，保持仓库干净）
   --check                只比对不写；生成物与策略不一致时退出码 1
 
 退出码:
@@ -406,7 +407,8 @@ function integrateCommand(args: Args): number {
   }
   const result = integrate(root, {
     mode: args.flags['--all'] === true ? 'all' : 'auto',
-    check: args.flags['--check'] === true
+    check: args.flags['--check'] === true,
+    fallback: args.flags['--fallback'] === true
   });
   const lines: string[] = [];
   for (const item of result.files) {
