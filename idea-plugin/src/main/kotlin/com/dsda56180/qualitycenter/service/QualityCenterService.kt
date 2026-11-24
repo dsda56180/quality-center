@@ -125,6 +125,16 @@ class QualityCenterService(val project: Project) : Disposable {
         val untracked: List<String>
     )
 
+    /** 上次预演结果：签名一致时直接复用，避免误关预览后再次点击又要重跑一遍 OpenRewrite */
+    private data class CachedPreview(
+        val signature: String,
+        val files: List<String>,
+        val patchText: String?
+    )
+
+    @Volatile
+    private var cachedPreview: CachedPreview? = null
+
     init {
         runCatching {
             val storage = File(PathManager.getSystemPath(), "quality-center")
@@ -440,19 +450,32 @@ class QualityCenterService(val project: Project) : Disposable {
                 var previewFiles: List<String> = emptyList()
                 var previewPatch: String? = null
                 var previewFailed = false
+                var reusedPreview = false
                 if (settings.openRewriteDryRunPreview) {
-                    setStage("运行 OpenRewrite 配方（预演）", 3)
-                    val preview = previewDeepFix(dir, recipes, artifacts, version)
-                    advanceStage("生成修复补丁")
-                    advanceStage("整理预览")
-                    if (preview == null) {
-                        previewFailed = true
-                    } else if (preview.files.isEmpty()) {
-                        notifyInfo("预演未发现需要改动的代码，已跳过深度修复。")
-                        return@execute
+                    // 预演很贵（要跑一次 Maven + OpenRewrite），按「配方 + HEAD + 工作区状态」做缓存：
+                    // 弹窗被误关、或再次点击深度修复时，直接复现上次的预览，不重新预演
+                    val signature = previewSignature(dir, recipes, artifacts, version, override?.label)
+                    val cached = cachedPreview?.takeIf { it.signature == signature }
+                    if (cached != null) {
+                        advanceStage("复用上次预演结果")
+                        previewFiles = cached.files
+                        previewPatch = cached.patchText
+                        reusedPreview = true
                     } else {
-                        previewFiles = preview.files
-                        previewPatch = preview.patchFile?.readTextSafely()
+                        setStage("运行 OpenRewrite 配方（预演）", 3)
+                        val preview = previewDeepFix(dir, recipes, artifacts, version)
+                        advanceStage("生成修复补丁")
+                        advanceStage("整理预览")
+                        if (preview == null) {
+                            previewFailed = true
+                        } else if (preview.files.isEmpty()) {
+                            notifyInfo("预演未发现需要改动的代码，已跳过深度修复。")
+                            return@execute
+                        } else {
+                            previewFiles = preview.files
+                            previewPatch = preview.patchFile?.readTextSafely()
+                            cachedPreview = CachedPreview(signature, previewFiles, previewPatch)
+                        }
                     }
                 }
 
@@ -471,7 +494,8 @@ class QualityCenterService(val project: Project) : Disposable {
                         selectable = selectable,
                         patchText = previewPatch,
                         files = previewFiles,
-                        nativeDiff = settings.previewNativeDiff
+                        nativeDiff = settings.previewNativeDiff,
+                        reusedPreview = reusedPreview
                     )
                     val decision = onEdt { showDeepFixPreview(project, info) } ?: run {
                         notifyInfo("已取消深度修复。")
@@ -503,6 +527,8 @@ class QualityCenterService(val project: Project) : Disposable {
                 }
 
                 runDeepFix(dir, recipes, artifacts, version, dirty, override?.label, selected)
+                // 修复已执行，工作区变了，缓存作废
+                cachedPreview = null
             } catch (e: Exception) {
                 notifyError("深度修复失败：${e.message}")
             } finally {
@@ -688,6 +714,25 @@ class QualityCenterService(val project: Project) : Disposable {
     }
 
     private data class PreviewResult(val files: List<String>, val patchFile: File?)
+
+    private fun previewSignature(
+        dir: File,
+        recipes: List<String>,
+        artifacts: List<String>,
+        version: String,
+        label: String?
+    ): String {
+        val head = git(dir, listOf("rev-parse", "HEAD"), 30_000).stdout.trim()
+        val status = git(dir, listOf("status", "--porcelain"), 30_000).stdout
+        return buildString {
+            append(recipes.sorted().joinToString(","))
+            append('|').append(artifacts.sorted().joinToString(","))
+            append('|').append(version)
+            append('|').append(label ?: "")
+            append('|').append(head)
+            append('|').append(sha1(status))
+        }
+    }
 
     private fun previewDeepFix(
         dir: File,
