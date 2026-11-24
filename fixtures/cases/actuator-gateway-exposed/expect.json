@@ -1,0 +1,10 @@
+{
+  "id": "actuator-gateway-exposed",
+  "title": "Spring Cloud Gateway 的 actuator 端点被显式开启",
+  "layer": "config",
+  "cwe": "CWE-497",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_ACTUATOR_GATEWAY_EXPOSED"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_ACTUATOR_GATEWAY_EXPOSED"], "owner": "qcsec", "status": "covered" }
+}

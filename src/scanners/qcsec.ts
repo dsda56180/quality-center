@@ -145,7 +145,7 @@ class Index {
   }
 }
 
-const ACTUATOR_SENSITIVE = ['env', 'heapdump', 'threaddump', 'jolokia', 'shutdown', 'configprops', 'restart'];
+const ACTUATOR_SENSITIVE = ['env', 'heapdump', 'threaddump', 'jolokia', 'shutdown', 'configprops', 'restart', 'gateway'];
 
 const RULES: RuleDef[] = [
   {
@@ -233,6 +233,10 @@ const RULES: RuleDef[] = [
         }
       }
       for (const name of ACTUATOR_SENSITIVE) {
+        // gateway 端点有独立规则（SEC_ACTUATOR_GATEWAY_EXPOSED），这里不重复报
+        if (name === 'gateway') {
+          continue;
+        }
         const enabled = index.byKeySuffix(new RegExp(`management\\.endpoint\\.${name}\\.enabled$`));
         for (const entry of enabled.filter((item) => item.value.toLowerCase() === 'true')) {
           drafts.push({
@@ -436,11 +440,11 @@ const RULES: RuleDef[] = [
       index
         .byKeySuffix(/sasl\.jaas\.config$/)
         .filter((entry) => {
-          const match = /password\s*=\s*['"]([^'"]*)['"]/i.exec(entry.value);
+          const match = /password\s*=\s*(['"])([^'"]*)\1/i.exec(entry.value);
           if (!match) {
             return false;
           }
-          const secret = match[1];
+          const secret = match[2];
           return !/\$\{|^ENC\(|^(sm|vault|sops|aws|kms):/i.test(secret);
         })
         .map((entry) => ({
@@ -448,6 +452,44 @@ const RULES: RuleDef[] = [
           severity: 'high' as Severity,
           message: 'Kafka SASL JAAS 配置里直接写了明文口令，随配置下发即等同于账号泄露',
           advice: '把 JAAS 口令改成 `${KAFKA_SASL_PASSWORD}` 等占位，或使用 Kerberos/SCRAM 凭证文件并从环境变量注入。'
+        }))
+  },
+  {
+    id: 'SEC_NACOS_TOKEN_SECRET_KEY',
+    cwe: 'CWE-1392',
+    match: (index) =>
+      index
+        .byKeySuffix(/token\.secret\.key$/)
+        .filter((entry) => {
+          const value = entry.value.trim().replace(/^["']|["']$/g, '');
+          if (value === '' || /^SecretKey0123456789/.test(value)) {
+            // 空值与 Nacos 官方文档里的示例密钥都属于「没换过」
+            return true;
+          }
+          if (/^\$\{|^ENC\(|^(sm|vault|sops|aws|kms):/i.test(value)) {
+            return false;
+          }
+          return /^(nacos|secret|changeme|default)$/i.test(value);
+        })
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'high' as Severity,
+          message: 'Nacos 的 token secret key 仍是空值或示例/弱密钥，攻击者可自行签发合法 token 冒充任意用户',
+          advice: '生成随机密钥（`openssl rand -base64 48`）后外部化注入，例如 `nacos.core.auth.plugin.nacos.token.secret.key: ${NACOS_TOKEN_SECRET}`，并同步到所有节点。'
+        }))
+  },
+  {
+    id: 'SEC_ACTUATOR_GATEWAY_EXPOSED',
+    cwe: 'CWE-497',
+    match: (index) =>
+      index
+        .byKeySuffix(/management\.endpoint\.gateway\.enabled$/)
+        .filter((entry) => entry.value.toLowerCase() === 'true')
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'medium' as Severity,
+          message: 'Spring Cloud Gateway 的 actuator 端点被显式开启，`/actuator/gateway/routes` 会泄露全部路由，POST refresh 还能触发路由刷新',
+          advice: '生产环境关闭 `management.endpoint.gateway.enabled`；确需排障时限制到内网并加认证。'
         }))
   }
 ];

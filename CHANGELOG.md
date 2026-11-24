@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.24.0
+
+**补齐「路径从配置注入」的判定，并把 Nacos 密钥与 Gateway 端点纳入配置层。**
+
+- `AST_PERMIT_ALL_SENSITIVE_PATH` 的常量展开再扩展：
+  - 局部变量只在调用所在的同一方法体内查找，避免跨方法同名变量干扰（原来全文件查找）
+  - 新增 `@Value("${key:/actuator}")` 默认值解析：匹配器参数写成 `basePath + "/**"` 时，也按默认值判断是否命中敏感路径
+- 新增 `SEC_NACOS_TOKEN_SECRET_KEY`：`nacos.core.auth.*.token.secret.key` 为空、`SecretKey0123456789…` 官方示例值、或 `nacos/secret/changeme` 类弱值时告警（这是能伪造任意用户 token 的常见配置疏漏）
+- 新增 `SEC_ACTUATOR_GATEWAY_EXPOSED`：`management.endpoint.gateway.enabled=true`，`/actuator/gateway/routes` 会泄露全部路由、refresh 可触发刷新
+- `SEC_ACTUATOR_EXPOSE_ALL` 把 `gateway` 纳入敏感端点集合，但把单端点告警让给上面的专用规则，避免同一配置报两条
+- 靶场新增 6 个用例（3 正例 + 3 个误报回归集合），矩阵扩到 **45 个用例，PASS 45 / GAP 0 / FAIL 0**
+- 顺手清掉了 `fixtures/cases/*` 里由扫描过程生成的 `.quality-center` 目录，保证靶场可重复
+- 文档：`docs/RULES.md` 补 2 行、更新常量展开的局限说明，README/配置项说明同步为 16 条配置 + 2 条 Mapper + 11 条 AST
+
 ## 0.23.0
 
 **按「覆盖做全做深 + 不失准」继续补齐：Spring Security 常量白名单与 `web.ignoring()`、PrintWriter 变量中转、模板层未转义输出、MyBatis `<if>` 白名单上下文、Redis／Nacos／RabbitMQ／Kafka 配置风险。**

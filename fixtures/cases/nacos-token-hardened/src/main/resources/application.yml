@@ -1,0 +1,8 @@
+nacos:
+  core:
+    auth:
+      plugin:
+        nacos:
+          token:
+            secret:
+              key: "${NACOS_TOKEN_SECRET}"

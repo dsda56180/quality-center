@@ -182,12 +182,12 @@
         "qualityCenter.qcsec.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "启用配置安全扫描（qcsec）：检查 application.yml / properties 里的 Druid 默认口令与公网绑定、Actuator 全暴露、CORS 通配、allowMultiQueries、明文口令、devtools、SSL 关闭、Swagger/Knife4j 文档开放、Redis 空口令、中间件默认账号、Nacos 关闭鉴权、Kafka SASL 明文口令，以及 MyBatis Mapper 的 ${} 与 statementType=STATEMENT，无需外部工具"
+          "description": "启用配置安全扫描（qcsec）：检查 application.yml / properties 里的 Druid 默认口令与公网绑定、Actuator 全暴露与 Gateway 端点、CORS 通配、allowMultiQueries、明文口令、devtools、SSL 关闭、Swagger/Knife4j 文档开放、Redis 空口令、中间件默认账号、Nacos 关闭鉴权与 token 密钥未更换、Kafka SASL 明文口令，以及 MyBatis Mapper 的 ${} 与 statementType=STATEMENT，无需外部工具"
         },
         "qualityCenter.astgrep.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "启用 AST 语义规则（astgrep）：解析 Java 语法树与 Thymeleaf/JSP 模板，检查 permitAll() 敏感路径（含常量白名单、web.ignoring）、日志输出口令/令牌、上传缺少校验、SQL 字符串拼接、@CrossOrigin 通配、SpEL/OGNL 注入、命令执行拼接、MyBatis 注解 SQL 的 ${}、SSRF、PrintWriter 与模板未转义输出"
+          "description": "启用 AST 语义规则（astgrep）：解析 Java 语法树与 Thymeleaf/JSP 模板，检查 permitAll() 敏感路径（含常量、@Value 默认值、web.ignoring）、日志输出口令/令牌、上传缺少校验、SQL 字符串拼接、@CrossOrigin 通配、SpEL/OGNL 注入、命令执行拼接、MyBatis 注解 SQL 的 ${}、SSRF、PrintWriter 与模板未转义输出"
         },
         "qualityCenter.dependencyUpgrade.enabled": {
           "type": "boolean",

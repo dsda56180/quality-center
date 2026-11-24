@@ -1,0 +1,10 @@
+{
+  "id": "ast-permit-all-value-hardened",
+  "title": "@Value 默认值是公开路径（/login），permitAll 覆盖它（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-284",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["AST_PERMIT_ALL_SENSITIVE_PATH"] },
+  "target": { "rules": [], "owner": "astgrep", "status": "covered" }
+}

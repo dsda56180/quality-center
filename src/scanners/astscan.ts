@@ -164,16 +164,20 @@ const lineOf = (node: SgNode): number => node.range().start.line + 1;
 
 /**
  * 匹配器参数里常见「白名单常量」写法：`antMatchers(WHITELIST).permitAll()`。
- * 只按参数文本判断会漏掉这类写法，这里把同文件里同名常量/局部变量的字面量值展开进来。
- * 只展开一层，够覆盖 `String[]` / `String` 常量两类常见写法。
+ * 只按参数文本判断会漏掉这类写法，这里把同文件里同名常量/局部变量的字面量值展开进来：
+ *   - 字段常量：全文件查找，`static final String[]` / `String` 都覆盖
+ *   - 局部变量：只在调用所在的同一方法体内查找，避免跨方法同名变量干扰
+ *   - `@Value("${key:/actuator}")`：取占位里的默认值，覆盖「路径从配置注入」的写法
+ * 只展开一层，不做传递推导。
  */
-function expandConstantArgs(root: SgNode, argsText: string): string {
+function expandConstantArgs(root: SgNode, argsText: string, context?: SgNode): string {
   const names = new Set(argsText.match(/[A-Za-z_$][\w$]*/g) ?? []);
   const parts = [argsText];
-  const declarations = root
-    .findAll({ rule: { kind: 'field_declaration' } })
-    .concat(root.findAll({ rule: { kind: 'local_variable_declaration' } }));
-  for (const declaration of declarations) {
+  const fields = root.findAll({ rule: { kind: 'field_declaration' } });
+  const locals = context
+    ? context.field('body')?.findAll({ rule: { kind: 'local_variable_declaration' } }) ?? []
+    : [];
+  for (const declaration of fields.concat(locals)) {
     const declarator = declaration.field('declarator');
     const name = declarator?.field('name')?.text();
     if (!name || !names.has(name)) {
@@ -182,6 +186,13 @@ function expandConstantArgs(root: SgNode, argsText: string): string {
     const value = declarator?.field('value')?.text() ?? '';
     if (value) {
       parts.push(value);
+    }
+    // 字段本身走 @Value 注入时，默认值才是运行时的兜底路径
+    const text = declaration.text();
+    const injected = /@Value\s*\(\s*(?:"\$\{[^:}]+:([^}"]*)\}"|'\$\{[^:}]+:([^'}]*)\}')\s*\)/.exec(text);
+    const fallback = injected?.[1] ?? injected?.[2];
+    if (fallback) {
+      parts.push(`"${fallback}"`);
     }
   }
   return parts.join(' ');
@@ -265,7 +276,7 @@ function checkPermitAll(file: string, root: SgNode): Issue[] {
     if (!matcherArgs) {
       continue;
     }
-    matcherArgs = expandConstantArgs(root, matcherArgs);
+    matcherArgs = expandConstantArgs(root, matcherArgs, climb(call, ['method_declaration', 'constructor_declaration']));
     const hit = SENSITIVE_PATHS.find((name) => new RegExp(`["']\\S*${name}`, 'i').test(matcherArgs!));
     if (!hit) {
       continue;
@@ -293,7 +304,11 @@ function checkPermitAll(file: string, root: SgNode): Issue[] {
     if (!/ignoring\s*\(\s*\)/.test(chain)) {
       continue;
     }
-    const args = expandConstantArgs(root, call.field('arguments')?.text() ?? '');
+    const args = expandConstantArgs(
+      root,
+      call.field('arguments')?.text() ?? '',
+      climb(call, ['method_declaration', 'constructor_declaration'])
+    );
     const hit = SENSITIVE_PATHS.find((item) => new RegExp(`["']\\S*${item}`, 'i').test(args));
     if (!hit) {
       continue;

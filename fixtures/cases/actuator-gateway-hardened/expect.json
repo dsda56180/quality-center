@@ -1,0 +1,13 @@
+{
+  "id": "actuator-gateway-hardened",
+  "title": "网关端点关闭、只暴露 health/info（应不告警）",
+  "layer": "config",
+  "cwe": "CWE-497",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": [],
+    "mustNotFire": ["SEC_ACTUATOR_GATEWAY_EXPOSED", "SEC_ACTUATOR_EXPOSE_ALL"]
+  },
+  "target": { "rules": [], "owner": "qcsec", "status": "covered" }
+}

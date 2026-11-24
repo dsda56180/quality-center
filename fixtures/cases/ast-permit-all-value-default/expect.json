@@ -1,0 +1,10 @@
+{
+  "id": "ast-permit-all-value-default",
+  "title": "匹配器路径来自 @Value 默认值，默认值是 /actuator",
+  "layer": "code",
+  "cwe": "CWE-284",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_PERMIT_ALL_SENSITIVE_PATH"], "mustNotFire": [] },
+  "target": { "rules": ["AST_PERMIT_ALL_SENSITIVE_PATH"], "owner": "astgrep", "status": "covered" }
+}

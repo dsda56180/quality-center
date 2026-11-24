@@ -1,0 +1,10 @@
+{
+  "id": "nacos-token-hardened",
+  "title": "Nacos token secret key 用环境变量注入（应不告警）",
+  "layer": "config",
+  "cwe": "CWE-1392",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["SEC_NACOS_TOKEN_SECRET_KEY"] },
+  "target": { "rules": [], "owner": "qcsec", "status": "covered" }
+}

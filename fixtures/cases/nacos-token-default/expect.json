@@ -1,0 +1,10 @@
+{
+  "id": "nacos-token-default",
+  "title": "Nacos token secret key 仍是官方示例密钥",
+  "layer": "config",
+  "cwe": "CWE-1392",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_NACOS_TOKEN_SECRET_KEY"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_NACOS_TOKEN_SECRET_KEY"], "owner": "qcsec", "status": "covered" }
+}
