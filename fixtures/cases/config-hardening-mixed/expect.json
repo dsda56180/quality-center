@@ -1,0 +1,17 @@
+{
+  "id": "config-hardening-mixed",
+  "title": "devtools 开启 + SSL 关闭，口令已外部化（部分告警）",
+  "layer": "config",
+  "cwe": "CWE-489",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": ["SEC_DEVTOOLS_ENABLED", "SEC_SSL_DISABLED"],
+    "mustNotFire": ["SEC_PLAINTEXT_PASSWORD_PROPERTY"]
+  },
+  "target": {
+    "rules": ["SEC_DEVTOOLS_ENABLED", "SEC_SSL_DISABLED"],
+    "owner": "qcsec",
+    "status": "covered"
+  }
+}

@@ -3,12 +3,12 @@
   "title": "JDBC 打开 allowMultiQueries，注入可升级为堆叠执行",
   "layer": "config",
   "cwe": "CWE-89",
-  "scanners": [],
+  "scanners": ["qcsec"],
   "requiresBuild": false,
-  "expect": { "mustFire": [], "mustNotFire": [] },
+  "expect": { "mustFire": ["SEC_JDBC_ALLOW_MULTI_QUERIES"], "mustNotFire": [] },
   "target": {
     "rules": ["SEC_JDBC_ALLOW_MULTI_QUERIES"],
     "owner": "qcsec",
-    "status": "gap"
+    "status": "covered"
   }
 }

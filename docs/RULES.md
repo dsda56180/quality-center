@@ -6,7 +6,7 @@
 ## 覆盖口径
 
 - **代码层**（Java 源码 / 字节码）：由 `SpotBugs + FindSecBugs 1.14`（144 个 pattern）承担，`PERMISSIVE_CORS`、`SPRING_CSRF_*` 等由字节码 + Spring 语义检测。
-- **配置层**（`application.yml` / `.properties`）：**目前没有任何扫描器覆盖**，这是已知的大缺口，计划由 `qcsec` 承担。
+- **配置层**（`application*.yml/yaml/properties`、`bootstrap*.yml`）：由内置扫描器 `qcsec` 承担，把配置文件拍平成「键路径 + 值 + 行号」，支持跨键组合判断（Druid 面板开启但未设口令这类），不依赖任何外部二进制。当前 9 条规则中 8 条已实现，Swagger 仍为缺口。
 - **依赖层**：`Trivy --scanners vuln`，按依赖坐标查漏洞库（CVE），只能回答"这个版本有没有已知漏洞"。
 - 覆盖度不是承诺"100%"，而是：清单条目 → 规则 ID → fixture 用例，一一对应，可跑可查；缺口在表里写明。
 
@@ -29,19 +29,20 @@
 | 日志打印口令 / 令牌等敏感字段 | 532 | 无 | **缺口** | 待补 |
 | 文件上传未校验类型与大小 | 434 | 无 | **缺口** | 待补 |
 
-## 配置层（缺口，计划由 `qcsec` 承担）
+## 配置层（由 `qcsec` 承担）
 
-| 风险 | CWE | 目标规则 ID | 状态 | 用例 |
+| 风险 | CWE | 规则 ID | 状态 | 用例 |
 | --- | --- | --- | --- | --- |
-| CORS 在 yml 里配成任意源（`cors.allowed-origins: *` 且允许凭证） | 942 | `SEC_CORS_WILDCARD_WITH_CREDENTIALS` | 缺口 | 待补 |
-| Druid stat-view 使用默认口令 `admin/123456` | 1392 | `SEC_DRUID_STATVIEW_DEFAULT_PASSWORD` | 缺口 | `druid-statview-default` |
-| Druid stat-view 绑定 `0.0.0.0` / 对外暴露 | 668 | `SEC_DRUID_STATVIEW_PUBLIC_BIND` | 缺口 | `druid-statview-default` |
-| JDBC URL 打开 `allowMultiQueries=true`（注入可堆叠执行） | 89 | `SEC_JDBC_ALLOW_MULTI_QUERIES` | 缺口 | `jdbc-allow-multi-queries` |
-| Actuator 全端点暴露（含 `env` / `heapdump`） | 497 | `SEC_ACTUATOR_EXPOSE_ALL` | 缺口 | `actuator-expose-all` |
-| Swagger / knife4j 在生产环境开放 | 200 | `SEC_SWAGGER_PUBLIC` | 缺口 | 待补 |
-| `spring.devtools` 在生产启用 | 489 | `SEC_DEVTOOLS_ENABLED` | 缺口 | 待补 |
-| 配置文件里明文口令（非 `${...}` 占位） | 798 | `SEC_PLAINTEXT_PASSWORD_PROPERTY` | 缺口 | 待补 |
-| 关闭 HTTPS / `server.ssl.enabled: false` | 319 | `SEC_SSL_DISABLED` | 缺口 | 待补 |
+| CORS 在 yml 里配成任意源（`cors.allowed-origins: *` 且允许凭证） | 942 | `SEC_CORS_WILDCARD_WITH_CREDENTIALS` | 已覆盖 | `cors-wildcard-credentials` |
+| CORS 允许任意源但不带凭证 | 942 | `SEC_CORS_WILDCARD` | 已覆盖 | `cors-wildcard-credentials` |
+| Druid stat-view 使用默认口令 `admin/123456` / 弱口令，或开启但未设口令 | 1392 | `SEC_DRUID_STATVIEW_DEFAULT_PASSWORD` | 已覆盖 | `druid-statview-default` / `druid-statview-hardened` |
+| Druid stat-view 绑定 `0.0.0.0` / 对外暴露 | 668 | `SEC_DRUID_STATVIEW_PUBLIC_BIND` | 已覆盖 | `druid-statview-default` |
+| JDBC URL 打开 `allowMultiQueries=true`（注入可堆叠执行） | 89 | `SEC_JDBC_ALLOW_MULTI_QUERIES` | 已覆盖 | `jdbc-allow-multi-queries` |
+| Actuator 全端点暴露（含 `env` / `heapdump`） | 497 | `SEC_ACTUATOR_EXPOSE_ALL` | 已覆盖 | `actuator-expose-all` |
+| Swagger / knife4j 在生产环境开放 | 200 | `SEC_SWAGGER_PUBLIC` | **缺口** | 待补 |
+| `spring.devtools` 在生产启用 | 489 | `SEC_DEVTOOLS_ENABLED` | 已覆盖 | `config-hardening-mixed` |
+| 配置文件里明文口令（非 `${...}` 占位） | 798 | `SEC_PLAINTEXT_PASSWORD_PROPERTY` | 已覆盖 | `config-hardening-mixed`（反例） |
+| 关闭 HTTPS / `server.ssl.enabled: false` | 319 | `SEC_SSL_DISABLED` | 已覆盖 | `config-hardening-mixed` |
 
 ## 接线现状与局限
 
@@ -55,4 +56,4 @@ FindSecBugs 必须写进 pom 的 `<build><plugins>` 才生效（`spotbugs-maven-
 
 - **多模块工程**：只注入根 pom，SpotBugs 在子模块上运行时不会带上 FindSecBugs（后续计划改用 SpotBugs 独立发行版 + `-pluginList` 解决）。
 - 需要 `target/classes`（或先执行构建），否则 SpotBugs 直接跳过。
-- 配置层（yml / properties）没有任何扫描器，所以上面 9 条配置类风险目前一律检不出。
+- 配置层由 `qcsec` 覆盖，但它只解析配置文本、不做运行期验证：`${ENV}` 占位视为已外部化，不会跟进到实际生效值；profile 差异按文件计，不会合并 `application-*.yml` 的覆盖关系。Swagger 类规则仍是缺口。

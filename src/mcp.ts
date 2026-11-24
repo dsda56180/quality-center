@@ -67,15 +67,15 @@ const TOOLS: ToolDef[] = [
   {
     name: 'quality_scan',
     description:
-      '对项目执行四类扫描（Checkstyle 代码质量 / Gitleaks 密钥泄露 / Trivy 依赖 CVE / SpotBugs+FindSecBugs 静态缺陷），返回 schemaVersion 2 的结构化问题清单与下一步建议。工具缺失时返回 missingTools 与退出码 2。',
+      '对项目执行五类扫描（Checkstyle 代码质量 / Gitleaks 密钥泄露 / Trivy 依赖 CVE / SpotBugs+FindSecBugs 静态缺陷 / qcsec 配置安全），返回 schemaVersion 2 的结构化问题清单与下一步建议。工具缺失时返回 missingTools 与退出码 2。',
     inputSchema: {
       type: 'object',
       properties: {
         path: PATH_PROP,
         only: {
           type: 'array',
-          items: { type: 'string', enum: ['checkstyle', 'gitleaks', 'trivy', 'spotbugs'] },
-          description: '只跑指定扫描器，缺省四类全跑'
+          items: { type: 'string', enum: ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec'] },
+          description: '只跑指定扫描器，缺省五类全跑'
         },
         failOn: {
           type: 'string',
@@ -264,7 +264,7 @@ async function handle(request: RpcRequest): Promise<void> {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: SERVER_NAME, version: VERSION },
         instructions:
-          'quality-center 提供四类扫描（checkstyle / gitleaks / trivy / spotbugs）、Maven 构建、外部工具安装与确定性修复。先调 quality_tools_status 确认工具就绪，再用 quality_scan 拿结构化结果。'
+          'quality-center 提供五类扫描（checkstyle / gitleaks / trivy / spotbugs / qcsec）、Maven 构建、外部工具安装与确定性修复。先调 quality_tools_status 确认工具就绪，再用 quality_scan 拿结构化结果。'
       });
       return;
     case 'notifications/initialized':

@@ -1,0 +1,4 @@
+app:
+  cors:
+    allowed-origins: "*"
+    allow-credentials: true

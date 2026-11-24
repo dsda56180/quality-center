@@ -63,6 +63,7 @@ interface ScanSettingsInput {
   gitleaks?: boolean;
   trivy?: boolean;
   spotbugs?: boolean;
+  qcsec?: boolean;
   scanOnSave?: boolean;
   recipes?: string[];
   autoRecipes?: boolean;
@@ -1634,6 +1635,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       ['gitleaks.enabled', options.gitleaks],
       ['trivy.enabled', options.trivy],
       ['spotbugs.enabled', options.spotbugs],
+      ['qcsec.enabled', options.qcsec],
       ['scanOnSave', options.scanOnSave]
     ];
     for (const [key, value] of updates) {
@@ -2039,6 +2041,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         gitleaks: config.get<boolean>('gitleaks.enabled', true),
         trivy: config.get<boolean>('trivy.enabled', true),
         spotbugs: config.get<boolean>('spotbugs.enabled', true),
+        qcsec: config.get<boolean>('qcsec.enabled', true),
         scanOnSave: config.get<boolean>('scanOnSave', true),
         recipes: config.get<string[]>('openRewrite.recipes', []),
         autoRecipes: config.get<boolean>('openRewrite.autoRecipes', true),

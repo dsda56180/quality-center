@@ -9,6 +9,7 @@ import { Issue, IssueSource, ScanResult, SEVERITY_ORDER } from './model';
 import type { ToolId } from './tools';
 import { CheckstyleResult, resolveConfig, scanCheckstyle } from './scanners/checkstyle';
 import { scanGitleaks } from './scanners/gitleaks';
+import { scanQcsec } from './scanners/qcsec';
 import { scanSpotbugs, SpotbugsResult } from './scanners/spotbugs';
 import { scanTrivy, TrivyResult } from './scanners/trivy';
 import { buildSuggestions } from './suggest';
@@ -241,6 +242,21 @@ export class ScanRunner {
     try {
       const jobs: { label: string; run: () => Promise<void> }[] = [];
 
+      // 配置层规则只看 application.yml / properties，几乎不耗时，放在最前面
+      if (!config.get<boolean>('qcsec.enabled', true)) {
+        skipped.push({ source: 'qcsec', reason: '已在设置中关闭' });
+      } else {
+        jobs.push({
+          label: '配置安全',
+          run: () => scanQcsec(root).then((res) => {
+            issues.push(...res.issues);
+            if (res.error) {
+              errors.push({ source: 'qcsec', message: res.error });
+            }
+          })
+        });
+      }
+
       if (!config.get<boolean>('checkstyle.enabled', true)) {
         skipped.push({ source: 'checkstyle', reason: '已在设置中关闭' });
       } else if (!mvn) {
@@ -378,7 +394,7 @@ export class ScanRunner {
             ...collectStats(path.join(root, 'target', 'classes'), (name) => name.endsWith('.class')),
             ...statFile(path.join(root, 'pom.xml'))
           ],
-          ['spotbugs-v1', '4.7.3.0', 'findsecbugs-1.12.0', 'Max', 'Low']
+          ['spotbugs-v1', '4.7.3.0', 'findsecbugs-1.14.0', 'Max', 'Low']
         );
         const hit = this.cached<SpotbugsResult>('spotbugs', sig);
         if (hit) {

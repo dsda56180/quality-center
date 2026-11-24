@@ -1,6 +1,6 @@
 ---
 name: quality-center-scan
-description: 用 quality-center 的无界面 CLI 对一个仓库做代码质量、密钥泄露、依赖漏洞(CVE)、字节码静态缺陷四类扫描，拿到结构化问题清单后再动手改代码。当用户要求「跑一下质量检查 / 扫一遍安全问题 / 看看有哪些 CVE / 提交前做个门禁」时使用。
+description: 用 quality-center 的无界面 CLI 对一个仓库做代码质量、密钥泄露、依赖漏洞(CVE)、字节码静态缺陷、配置与框架安全(qcsec) 五类扫描，拿到结构化问题清单后再动手改代码。当用户要求「跑一下质量检查 / 扫一遍安全问题 / 看看有哪些 CVE / 检查 Druid 与 Actuator 配置 / 提交前做个门禁」时使用。
 ---
 
 # quality-center 扫描与结果解读
@@ -33,9 +33,10 @@ qc tools status
 ## 2. 跑扫描
 
 ```bash
-qc scan                                  # 当前目录，四类全扫，人读摘要
+qc scan                                  # 当前目录，五类全扫，人读摘要
 qc scan --json --fail-on high            # 机器读：JSON 到 stdout，进度在 stderr
 qc scan --only trivy,spotbugs --json     # 只跑指定扫描器
+qc scan --only qcsec --json              # 只查 application.yml / properties（无需 mvn/trivy）
 qc scan --fail-on none --json            # 只取数据，不要退出码
 ```
 
@@ -50,7 +51,7 @@ qc scan --fail-on none --json            # 只取数据，不要退出码
 {
   "schemaVersion": "2",
   "summary": { "total": 10, "critical": 0, "high": 1, "medium": 3, "low": 6,
-               "ignored": 0, "checkstyle": 1, "gitleaks": 0, "trivy": 8, "spotbugs": 1 },
+               "ignored": 0, "checkstyle": 1, "gitleaks": 0, "trivy": 8, "spotbugs": 1, "qcsec": 0 },
   "issues": [
     { "id": 1, "source": "trivy", "severity": "high", "rule": "CVE-2023-6378",
       "file": "pom.xml", "abs": "D:\\proj\\pom.xml", "line": 0,
@@ -73,7 +74,7 @@ qc scan --fail-on none --json            # 只取数据，不要退出码
 
 ## 4. 判断与交付
 
-1. 先看 `summary` 与 `skipped`：确认四类都真的跑了。
+1. 先看 `summary` 与 `skipped`：确认五类都真的跑了。
 2. `critical/high` 逐条处理；`fixable` 的直接改；CVE 按 `fixedVersion`（注意「同一版本线内取最小修复」，BOM 管理的依赖要整组对齐）。
 3. 改完必须重扫，对比 `summary.total` 与相关条目是否消失。
 4. 汇报时引用 `rule`、`file:line`、`installedVersion → fixedVersion`，不要凭记忆编造 CVE 编号或版本号。

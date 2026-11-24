@@ -1,7 +1,7 @@
 {
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
-  "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)与字节码级静态缺陷的统一面板，支持一键导出给 AI 修复",
+  "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)、字节码静态缺陷与配置安全的统一面板，支持一键导出给 AI 修复",
   "version": "0.17.20",
   "publisher": "dsda56180",
   "license": "MIT",
@@ -178,6 +178,11 @@
           "type": "boolean",
           "default": true,
           "description": "启用 SpotBugs + FindSecBugs 字节码级缺陷与安全检测（需要 target/classes，首次运行会下载分析器）"
+        },
+        "qualityCenter.qcsec.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "启用配置安全扫描（qcsec）：检查 application.yml / properties 里的 Druid 默认口令与公网绑定、Actuator 全暴露、CORS 通配、allowMultiQueries、明文口令、devtools、SSL 关闭等，无需外部工具"
         },
         "qualityCenter.dependencyUpgrade.enabled": {
           "type": "boolean",

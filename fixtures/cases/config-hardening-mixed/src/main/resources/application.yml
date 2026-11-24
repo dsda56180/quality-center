@@ -1,0 +1,10 @@
+spring:
+  devtools:
+    restart:
+      enabled: true
+    add-properties: true
+  datasource:
+    password: ${DB_PASSWORD}
+server:
+  ssl:
+    enabled: false

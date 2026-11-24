@@ -1,16 +1,17 @@
 # Quality Center 质量中心
 
-把 **代码质量**、**密钥泄露**、**依赖漏洞（CVE）**、**字节码级静态缺陷** 四类检查聚合到一个 IDE 侧边栏面板里，结果可一键复制给 AI 修复。
+把 **代码质量**、**密钥泄露**、**依赖漏洞（CVE）**、**字节码级静态缺陷**、**配置与框架安全** 五类检查聚合到一个 IDE 侧边栏面板里，结果可一键复制给 AI 修复。
 
 > 适用于所有基于 VS Code 内核的编辑器：VS Code、Cursor、Trae、VSCodium 等。
 > JetBrains IDEA 属于独立的插件体系，暂不适用（后续可考虑移植）。
 
 ## 功能
 
-- **一个面板看全部**：活动栏「质量中心」图标，汇总四类问题，按严重度排序
+- **一个面板看全部**：活动栏「质量中心」图标，汇总五类问题，按严重度排序
 - **代码质量**：调用 Maven Checkstyle 规则扫描 Java 项目
 - **密钥泄露**：调用 Gitleaks 检测硬编码的 API Key、Token、密码
 - **依赖漏洞**：调用 Trivy 扫描 pom.xml / jar，列出 CVE、受影响版本和修复版本
+- **配置安全（qcsec）**：内置扫描器直接解析 `application*.yml` / `.properties` / `bootstrap*.yml`，不用装任何外部工具，检出 Druid 面板默认口令与 `0.0.0.0` 绑定、`allowMultiQueries=true`、Actuator 全端点暴露、CORS 通配源（含允许凭证）、明文口令、devtools 开启、`server.ssl.enabled: false`
 - **依赖一键升级**：把有修复版本的直接依赖写回 pom，编译失败自动还原
 - **面板内设置**：点「设置」勾选扫描类型，或一键切换快速 / 完整模式
 - **扫描控制**：图标工具栏支持开始、暂停、继续、终止；暂停在扫描器边界生效，终止会结束 Maven / Trivy 进程树
@@ -31,6 +32,7 @@
 | Gitleaks | `gitleaks` 可执行文件 | `winget install gitleaks.gitleaks` |
 | Trivy | `trivy` 可执行文件 | `winget install aquasecurity.trivy` |
 | SpotBugs | JDK、Maven、已编译的 `target/classes` | 首次运行自动从 Maven 仓库下载分析器与 FindSecBugs 插件；FindSecBugs 通过临时 pom 注入（`-Dspotbugs.plugins` 传不进去） |
+| 配置安全（qcsec） | 无（插件内置文本解析） | 开箱即用 |
 
 缺失的工具不会自动下载：扫描结束后会弹窗提示并提供「去安装」，按系统自动选择安装方式——Windows 走 winget → Chocolatey → Scoop → 官方产物便携安装；macOS 走 Homebrew → 官方产物便携安装；Linux 走 Homebrew → 官方产物便携安装（无需 sudo，apt/dnf/pacman 作为备用命令给出）。便携安装落在插件自己的工具目录（Windows `%LOCALAPPDATA%\quality-center\tools`，其余 `~/.quality-center/tools`），不改系统 PATH，卸载后可直接删除。装完自动重新扫描；面板底部也保留带「安装」入口的「已跳过」提示。设 `qualityCenter.notifyMissingTools` 为 `false` 可整体关闭弹窗。
 
@@ -116,6 +118,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.trivy.onlyFixed` | `true` | 只显示有修复版本的 CVE |
 | `qualityCenter.trivy.preferMirror` | `true` | 未配置仓库时优先走 daocloud 镜像，避免 ghcr.io 不可达导致长时间等待 |
 | `qualityCenter.spotbugs.enabled` | `true` | 启用 SpotBugs + FindSecBugs 字节码检测 |
+| `qualityCenter.qcsec.enabled` | `true` | 启用配置安全扫描（qcsec），无需外部工具 |
 | `qualityCenter.dependencyUpgrade.enabled` | `true` | 显示「升级依赖」按钮，允许一键改写 pom 版本 |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
 | `qualityCenter.openRewrite.recipes` | `[]` | 手动启用的进阶配方；面板「设置」里按风险分组勾选，且只展示当前项目适用的配方 |
@@ -168,7 +171,7 @@ code --install-extension dsda56180.quality-center
 
 | 工具 | 作用 |
 | --- | --- |
-| `quality_scan` | 四类扫描，返回 `AgentPayload`（schemaVersion 2）与 `exitCode` |
+| `quality_scan` | 五类扫描，返回 `AgentPayload`（schemaVersion 2）与 `exitCode` |
 | `quality_build` | `mvn -B -DskipTests package`，返回 jar 列表与失败原因 |
 | `quality_tools_status` | 工具是否就绪、解析到的路径、能否自动安装 |
 | `quality_tools_install` | 按当前系统自动安装 mvn / gitleaks / trivy |
@@ -180,8 +183,9 @@ code --install-extension dsda56180.quality-center
 ### CLI
 
 ```bash
-node <扩展目录>/out/cli.js scan --json --fail-on high   # 四类扫描，JSON 到 stdout
+node <扩展目录>/out/cli.js scan --json --fail-on high   # 五类扫描，JSON 到 stdout
 node <扩展目录>/out/cli.js scan --only trivy,spotbugs   # 只跑指定扫描器
+node <扩展目录>/out/cli.js scan --only qcsec            # 只跑配置层规则（无需 mvn/trivy）
 node <扩展目录>/out/cli.js build <项目>                 # mvn -B -DskipTests package
 node <扩展目录>/out/cli.js fix <项目>                   # 确定性修复，默认只预览
 node <扩展目录>/out/cli.js fix <项目> --write           # 写回文件，改完需复扫
@@ -217,7 +221,7 @@ node <扩展目录>/out/cli.js report --md                  # 复用已有结果
 npm run rules:matrix        # 跑 fixtures/ 下的正例与反例，输出 PASS / GAP / FAIL
 ```
 
-代码层由 SpotBugs + FindSecBugs 1.14（144 个 pattern）承担，可检出宽松 CORS（`PERMISSIVE_CORS`）、关闭 CSRF（`SPRING_CSRF_PROTECTION_DISABLED`）、硬编码口令、SQL 注入、XXE、反序列化、路径穿越等；配置层（`application.yml` 里的 Druid 默认口令、`0.0.0.0` 绑定、`allowMultiQueries`、Actuator 全暴露）**目前是已知缺口**，计划由后续的 `qcsec` 扫描器补齐。
+代码层由 SpotBugs + FindSecBugs 1.14（144 个 pattern）承担，可检出宽松 CORS（`PERMISSIVE_CORS`）、关闭 CSRF（`SPRING_CSRF_PROTECTION_DISABLED`）、硬编码口令、SQL 注入、XXE、反序列化、路径穿越等；配置层由内置 `qcsec` 承担，已经覆盖 Druid 面板默认口令与公网绑定、`allowMultiQueries`、Actuator 全暴露、CORS 通配源、明文口令、devtools、SSL 关闭共 8 条规则，Swagger 仍为缺口。当前矩阵 9 个用例全部转绿（`PASS 9 / GAP 0 / FAIL 0`）。
 
 FindSecBugs 只能通过 pom 的 `<build><plugins>` 生效——`spotbugs-maven-plugin` 的 `plugins` 参数没有 userProperty，`-Dspotbugs.plugins` 实际传不进去（0.17.19 及以前就是这样静默失效的）。现在插件会复制一份 `.qc-spotbugs-pom.xml` 注入后再运行、结束即删；项目自己配了 FindSecBugs 时不动原文件；非 Maven 工程降级为核心规则并把原因作为扫描异常上报。多模块工程目前只注入根 pom。
 
@@ -233,7 +237,7 @@ FindSecBugs 只能通过 pom 的 `<build><plugins>` 生效——`spotbugs-maven-
 
 | 触发时机 | 行为 |
 | --- | --- |
-| 打开项目 | 先展示上次结果，再后台自动扫描四类问题 |
+| 打开项目 | 先展示上次结果，再后台自动扫描五类问题 |
 | 保存文件 | 仅当保存的是 java/xml/properties/yml/toml/json 等文件时触发，防抖 1.5 秒 |
 | 点击「一键修复」 | 修完自动复扫验证 |
 | 点击「构建并扫描」 | 执行 `mvn -B -DskipTests package` 后自动复扫；构建过程实时显示当前模块/阶段与用时，成功会报出 target 下的 jar 并注明耗时，失败给出末尾几行原因与「查看日志」，可取消 |
@@ -250,6 +254,7 @@ FindSecBugs 只能通过 pom 的 `<build><plugins>` 生效——`spotbugs-maven-
 | Checkstyle | `src/**/*.java` + 规则文件 + pom | 不执行 Maven | 约 14 秒 |
 | Trivy | pom + `target/**/*.jar|pom` | 不执行 trivy | 约 3 秒（漏洞库 12 小时内更新过） |
 | Gitleaks | 每次执行（本身约 1 秒） | 1 秒 | 1 秒 |
+| qcsec | 每次执行（纯文本解析） | 0 秒 | 小于 100 毫秒 |
 
 因此：
 
@@ -279,9 +284,9 @@ Maven 镜像只在用户没有 `~/.m2/settings.xml` 时启用，已有配置（�
 
 | 选项 | 说明 |
 | --- | --- |
-| 快速模式 | 勾选代码质量、密钥泄露、依赖漏洞，关闭 SpotBugs（约 15 秒） |
-| 完整模式 | 四类检查全部开启（约 35 秒） |
-| 代码质量 / 密钥泄露 / 依赖漏洞 / 静态缺陷 | 单独开关某一类扫描 |
+| 快速模式 | 勾选代码质量、密钥泄露、依赖漏洞、配置安全，关闭 SpotBugs（约 15 秒） |
+| 完整模式 | 五类检查全部开启（约 35 秒） |
+| 代码质量 / 密钥泄露 / 依赖漏洞 / 静态缺陷 / 配置安全 | 单独开关某一类扫描 |
 | 保存文件后自动扫描 | 关闭后只在手动点击「重新扫描」时执行 |
 
 应用后只保存设置，不触发扫描，下次扫描按新配置执行；设置写入工作区 `.vscode/settings.json`，与扩展设置项等价，团队可随项目共享。

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.18.0
+
+**这是一个跨大版本的更新：从四类扫描扩到五类，新增插件内置的配置层安全扫描器 `qcsec`。**
+
+- 新增第五类扫描器 **`qcsec`（配置安全）**：直接解析 `application*.yml / yaml / properties` 与 `bootstrap*.yml`，不依赖任何外部二进制，纯 Node 文本解析
+- 实现 9 条配置层规则：
+  - `SEC_DRUID_STATVIEW_DEFAULT_PASSWORD`：Druid 面板默认/弱口令（`admin` / `123456` 等），以及「面板已开启但没配口令」会回落默认口令的组合判断
+  - `SEC_DRUID_STATVIEW_PUBLIC_BIND`：`stat-view-servlet.allow` 配成 `0.0.0.0` 或 `*`，等于把监控面板对全网开放
+  - `SEC_JDBC_ALLOW_MULTI_QUERIES`：JDBC URL 打开 `allowMultiQueries=true`，SQL 注入可升级为堆叠执行
+  - `SEC_ACTUATOR_EXPOSE_ALL`：`management.endpoints.web.exposure.include: "*"`，或单独开启 `env` / `heapdump` / `threaddump` / `jolokia` / `shutdown` / `configprops` / `restart`
+  - `SEC_CORS_WILDCARD_WITH_CREDENTIALS` / `SEC_CORS_WILDCARD`：CORS 通配源，带不带凭证分别给高危与中危
+  - `SEC_PLAINTEXT_PASSWORD_PROPERTY`：配置里直接写明文口令（`${ENV}` 占位视为已外部化）
+  - `SEC_DEVTOOLS_ENABLED`、`SEC_SSL_DISABLED`
+- 规则支持**跨键组合**判断：yml 拍平成「键路径 + 值 + 行号」后，能看出「面板 enabled 但没有 login-password」这类单行匹配发现不了的问题；yml 与 properties 两种写法都覆盖
+- `IssueSource` 扩为五值（`checkstyle` / `gitleaks` / `trivy` / `spotbugs` / `qcsec`），并同步接入面板 Tab 与筛选、面板内设置与快速模式、`.vscode/settings.json` 的 `qualityCenter.qcsec.enabled`、`report.md` 分组、`AgentSafe`/`AgentPayload` 的 `summary`、CLI `--only`、MCP `quality_scan` 的枚举
+- 规则靶场扩到 9 个用例：新增 `cors-wildcard-credentials`、`config-hardening-mixed`（devtools + SSL 关闭 + 口令已外部化的反例）。`npm run rules:matrix` 结果 **PASS 9 / GAP 0 / FAIL 0**，配置层从「4 个 GAP」全部转绿
+- 修复 SpotBugs 结果缓存指纹仍写着 `findsecbugs-1.12.0`，升级到 1.14 后会命中旧缓存、看不到新增的 144 条安全规则；改为 `findsecbugs-1.14.0` 强制失效重扫
+- 文档同步：README 改五类口径（功能、环境要求、配置项、CLI/MCP、扫描速度、面板内设置、规则覆盖度），`docs/RULES.md` 把配置层 8 条标为已覆盖、Swagger 保留缺口，`skills/` 三个 SKILL.md 与 `manifest.json` 更新为五类并给出 `--only qcsec` 用法
+
 ## 0.17.20
 
 - **修复 FindSecBugs 从未生效**：`spotbugs-maven-plugin` 的 `plugins` 参数在 plugin.xml 里没有 userProperty，`-Dspotbugs.plugins=...` 传不进去，所以此前只跑了 SpotBugs 核心规则（144 个安全 pattern 全部空转）。实测：MD5 + `new Random()` 的探针只报 `DMI_RANDOM_USED_ONLY_ONCE`/`DM_DEFAULT_ENCODING`，pom 里配了 FindSecBugs 后才出现 `WEAK_MESSAGE_DIGEST_MD5`/`PREDICTABLE_RANDOM`

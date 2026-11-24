@@ -3,12 +3,12 @@
   "title": "Actuator 全端点暴露（含 env / heapdump）",
   "layer": "config",
   "cwe": "CWE-497",
-  "scanners": [],
+  "scanners": ["qcsec"],
   "requiresBuild": false,
-  "expect": { "mustFire": [], "mustNotFire": [] },
+  "expect": { "mustFire": ["SEC_ACTUATOR_EXPOSE_ALL"], "mustNotFire": [] },
   "target": {
     "rules": ["SEC_ACTUATOR_EXPOSE_ALL"],
     "owner": "qcsec",
-    "status": "gap"
+    "status": "covered"
   }
 }

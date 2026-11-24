@@ -1,0 +1,14 @@
+{
+  "id": "cors-wildcard-credentials",
+  "title": "CORS 通配源 + 允许携带凭证（配置文件写法）",
+  "layer": "config",
+  "cwe": "CWE-942",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_CORS_WILDCARD_WITH_CREDENTIALS"], "mustNotFire": [] },
+  "target": {
+    "rules": ["SEC_CORS_WILDCARD_WITH_CREDENTIALS"],
+    "owner": "qcsec",
+    "status": "covered"
+  }
+}

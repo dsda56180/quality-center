@@ -29,7 +29,7 @@ import { EXTERNAL_TOOLS, ToolId } from './tools';
 const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 CI 用的无界面接口
 
 用法:
-  quality-center scan [目录] [选项]      跑四类扫描，输出结构化结果
+  quality-center scan [目录] [选项]      跑五类扫描，输出结构化结果
   quality-center build [目录]            执行 mvn package 生成 target 产物
   quality-center fix [目录] [--write]    应用确定性修复（默认只预览）
   quality-center tools status [--json]   查看外部工具安装状态

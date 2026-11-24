@@ -3,12 +3,15 @@
   "title": "Druid 面板关闭、口令外部化（应不告警）",
   "layer": "config",
   "cwe": "CWE-1392",
-  "scanners": [],
+  "scanners": ["qcsec"],
   "requiresBuild": false,
-  "expect": { "mustFire": [], "mustNotFire": [] },
+  "expect": {
+    "mustFire": [],
+    "mustNotFire": ["SEC_DRUID_STATVIEW_DEFAULT_PASSWORD", "SEC_DRUID_STATVIEW_PUBLIC_BIND", "SEC_PLAINTEXT_PASSWORD_PROPERTY"]
+  },
   "target": {
     "rules": [],
     "owner": "qcsec",
-    "status": "gap"
+    "status": "covered"
   }
 }
