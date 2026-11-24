@@ -503,44 +503,50 @@ private class DeepFixPreviewDialog(
      * 面板按文件类型缓存（同类型文件的差异只在文档内容上，viewer 可以一直复用）。
      */
     private fun showNative(path: String, texts: NativeTexts) {
-        if (javax.swing.SwingUtilities.getWindowAncestor(nativeHost) == null) {
-            // 对话框尚未显示：先记下来，等 hierarchy 显示事件触发后再渲染
-            pendingNative = path to texts
-            return
-        }
-        val fileType = texts.file?.fileType
-            ?: com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getFileTypeByFileName(path)
         val t0 = System.nanoTime()
-        val page = nativePages[fileType.name] ?: createNativePage(fileType, texts) ?: run {
-            fallbackToBuiltIn()
-            return
-        }
-        // 只更新文档内容，不 setRequest：编辑器、工具栏、分割器全部原地复用。
-        // 文档变更必须在写操作里做，否则 DocumentImpl 会拒绝并抛异常。
-        val beforeDoc = page.beforeDoc
-        val afterDoc = page.afterDoc
-        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
         try {
+            if (javax.swing.SwingUtilities.getWindowAncestor(nativeHost) == null) {
+                // 对话框尚未显示：先记下来，等 hierarchy 显示事件触发后再渲染
+                pendingNative = path to texts
+                return
+            }
+            val fileType = texts.file?.fileType
+                ?: com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getFileTypeByFileName(path)
+            val page = nativePages[fileType.name] ?: createNativePage(fileType, texts) ?: run {
+                fallbackToBuiltIn()
+                return
+            }
+            // 只更新文档内容，不 setRequest：编辑器、工具栏、分割器全部原地复用。
+            // 文档变更必须在写操作里做；行尾必须统一成 \n，否则 DocumentImpl 会抛
+            // 「Wrong line separators」（这正是上一个版本预览空白的原因）。
+            val beforeText = normalizeSeparators(texts.before)
+            val afterText = normalizeSeparators(texts.after)
+            val beforeDoc = page.beforeDoc
+            val afterDoc = page.afterDoc
+            val app = com.intellij.openapi.application.ApplicationManager.getApplication()
             app.runWriteAction {
-                if (beforeDoc.text != texts.before) beforeDoc.setText(texts.before)
-                if (afterDoc.text != texts.after) afterDoc.setText(texts.after)
+                if (beforeDoc.text != beforeText) beforeDoc.setText(beforeText)
+                if (afterDoc.text != afterText) afterDoc.setText(afterText)
+            }
+            (nativeHost.layout as CardLayout).show(nativeHost, page.card)
+            (diffCards.layout as CardLayout).show(diffCards, CARD_NATIVE)
+            updatePathLabel(path)
+            val elapsed = (System.nanoTime() - t0) / 1_000_000
+            if (elapsed > 40) {
+                com.intellij.openapi.diagnostic.Logger.getInstance(DeepFixPreviewDialog::class.java)
+                    .warn("切换文件耗时 ${elapsed}ms（$path）")
             }
         } catch (e: Throwable) {
             // 任何异常都不能让预览变空白：退回内置渲染，至少内容还在
-            logWarn("原地更新 diff 文档失败，回退内置渲染", e)
+            logWarn("原生 diff 切换失败，回退内置渲染", e)
             fallbackToBuiltIn()
             queuedRender = true
-            return
-        }
-        (nativeHost.layout as CardLayout).show(nativeHost, page.card)
-        (diffCards.layout as CardLayout).show(diffCards, CARD_NATIVE)
-        updatePathLabel(path)
-        val elapsed = (System.nanoTime() - t0) / 1_000_000
-        if (elapsed > 40) {
-            com.intellij.openapi.diagnostic.Logger.getInstance(DeepFixPreviewDialog::class.java)
-                .warn("切换文件耗时 ${elapsed}ms（$path）")
         }
     }
+
+    /** 行尾统一成 \n：文档的行分隔符在创建时就固定了，混入 \r\n 会直接抛异常 */
+    private fun normalizeSeparators(text: String): String =
+        text.replace("\r\n", "\n").replace('\r', '\n')
 
     private class NativePage(
         val panel: com.intellij.diff.DiffRequestPanel,
@@ -565,8 +571,10 @@ private class DeepFixPreviewDialog(
         val factory = com.intellij.diff.DiffContentFactory.getInstance()
         val before: com.intellij.diff.contents.DocumentContent
         val after: com.intellij.diff.contents.DocumentContent
-        val beforeDoc = com.intellij.openapi.editor.EditorFactory.getInstance().createDocument(texts.before)
-        val afterDoc = com.intellij.openapi.editor.EditorFactory.getInstance().createDocument(texts.after)
+        val beforeDoc = com.intellij.openapi.editor.EditorFactory.getInstance()
+            .createDocument(normalizeSeparators(texts.before))
+        val afterDoc = com.intellij.openapi.editor.EditorFactory.getInstance()
+            .createDocument(normalizeSeparators(texts.after))
         try {
             // 关键：文档由自己创建（可写），再包成 DiffContent。工厂的 create(文本) 产生的是只读文档，
             // 改内容会抛「试图修改只读文档」，复用面板就无从谈起。
