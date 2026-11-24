@@ -25,6 +25,8 @@ import {
 } from './agentOps';
 import { AgentScanEvent } from './agentApi';
 import { EXTERNAL_TOOLS, ToolId } from './tools';
+import { applyUpgradePlan, checkUpgradePlan, createUpgradePlan, readIssues } from './upgradePlanFile';
+import { integrate } from './integrate';
 
 const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 CI 用的无界面接口
 
@@ -35,6 +37,10 @@ const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 
   quality-center tools status [--json]   查看外部工具安装状态
   quality-center tools install <id>      自动安装 mvn / gitleaks / trivy
   quality-center report [--json|--md]    复用 .quality-center/issues.json 输出结果
+  quality-center upgrade plan [目录]     生成升级计划（plan.json + pom.diff），不改 pom
+  quality-center upgrade apply [目录]    按计划落盘（默认只预览，--write 才写）
+  quality-center upgrade check [目录]    校验当前 pom 是否与计划一致（CI 门禁）
+  quality-center integrate [目录]        写入策略/启动器/Skill 与各编辑器适配器
   quality-center mcp                     以 MCP(stdio) 服务端运行，供 agent 直接调用
   quality-center help | version
 
@@ -49,6 +55,16 @@ scan 选项:
 fix 选项:
   --write                真正写回文件（默认只预览，输出改动清单）
   --json                 以 JSON 输出改动清单
+
+upgrade 选项:
+  --plan <planId>        指定计划，缺省用最新一份
+  --hash <pomHash>       落盘前校验 pom 哈希，防止计划过期后误写
+  --write                真正写回 pom.xml（默认只输出 diff 预览）
+  --json                 以 JSON 输出计划或结果
+
+integrate 选项:
+  --all                  为 Trae / Cursor / VS Code / Copilot 全量生成适配器
+  --check                只比对不写；生成物与策略不一致时退出码 1
 
 退出码:
   0 通过    1 有达到阈值的问题    2 执行失败 / 工具缺失    3 用法错误
@@ -65,7 +81,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const flags: Record<string, string | true> = {};
   const positional: string[] = [];
-  const takesValue = new Set(['--only', '--fail-on', '--out', '--path']);
+  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash']);
   for (let i = 0; i < argv.length; i += 1) {
     const item = argv[i];
     if (item.startsWith('--')) {
@@ -289,8 +305,7 @@ async function installCommand(args: Args, id: ToolId): Promise<number> {
   return outcome.ok ? 0 : 2;
 }
 
-function reportCommand(args: Args): number {
-  const root = targetRoot(args);
+function reportCommand(args: Args): number {  const root = targetRoot(args);
   const format = args.flags['--md'] === true ? 'markdown' : args.flags['--json'] === true ? 'json' : 'summary';
   const report = readReport(root, format);
   if (!report.ok) {
@@ -298,6 +313,113 @@ function reportCommand(args: Args): number {
     return 2;
   }
   process.stdout.write(`${report.text}${report.format === 'json' ? '' : '\n'}`);
+  return 0;
+}
+
+function upgradeRoot(args: Args): string {
+  const positional = args.positionals[1];
+  return positional && !positional.startsWith('-') ? path.resolve(positional) : args.root;
+}
+
+async function upgradeCommand(args: Args): Promise<number> {
+  const action = args.positionals[0] ?? 'plan';
+  const root = upgradeRoot(args);
+  if (!fs.existsSync(path.join(root, 'pom.xml'))) {
+    progress(`未找到 pom.xml：${root}`);
+    return 2;
+  }
+  const planId = typeof args.flags['--plan'] === 'string' ? String(args.flags['--plan']) : undefined;
+
+  if (action === 'plan') {
+    const issues = readIssues(root);
+    if (issues.length === 0) {
+      progress('没有扫描结果：先执行 scan（或 scan --only trivy），再生成升级计划');
+      return 2;
+    }
+    const result = createUpgradePlan(root, issues, { planId });
+    if (args.flags['--json'] === true) {
+      process.stdout.write(`${JSON.stringify(result.plan, null, 2)}\n`);
+      return 0;
+    }
+    const lines: string[] = [
+      `升级计划 ${result.plan.planId}（schemaVersion ${result.plan.schemaVersion}）`,
+      `Java ${result.plan.project.javaVersion ?? '未识别'} · 框架目标 ${result.plan.project.frameworkTarget ?? '未声明'}`
+    ];
+    result.plan.candidates.forEach((item) => {
+      lines.push(
+        `  [${item.id}] ${item.packageName} ${item.from} → ${item.to}（${item.mode}，覆盖 ${item.cveCount} 条）` +
+          `${item.crossLine ? '  ⚠ 跨大版本，需人工确认' : ''}`
+      );
+    });
+    if (result.plan.skipped.length > 0) {
+      lines.push(`跳过 ${result.plan.skipped.length} 项：`);
+      result.plan.skipped.slice(0, 5).forEach((item) => lines.push(`  - ${item.packageName}：${item.reason}`));
+    }
+    lines.push(`计划：${path.relative(root, result.planPath)}`);
+    lines.push(`补丁：${path.relative(root, result.patchPath)}（${result.patch.split('\n').filter((line) => line.startsWith('+') && !line.startsWith('+++')).length} 行新增）`);
+    lines.push('下一步：upgrade apply --plan <planId> 预览 diff；确认后加 --write 落盘');
+    process.stdout.write(`${lines.join('\n')}\n`);
+    return 0;
+  }
+
+  if (action === 'apply') {
+    const write = args.flags['--write'] === true;
+    const expectedHash = typeof args.flags['--hash'] === 'string' ? String(args.flags['--hash']) : undefined;
+    const outcome = applyUpgradePlan(root, { planId, write, expectedHash });
+    if (args.flags['--json'] === true) {
+      process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
+      return outcome.ok ? 0 : 2;
+    }
+    if (!outcome.ok) {
+      progress(outcome.reason ?? '应用失败');
+      return 2;
+    }
+    if (!write) {
+      process.stdout.write(`${outcome.patch || '计划没有产生改动'}\n`);
+      process.stdout.write('这是预览，未改动 pom.xml。确认后加 --write 落盘。\n');
+      return 0;
+    }
+    process.stdout.write(
+      `已按计划 ${outcome.planId} 写回 pom.xml：${outcome.changed.length} 处改动（${outcome.hashAfter}）\n` +
+        '下一步：upgrade check 校验 → 构建门禁 → scan --only trivy 复扫\n'
+    );
+    return 0;
+  }
+
+  if (action === 'check') {
+    const outcome = checkUpgradePlan(root, planId);
+    process.stdout.write(`${outcome.ok ? '✓' : '✗'} ${outcome.state}：${outcome.message}\n`);
+    process.stdout.write(`  期望 ${outcome.expectedHash}\n  实际 ${outcome.actualHash}\n`);
+    return outcome.ok ? 0 : 1;
+  }
+
+  progress(`未知子命令：upgrade ${action}（可选 plan / apply / check）`);
+  return 3;
+}
+
+function integrateCommand(args: Args): number {
+  const positional = args.positionals[0];
+  const root = positional && !positional.startsWith('-') ? path.resolve(positional) : args.root;
+  if (!fs.existsSync(root)) {
+    progress(`目录不存在：${root}`);
+    return 2;
+  }
+  const result = integrate(root, {
+    mode: args.flags['--all'] === true ? 'all' : 'auto',
+    check: args.flags['--check'] === true
+  });
+  const lines: string[] = [];
+  for (const item of result.files) {
+    lines.push(`${item.action === 'unchanged' ? '·' : item.action === 'drift' || item.action === 'missing' ? '✗' : '✓'} ${item.file}（${item.action}）`);
+  }
+  for (const note of result.notes) {
+    lines.push(`提示：${note}`);
+  }
+  process.stdout.write(`${lines.join('\n')}\n`);
+  if (!result.ok) {
+    process.stdout.write('生成物与策略不一致：执行 integrate（不加 --check）重新生成\n');
+    return 1;
+  }
   return 0;
 }
 
@@ -318,6 +440,10 @@ async function main(): Promise<number> {
       return toolsCommand(args);
     case 'report':
       return reportCommand(args);
+    case 'upgrade':
+      return upgradeCommand(args);
+    case 'integrate':
+      return integrateCommand(args);
     case 'mcp':
       // 启动 stdio 服务端并接管 stdin/stdout，进程不会正常返回
       return new Promise<number>(() => {

@@ -7,7 +7,7 @@
     "runtime": "node",
     "entry": "out/cli.js",
     "invoke": "node <扩展目录>/out/cli.js <command>",
-    "commands": ["scan", "build", "fix", "tools status", "tools install", "report", "mcp", "version"],
+    "commands": ["scan", "build", "fix", "tools status", "tools install", "report", "upgrade plan", "upgrade apply", "upgrade check", "integrate", "mcp", "version"],
     "payloadSchema": "2",
     "outputs": [".quality-center/issues.json", ".quality-center/report.md"],
     "exitCodes": {
@@ -28,7 +28,9 @@
       { "name": "quality_tools_status", "purpose": "外部工具是否就绪、路径、能否自动安装" },
       { "name": "quality_tools_install", "purpose": "按当前系统自动安装 mvn / gitleaks / trivy" },
       { "name": "quality_report", "purpose": "读取已落盘的 issues.json / report.md" },
-      { "name": "quality_fix", "purpose": "确定性修复，默认只预览，write=true 才落盘" }
+      { "name": "quality_fix", "purpose": "确定性修复，默认只预览，write=true 才落盘" },
+      { "name": "quality_upgrade_plan", "purpose": "生成升级计划 Plan V3（候选/skipped/pomHash/pom.diff），只读 pom" },
+      { "name": "quality_upgrade_apply", "purpose": "按 planId + pomHash 落盘补丁，哈希不符即拒绝，write 才写文件" }
     ]
   },
   "skills": [
@@ -51,6 +53,11 @@
       "name": "quality-center-mcp",
       "path": "quality-center-mcp/SKILL.md",
       "when": "要把插件接成 MCP 服务端，或以工具调用方式编排扫描/构建/修复时"
+    },
+    {
+      "name": "quality-center-java-upgrade",
+      "path": "quality-center-java-upgrade/SKILL.md",
+      "when": "要按标准流程做一次依赖升级/配置安全整改，且需要 AI 处理组件替换、死代码、CORS 与凭证时"
     }
   ],
   "docs": {

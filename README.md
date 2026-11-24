@@ -198,6 +198,24 @@ node <扩展目录>/out/cli.js tools install mvn            # 缺失工具自动
 node <扩展目录>/out/cli.js report --md                  # 复用已有结果
 ```
 
+### 升级计划与编辑器接入
+
+升级不再让 AI 直接改 `pom.xml`：插件先产出计划与补丁，AI 只审 diff、只处理判断类修复。
+
+```bash
+node <扩展目录>/out/cli.js upgrade plan <项目>                     # 只读，产出 plan.json + pom.diff
+node <扩展目录>/out/cli.js upgrade apply <项目> --plan <id>         # 预览 diff，不动 pom
+node <扩展目录>/out/cli.js upgrade apply <项目> --plan <id> --hash <pomHash> --write
+node <扩展目录>/out/cli.js upgrade check <项目> --plan <id>         # CI 门禁：pom 是否与计划一致
+node <扩展目录>/out/cli.js integrate <项目> --all                  # 写策略/启动器/Skill 与各编辑器适配器
+node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂移检测，不写文件
+```
+
+- 目标版本由 `.quality-center/upgrade-policy.json` 的 `frameworkTargets` 按 Java 版本推导，不再写死版本号；Java 17 未声明上限时只跳过框架层并给出原因，不会静默跳 3.x。
+- `apply` 必须带 `pomHash`，哈希不一致直接拒绝；落盘结果还要与计划的 `pomHashAfter` 一致，保证预览即结果。
+- `plan.json` 的候选项带 `crossLine` 标记，跨大版本（如 poi 4.x → 5.x）会明确提示人工确认。
+- `integrate` 生成 `.quality-center/bin/qc.cjs` 启动器，MCP 配置统一指向它，扩展升级后不需要改各编辑器的配置；已适配 Trae / Cursor / VS Code / Copilot 与 Claude 风格 `.mcp.json`，并维护 `AGENTS.md` 托管块。
+
 约定：stdout 只放结果，进度和日志全部走 stderr；退出码 `0` 通过、`1` 有达到阈值的问题（默认 `high`）、`2` 工具缺失或执行失败、`3` 用法错误。扫描结果同时写 `.quality-center/issues.json` 与 `report.md`。
 
 `--json` 输出 `schemaVersion: "2"` 的 `AgentPayload`：`summary`（按严重度与来源计数）、`issues`（含相对路径 `file`、绝对路径 `abs`、`rule`、`zhSummary`、`advice`、`fixable`、`package`/`installedVersion`/`fixedVersion`/`cvss`）、`ignored`、`suggestions`（根因级方案）、`skipped`、`errors`、`missingTools`、`nextActions`。字段只增不减，结构变化时升版本号。
@@ -206,13 +224,14 @@ node <扩展目录>/out/cli.js report --md                  # 复用已有结果
 
 ### Skills
 
-`skills/` 内含四个 Skill 与机器可读清单：
+`skills/` 内含五个 Skill 与机器可读清单：
 
 | Skill | 触发场景 |
 | --- | --- |
 | `quality-center-scan` | 跑扫描、读结果、判断严重度与交付口径 |
 | `quality-center-tools` | 缺 mvn / gitleaks / trivy 时自动安装，或先构建产物 |
 | `quality-center-dependencies` | 按 CVE 修复版本升级 pom，整组对齐 BOM/父 POM 并编译校验 |
+| `quality-center-java-upgrade` | 标准化升级整改：审计划、组件替换、死代码、CORS 与凭证、构建与复扫验收 |
 | `quality-center-mcp` | 把插件接成 MCP 服务端，按工具语义编排调用顺序 |
 
 `skills/manifest.json` 声明 CLI 入口、命令、退出码、MCP 工具与 Skill 路径，支持清单式发现；把对应 `SKILL.md` 放进 agent 的 skills 目录即可加载。CLI/MCP 的修复只做确定性改写，依赖升级与语义修复由 agent 按 Skill 指引完成并复扫确认。

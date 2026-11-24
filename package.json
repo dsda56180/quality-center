@@ -257,7 +257,8 @@
     "mcp": "node out/cli.js mcp",
     "rules:matrix": "node scripts/rule-matrix.mjs",
     "release": "node scripts/release.mjs",
-    "publish:ovsx": "ovsx publish"
+    "publish:ovsx": "ovsx publish",
+    "verify:upgrade": "node scripts/verify-upgrade.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

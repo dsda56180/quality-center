@@ -1,0 +1,303 @@
+#!/usr/bin/env node
+/**
+ * 升级流程的端到端自检：不依赖任何编辑器的 AI，只用 CLI / MCP 协议验证确定性部分。
+ *
+ * 覆盖：
+ * 1) plan 只读、产物齐全（plan.json / pom.diff）
+ * 2) 哈希不符拒绝落盘
+ * 3) --write 后 pom 与计划一致，patch 可被 git apply
+ * 4) upgrade check 通过
+ * 5) integrate 幂等 + 漂移检测
+ * 6) MCP tools/list 含升级工具，错误哈希返回 isError
+ */
+import { fileURLToPath } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
+import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CLI = path.join(ROOT, 'out', 'cli.js');
+
+let passed = 0;
+const failures = [];
+
+function check(name, condition, detail = '') {
+  if (condition) {
+    passed += 1;
+    console.log(`  ✓ ${name}`);
+  } else {
+    failures.push(`${name}${detail ? ` — ${detail}` : ''}`);
+    console.log(`  ✗ ${name}${detail ? ` — ${detail}` : ''}`);
+  }
+}
+
+function sha256(text) {
+  return `sha256:${crypto.createHash('sha256').update(text, 'utf8').digest('hex')}`;
+}
+
+function run(args, options = {}) {
+  const result = spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', ...options });
+  return { code: result.status ?? 2, out: result.stdout ?? '', err: result.stderr ?? '' };
+}
+
+const POM = `<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>2.4.2</version>
+    <relativePath/>
+  </parent>
+  <groupId>com.example</groupId>
+  <artifactId>demo-upgrade</artifactId>
+  <version>1.0.0</version>
+  <properties>
+    <java.version>8</java.version>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>com.alibaba</groupId>
+      <artifactId>fastjson</artifactId>
+      <version>1.2.83</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+`;
+
+const ISSUES = {
+  schemaVersion: '2',
+  generatedAt: new Date().toISOString(),
+  issues: [
+    {
+      source: 'trivy',
+      severity: 'high',
+      rule: 'CVE-2024-22262',
+      message: 'spring-web URL 解析漏洞',
+      packageName: 'org.springframework:spring-web',
+      installedVersion: '5.3.9',
+      fixedVersion: '5.3.39'
+    },
+    {
+      source: 'trivy',
+      severity: 'critical',
+      rule: 'CVE-2023-45648',
+      message: 'tomcat 请求走私',
+      packageName: 'org.apache.tomcat.embed:tomcat-embed-core',
+      installedVersion: '9.0.41',
+      fixedVersion: '9.0.83'
+    },
+    {
+      source: 'trivy',
+      severity: 'high',
+      rule: 'CVE-2022-25845',
+      message: 'fastjson 反序列化',
+      packageName: 'com.alibaba:fastjson',
+      installedVersion: '1.2.83',
+      fixedVersion: '2.0.25'
+    }
+  ],
+  ignored: [],
+  errors: [],
+  skipped: [],
+  suggestions: []
+};
+
+function prepare() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qc-upgrade-'));
+  fs.writeFileSync(path.join(dir, 'pom.xml'), POM, 'utf8');
+  fs.mkdirSync(path.join(dir, '.quality-center'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.quality-center', 'issues.json'), JSON.stringify(ISSUES, null, 2), 'utf8');
+  return dir;
+}
+
+function mcpClient(cwd) {
+  const proc = spawn(process.execPath, [CLI, 'mcp'], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+  let buffer = '';
+  const waiters = new Map();
+  proc.stdout.on('data', (chunk) => {
+    buffer += chunk.toString('utf8');
+    let index = buffer.indexOf('\n');
+    while (index >= 0) {
+      const line = buffer.slice(0, index).trim();
+      buffer = buffer.slice(index + 1);
+      index = buffer.indexOf('\n');
+      if (!line) continue;
+      try {
+        const msg = JSON.parse(line);
+        const waiter = waiters.get(msg.id);
+        if (waiter) {
+          waiters.delete(msg.id);
+          waiter(msg);
+        }
+      } catch {
+        /* 忽略非协议输出 */
+      }
+    }
+  });
+  let nextId = 1;
+  return {
+    request(method, params) {
+      const id = nextId++;
+      proc.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          waiters.delete(id);
+          reject(new Error(`MCP 请求超时：${method}`));
+        }, 20000);
+        waiters.set(id, (msg) => {
+          clearTimeout(timer);
+          resolve(msg);
+        });
+      });
+    },
+    close() {
+      proc.stdin.end();
+      proc.kill();
+    }
+  };
+}
+
+async function main() {
+  console.log(`quality-center 升级自检 · ${ROOT}\n`);
+  const dir = prepare();
+  const pomFile = path.join(dir, 'pom.xml');
+  const original = fs.readFileSync(pomFile, 'utf8');
+
+  console.log('1) plan：只读、产物齐全');
+  const planRun = run(['upgrade', 'plan', dir, '--json']);
+  check('plan 退出码 0', planRun.code === 0, planRun.err.trim());
+  const plan = planRun.code === 0 ? JSON.parse(planRun.out) : {};
+  check('schemaVersion = 3', plan.schemaVersion === '3', String(plan.schemaVersion));
+  check('pomHash 与当前 pom 一致', plan.pomHash === sha256(original));
+  check('框架目标由策略推导（2.7.18）', plan.project?.frameworkTarget === '2.7.18', String(plan.project?.frameworkTarget));
+  check(
+    'Spring Boot 候选存在',
+    Array.isArray(plan.candidates) &&
+      plan.candidates.some((item) => item.groupId === 'org.springframework.boot' && item.mode === 'parent')
+  );
+  check('pom 未被改动', fs.readFileSync(pomFile, 'utf8') === original);
+  check('pom.diff 已生成', fs.existsSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff')));
+  const patch = fs.existsSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff'))
+    ? fs.readFileSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff'), 'utf8')
+    : '';
+  check('patch 带统一 diff 头', patch.startsWith('--- a/pom.xml'));
+
+  console.log('2) apply：哈希保护');
+  const badHash = run(['upgrade', 'apply', dir, '--plan', plan.planId, '--hash', 'sha256:deadbeef']);
+  check('错误哈希被拒绝（退出码 2）', badHash.code === 2);
+  check('拒绝后 pom 未变化', fs.readFileSync(pomFile, 'utf8') === original);
+
+  console.log('3) apply：预览 → 落盘');
+  const preview = run(['upgrade', 'apply', dir, '--plan', plan.planId, '--hash', plan.pomHash]);
+  check('预览退出码 0', preview.code === 0, preview.err.trim());
+  check('预览输出 patch', preview.out.includes('--- a/pom.xml'));
+  check('预览不落盘', fs.readFileSync(pomFile, 'utf8') === original);
+
+  const applied = run(['upgrade', 'apply', dir, '--plan', plan.planId, '--hash', plan.pomHash, '--write']);
+  check('落盘退出码 0', applied.code === 0, applied.err.trim());
+  const after = fs.readFileSync(pomFile, 'utf8');
+  check('pom 已变化', after !== original);
+  check('落盘结果哈希与计划一致', sha256(after) === plan.pomHashAfter);
+  check('Spring Boot 版本已升到 2.7.18', after.includes('<version>2.7.18</version>'));
+
+  console.log('4) patch 可被 git apply 复现');
+  const probe = path.join(os.tmpdir(), `qc-patch-${process.pid}`);
+  fs.rmSync(probe, { recursive: true, force: true });
+  fs.mkdirSync(probe, { recursive: true });
+  fs.writeFileSync(path.join(probe, 'pom.xml'), original, 'utf8');
+  spawnSync('git', ['init', '-q'], { cwd: probe });
+  fs.writeFileSync(path.join(probe, 'pom.diff'), patch, 'utf8');
+  const gitArgs = ['-c', 'core.autocrlf=false', 'apply'];
+  const gitApply = spawnSync('git', [...gitArgs, '--check', 'pom.diff'], { cwd: probe, encoding: 'utf8' });
+  check('git apply --check 通过', gitApply.status === 0, gitApply.stderr?.trim());
+  const gitApplyReal = spawnSync('git', [...gitArgs, 'pom.diff'], { cwd: probe, encoding: 'utf8' });
+  check('git apply 后内容与落盘一致', gitApplyReal.status === 0 && fs.readFileSync(path.join(probe, 'pom.xml'), 'utf8') === after);
+
+  console.log('5) check 门禁');
+  const checkRun = run(['upgrade', 'check', dir, '--plan', plan.planId]);
+  check('check 退出码 0', checkRun.code === 0, checkRun.out.trim());
+  check('状态为 applied', checkRun.out.includes('applied'));
+
+  console.log('6) integrate：生成、幂等、漂移');
+  const integrateRun = run(['integrate', dir, '--all']);
+  check('integrate 退出码 0', integrateRun.code === 0, integrateRun.err.trim());
+  for (const rel of [
+    '.quality-center/upgrade-policy.json',
+    '.quality-center/bin/qc.cjs',
+    '.quality-center/skills/quality-center-java-upgrade/SKILL.md',
+    '.trae/rules/quality-center.md',
+    '.trae/mcp.json',
+    '.cursor/rules/quality-center.mdc',
+    '.cursor/mcp.json',
+    '.vscode/mcp.json',
+    '.github/instructions/quality-center.instructions.md',
+    '.mcp.json',
+    'AGENTS.md'
+  ]) {
+    check(`生成 ${rel}`, fs.existsSync(path.join(dir, rel)));
+  }
+  const traeMcp = JSON.parse(fs.readFileSync(path.join(dir, '.trae/mcp.json'), 'utf8'));
+  check(
+    'Trae MCP 指向启动器而非版本目录',
+    traeMcp.mcpServers?.['quality-center']?.args?.[0] === '${workspaceFolder}/.quality-center/bin/qc.cjs'
+  );
+  const vscodeMcp = JSON.parse(fs.readFileSync(path.join(dir, '.vscode/mcp.json'), 'utf8'));
+  check('VS Code 用 servers + type=stdio', vscodeMcp.servers?.['quality-center']?.type === 'stdio');
+
+  const checkClean = run(['integrate', dir, '--all', '--check']);
+  check('--check 干净时退出码 0', checkClean.code === 0, checkClean.out.trim());
+
+  const policyFile = path.join(dir, '.quality-center', 'upgrade-policy.json');
+  const policy = JSON.parse(fs.readFileSync(policyFile, 'utf8'));
+  policy.forbiddenPackages = ['com.alibaba:fastjson'];
+  fs.writeFileSync(policyFile, `${JSON.stringify(policy, null, 2)}\n`, 'utf8');
+  const drift = run(['integrate', dir, '--all', '--check']);
+  check('策略变更后 --check 仍为 0（适配器不内嵌策略）', drift.code === 0, drift.out.trim());
+
+  const ruleFile = path.join(dir, '.trae/rules/quality-center.md');
+  const MARK = '<!-- 用户手改 -->';
+  fs.writeFileSync(ruleFile, `${fs.readFileSync(ruleFile, 'utf8')}\n${MARK}\n`, 'utf8');
+  const drift2 = run(['integrate', dir, '--all', '--check']);
+  check('规则被手改后 --check 报漂移（退出码 1）', drift2.code === 1);
+
+  const again = run(['integrate', dir, '--all']);
+  check('重新生成退出码 0', again.code === 0);
+  check('--check 恢复 0', run(['integrate', dir, '--all', '--check']).code === 0);
+  check('手改内容被覆盖', !fs.readFileSync(ruleFile, 'utf8').includes(MARK));
+
+  console.log('7) MCP：工具可见 + 哈希拒绝');
+  const client = mcpClient(dir);
+  const init = await client.request('initialize', { protocolVersion: '2024-11-05' });
+  check('initialize 返回 serverInfo', init.result?.serverInfo?.name === 'quality-center');
+  const list = await client.request('tools/list', {});
+  const names = (list.result?.tools ?? []).map((tool) => tool.name);
+  check('tools/list 含 quality_upgrade_plan', names.includes('quality_upgrade_plan'));
+  check('tools/list 含 quality_upgrade_apply', names.includes('quality_upgrade_apply'));
+  const badCall = await client.request('tools/call', {
+    name: 'quality_upgrade_apply',
+    arguments: { path: dir, planId: plan.planId, pomHash: 'sha256:deadbeef', write: false }
+  });
+  check('MCP 错误哈希返回 isError', badCall.result?.isError === true);
+  client.close();
+
+  console.log(`\n结果：${passed} 通过，${failures.length} 失败`);
+  if (failures.length) {
+    failures.forEach((item) => console.log(`  ✗ ${item}`));
+    process.exitCode = 1;
+  }
+}
+
+const RULE_INSTRUCTION_HEAD = '用户手改';
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 2;
+});

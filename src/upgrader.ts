@@ -55,6 +55,8 @@ export interface UpgradePlan {
 export interface UpgradeContext {
   nodes?: Map<string, DependencyNode>;
   managed?: Map<string, ManagedEntry>;
+  /** 框架目标版本，由 upgradePolicy 按 Java 版本推导；为空表示不自动升级框架 */
+  frameworkTarget?: string;
 }
 
 export interface UpgradeChange {
@@ -67,8 +69,6 @@ export interface UpgradeResult {
   text: string;
   changes: UpgradeChange[];
 }
-
-const SPRING_BOOT_TARGET = '2.7.18';
 
 function tagValue(block: string, tag: string): string {
   const match = new RegExp(`<${tag}>\\s*([^<]*?)\\s*</${tag}>`).exec(block);
@@ -200,6 +200,8 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
   const deps = parseDirectDependencies(pom);
   const managed = context?.managed;
   const nodes = context?.nodes;
+  /** 框架上限：由策略按 Java 版本推导；为空时不自动升级框架，交给人工判断 */
+  const frameworkTarget = context?.frameworkTarget ?? '';
   const byPackage = new Map<string, Issue[]>();
   for (const issue of issues) {
     if (issue.source !== 'trivy' || !issue.packageName) {
@@ -218,12 +220,20 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
 
   // 1. Spring Boot 2.x 升级：一次提升整组 BOM 管理的版本，不再逐个固定
   const bootRefs = parseBomRefs(pom).filter((ref) => ref.groupId === 'org.springframework.boot');
+  if (!frameworkTarget) {
+    bootRefs.forEach((ref) => {
+      skipped.push({
+        packageName: `${ref.groupId}:${ref.artifactId}`,
+        reason: '未声明框架目标版本（upgrade-policy.frameworkTargets 缺该 Java 版本），框架层不自动升级'
+      });
+    });
+  }
   for (const ref of bootRefs) {
     const [major, minor] = versionPair(ref.version);
     if (major !== 2 || minor >= 7) {
       continue;
     }
-    if (compareVersion(ref.version, SPRING_BOOT_TARGET) >= 0) {
+    if (!frameworkTarget || compareVersion(ref.version, frameworkTarget) >= 0) {
       continue;
     }
     const bomKey = `${ref.groupId}:${ref.artifactId}`;
@@ -249,7 +259,7 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
       groupId: ref.groupId,
       artifactId: ref.artifactId,
       from: ref.version,
-      to: SPRING_BOOT_TARGET,
+      to: frameworkTarget,
       cveCount,
       mode: ref.kind,
       source:
@@ -258,9 +268,9 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
           : '<dependencyManagement> 中 scope=import 的 BOM',
       sourceKind: ref.kind,
       affects: affected,
-      alternatives: [SPRING_BOOT_TARGET],
+      alternatives: [frameworkTarget],
       note:
-        `升级后 spring-*、tomcat-embed-*、jackson-*、logback-* 等版本会一起对齐到 ${SPRING_BOOT_TARGET}，` +
+        `升级后 spring-*、tomcat-embed-*、jackson-*、logback-* 等版本会一起对齐到 ${frameworkTarget}，` +
         `不再逐个固定；spring-boot-maven-plugin 的版本也随父 POM 对齐。` +
         `代码级适配可继续执行「Spring Boot 2.7 代码迁移」（rewrite-spring）。`
     });
@@ -271,7 +281,7 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
   const hasBootUpgrade = candidates.some(
     (item) => item.groupId === 'org.springframework.boot' && (item.mode === 'parent' || item.mode === 'bom')
   );
-  if (hasBootUpgrade) {
+  if (hasBootUpgrade && frameworkTarget) {
     const re = /<plugin>([\s\S]*?)<\/plugin>/g;
     let match: RegExpExecArray | null;
     while ((match = re.exec(pom)) !== null) {
@@ -283,7 +293,7 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
         continue;
       }
       const version = tagValue(body, 'version');
-      if (!version || version.includes('${') || compareVersion(version, SPRING_BOOT_TARGET) >= 0) {
+      if (!version || version.includes('${') || compareVersion(version, frameworkTarget) >= 0) {
         continue;
       }
       candidates.push({
@@ -291,13 +301,13 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
         groupId: 'org.springframework.boot',
         artifactId: 'spring-boot-maven-plugin',
         from: version,
-        to: SPRING_BOOT_TARGET,
+        to: frameworkTarget,
         cveCount: 0,
         mode: 'plugin',
         source: '<build><plugins> 中显式声明，未跟随父 POM',
         sourceKind: 'declared',
-        alternatives: [SPRING_BOOT_TARGET],
-        note: `Spring Boot ${SPRING_BOOT_TARGET} 对应同版本的 spring-boot-maven-plugin，避免构建期版本错配。`
+        alternatives: [frameworkTarget],
+        note: `Spring Boot ${frameworkTarget} 对应同版本的 spring-boot-maven-plugin，避免构建期版本错配。`
       });
     }
   }

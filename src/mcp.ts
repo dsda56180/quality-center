@@ -19,6 +19,7 @@ import {
 } from './agentOps';
 import { ToolId, EXTERNAL_TOOLS } from './tools';
 import { AgentScanEvent } from './agentApi';
+import { applyUpgradePlan, createUpgradePlan, readIssues } from './upgradePlanFile';
 
 interface RpcRequest {
   jsonrpc: '2.0';
@@ -143,6 +144,33 @@ const TOOLS: ToolDef[] = [
         write: { type: 'boolean', description: '是否真正写回文件，默认 false（仅预览）' }
       }
     }
+  },
+  {
+    name: 'quality_upgrade_plan',
+    description:
+      '生成依赖升级计划：只读 pom.xml 与扫描结果，把候选、跳过原因、pom 补丁（unified diff）落到 .quality-center/upgrade/<planId>/，不会修改 pom。返回 planId、pomHash、pomHashAfter 与补丁路径；后续 apply 必须带这三个值。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: PATH_PROP,
+        planId: { type: 'string', description: '自定义计划 ID，缺省按时间生成' }
+      }
+    }
+  },
+  {
+    name: 'quality_upgrade_apply',
+    description:
+      '按计划落盘 pom：必须传 planId 与 pomHash（计划生成时的哈希），哈希不一致会拒绝写入，避免会话中途改过 pom 时误覆盖。默认只返回 diff 预览，write=true 才写回，并校验落盘结果与计划的 pomHashAfter 一致。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: PATH_PROP,
+        planId: { type: 'string', description: '计划 ID' },
+        pomHash: { type: 'string', description: '生成计划时返回的 pomHash（含 sha256: 前缀）' },
+        write: { type: 'boolean', description: '是否真正写回 pom.xml，默认 false（仅预览）' }
+      },
+      required: ['planId', 'pomHash']
+    }
   }
 ];
 
@@ -247,6 +275,64 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         nextStep: write
           ? '已写回文件：调用 quality_scan 复核问题是否消失'
           : '这只是预览：确认无误后传 write=true 落盘'
+      });
+    }
+    case 'quality_upgrade_plan': {
+      if (!fs.existsSync(root)) {
+        return asText({ error: `目录不存在：${root}` }, true);
+      }
+      const issues = readIssues(root);
+      if (issues.length === 0) {
+        return asText({ error: '还没有扫描结果：先调用 quality_scan（可只跑 trivy）' }, true);
+      }
+      const customId = typeof params.planId === 'string' && params.planId.trim() ? params.planId.trim() : undefined;
+      const result = createUpgradePlan(root, issues, { planId: customId });
+      const patchPreview = result.patch.length > 2000 ? `${result.patch.slice(0, 2000)}\n…（完整补丁见 patchFile）` : result.patch;
+      return asText({
+        planId: result.plan.planId,
+        schemaVersion: result.plan.schemaVersion,
+        pomHash: result.plan.pomHash,
+        pomHashAfter: result.plan.pomHashAfter,
+        project: result.plan.project,
+        candidates: result.plan.candidates.map((item) => ({
+          id: item.id,
+          packageName: item.packageName,
+          from: item.from,
+          to: item.to,
+          mode: item.mode,
+          cveCount: item.cveCount,
+          crossLine: item.crossLine,
+          note: item.note
+        })),
+        skipped: result.plan.skipped,
+        blockedByPolicy: result.blockedByPolicy,
+        planFile: path.relative(root, result.planPath),
+        patchFile: path.relative(root, result.patchPath),
+        patchPreview,
+        nextStep: '审阅 diff 后调用 quality_upgrade_apply（带 planId 与 pomHash）；不要手工改 pom'
+      });
+    }
+    case 'quality_upgrade_apply': {
+      const planId = String(params.planId ?? '');
+      const expectedHash = String(params.pomHash ?? '');
+      if (!planId || !expectedHash) {
+        return asText({ error: 'planId 与 pomHash 必填（都由 quality_upgrade_plan 返回）' }, true);
+      }
+      const write = Boolean(params.write);
+      const outcome = applyUpgradePlan(root, { planId, write, expectedHash });
+      if (!outcome.ok) {
+        return asText({ planId, ok: false, reason: outcome.reason }, true);
+      }
+      return asText({
+        planId: outcome.planId,
+        mode: outcome.mode,
+        ok: true,
+        changed: outcome.changed,
+        hashAfter: outcome.hashAfter,
+        patch: write ? undefined : outcome.patch,
+        nextStep: write
+          ? '已写入 pom：调用 quality_build 跑构建门禁，再 quality_scan --only trivy 复扫并确认目标 CVE 消失'
+          : '这是预览：确认 diff 无误后传 write=true 落盘'
       });
     }
     default:
