@@ -110,6 +110,11 @@ class QualitySettings(private val project: Project) {
         get() = bool("openRewrite.fileSelection", true)
         set(value) = setBool("openRewrite.fileSelection", value)
 
+    /** 预览对话框的对比渲染：true = 内嵌 IDEA 原生 diff，false = 插件内置自绘列表 */
+    var previewNativeDiff: Boolean
+        get() = bool("preview.nativeDiff", true)
+        set(value) = setBool("preview.nativeDiff", value)
+
     var openRewriteAutoRecipes: Boolean
         get() = bool("openRewrite.autoRecipes", true)
         set(value) = setBool("openRewrite.autoRecipes", value)
