@@ -1,0 +1,10 @@
+{
+  "id": "ast-mybatis-annotation-sql",
+  "title": "MyBatis 注解 SQL 使用 ${} 字符串替换",
+  "layer": "code",
+  "cwe": "CWE-89",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_MYBATIS_ANNOTATION_SQL"], "mustNotFire": [] },
+  "target": { "rules": ["AST_MYBATIS_ANNOTATION_SQL"], "owner": "astgrep", "status": "covered" }
+}

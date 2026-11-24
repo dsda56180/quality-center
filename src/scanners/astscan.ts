@@ -354,9 +354,10 @@ function checkCrossOrigin(file: string, root: SgNode): Issue[] {
       continue;
     }
     const text = ann.text();
-    // 裸 @CrossOrigin 的默认就是 origins="*"，和显式通配等价
+    // 裸 @CrossOrigin 的默认就是 origins="*"；只写了 maxAge 之类属性同样回到默认通配
     const bare = /^@CrossOrigin\s*$/.test(text);
-    const wildcard = bare || /\*/.test(text);
+    const noOriginAttribute = !/origins\s*=|\bvalue\s*=/.test(text);
+    const wildcard = bare || noOriginAttribute || /\*/.test(text);
     const credentials = /allowCredentials\s*=\s*true/i.test(text);
     if (!wildcard && !credentials) {
       continue;
@@ -466,6 +467,125 @@ function checkCommandExec(file: string, root: SgNode): Issue[] {
   return issues;
 }
 
+/** 规则 8：MyBatis 注解 SQL 里使用 ${} 字符串替换 */
+function checkMybatisAnnotationSql(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const ann of root.findAll({ rule: { kind: 'annotation' } })) {
+    const text = ann.text();
+    if (!/^@(Select|Insert|Update|Delete)\s*\(/.test(text)) {
+      continue;
+    }
+    if (!text.includes('${')) {
+      continue;
+    }
+    const expression = /\$\{([^}]*)\}/.exec(text)?.[1]?.trim() ?? '';
+    issues.push(
+      makeIssue(
+        file,
+        ann,
+        'AST_MYBATIS_ANNOTATION_SQL',
+        'high',
+        'CWE-89',
+        `注解 SQL 使用了 \${${expression}} 字符串替换，参数会被原样拼进 SQL`,
+        '改成 `#{}` 占位符；动态字段用 Provider + 白名单校验，不要把外部值直接拼进 SQL。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 9：外部输入直接作为请求地址（SSRF） */
+function checkSsrf(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  const literalOnly = (text: string): boolean =>
+    /^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)$/.test(text);
+
+  for (const creation of root.findAll({ rule: { kind: 'object_creation_expression' } })) {
+    const text = creation.text();
+    if (!/new\s+(java\.net\.)?URL\s*\(/.test(text)) {
+      continue;
+    }
+    const args = creation.field('arguments')?.text() ?? '';
+    if (literalOnly(args)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        creation,
+        'AST_SSRF_EXTERNAL_URL',
+        'high',
+        'CWE-918',
+        'URL 地址不是字面量，外部输入可让服务去访问任意内网地址（SSRF）',
+        '对目标域名做白名单校验并禁止内网网段；用 HttpClient 显式超时与重定向限制。'
+      )
+    );
+  }
+
+  const REST_NAMES = ['getForObject', 'getForEntity', 'postForObject', 'postForEntity', 'patchForObject', 'exchange'];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    if (!name || !REST_NAMES.includes(name)) {
+      continue;
+    }
+    const receiver = call.field('object')?.text() ?? '';
+    if (!/restTemplate|RestTemplate|webClient|WebClient/i.test(receiver)) {
+      continue;
+    }
+    const args = call.field('arguments')?.text() ?? '';
+    if (literalOnly(args) || args.trim() === '()') {
+      continue;
+    }
+    // 第一个参数是 URL：字节级判断「开头是不是字面量」，字面量开头即视为固定地址
+    if (/^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*,/.test(args)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_SSRF_EXTERNAL_URL',
+        'high',
+        'CWE-918',
+        'HTTP 客户端的请求地址来自变量，外部输入可触发 SSRF 访问内网或云元数据',
+        '目标地址用常量或白名单映射，禁止直接把用户传入的 URL 交给 RestTemplate/WebClient。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 10：把外部输入直接写进响应（反射型 XSS） */
+function checkXssWriter(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    if (!name || !['write', 'print', 'println'].includes(name)) {
+      continue;
+    }
+    const receiver = call.field('object')?.text() ?? '';
+    if (!/getWriter\s*\(\)/.test(receiver)) {
+      continue;
+    }
+    const args = call.field('arguments')?.text() ?? '';
+    if (/^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)$/.test(args)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_XSS_RESPONSE_WRITE',
+        'medium',
+        'CWE-79',
+        '响应输出流写入了非字面量内容，外部输入未转义时可造成反射型 XSS',
+        '改用模板引擎（默认转义）或先做 HTML 实体编码；设置 `Content-Type: text/html; charset=UTF-8` 不能替代转义。'
+      )
+    );
+  }
+  return issues;
+}
+
 export async function scanAstgrep(root: string): Promise<AstscanResult> {
   const ast = loadEngine();
   if (!ast) {
@@ -507,6 +627,9 @@ export async function scanAstgrep(root: string): Promise<AstscanResult> {
     issues.push(...checkCrossOrigin(file, treeRoot));
     issues.push(...checkExpressionInjection(file, treeRoot));
     issues.push(...checkCommandExec(file, treeRoot));
+    issues.push(...checkMybatisAnnotationSql(file, treeRoot));
+    issues.push(...checkSsrf(file, treeRoot));
+    issues.push(...checkXssWriter(file, treeRoot));
   }
 
   return { issues, files: parsed };

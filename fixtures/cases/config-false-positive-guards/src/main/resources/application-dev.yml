@@ -1,0 +1,14 @@
+spring:
+  devtools:
+    restart:
+      enabled: true
+  datasource:
+    password: ENC(AbCdEf123456)
+  jasypt:
+    encryptor:
+      password: ${JASYPT_PASSWORD}
+springdoc:
+  api-docs:
+    enabled: true
+knife4j:
+  enable: true

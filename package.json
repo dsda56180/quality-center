@@ -182,12 +182,12 @@
         "qualityCenter.qcsec.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "启用配置安全扫描（qcsec）：检查 application.yml / properties 里的 Druid 默认口令与公网绑定、Actuator 全暴露、CORS 通配、allowMultiQueries、明文口令、devtools、SSL 关闭、Swagger/Knife4j 文档开放，以及 MyBatis Mapper 的 ${} 字符串替换，无需外部工具"
+          "description": "启用配置安全扫描（qcsec）：检查 application.yml / properties 里的 Druid 默认口令与公网绑定、Actuator 全暴露、CORS 通配、allowMultiQueries、明文口令、devtools、SSL 关闭、Swagger/Knife4j 文档开放，以及 MyBatis Mapper 的 ${} 与 statementType=STATEMENT，无需外部工具"
         },
         "qualityCenter.astgrep.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "启用 AST 语义规则（astgrep）：解析 Java 语法树检查 permitAll() 敏感路径、日志输出口令/令牌、上传缺少校验、SQL 字符串拼接、@CrossOrigin 通配、SpEL/OGNL 注入、Runtime.exec 拼接命令"
+          "description": "启用 AST 语义规则（astgrep）：解析 Java 语法树检查 permitAll() 敏感路径、日志输出口令/令牌、上传缺少校验、SQL 字符串拼接、@CrossOrigin 通配、SpEL/OGNL 注入、Runtime.exec 拼接命令、MyBatis 注解 SQL 的 ${}、SSRF、响应流 XSS"
         },
         "qualityCenter.dependencyUpgrade.enabled": {
           "type": "boolean",

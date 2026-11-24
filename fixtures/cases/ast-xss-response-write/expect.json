@@ -1,0 +1,10 @@
+{
+  "id": "ast-xss-response-write",
+  "title": "响应流直接写入外部输入",
+  "layer": "code",
+  "cwe": "CWE-79",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_XSS_RESPONSE_WRITE"], "mustNotFire": [] },
+  "target": { "rules": ["AST_XSS_RESPONSE_WRITE"], "owner": "astgrep", "status": "covered" }
+}

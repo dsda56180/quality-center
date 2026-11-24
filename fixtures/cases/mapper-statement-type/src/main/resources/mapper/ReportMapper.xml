@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="p.ReportMapper">
+  <select id="findByNames" resultType="p.User" statementType="STATEMENT">
+    select * from t_user where name = #{name}
+  </select>
+  <select id="safe" resultType="p.User">
+    select * from t_user where id = #{id}
+  </select>
+</mapper>

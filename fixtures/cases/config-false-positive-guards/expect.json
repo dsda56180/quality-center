@@ -1,0 +1,13 @@
+{
+  "id": "config-false-positive-guards",
+  "title": "dev profile 开文档/devtools、口令用 ENC 与密钥托管（应不告警）",
+  "layer": "config",
+  "cwe": "CWE-798",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": [],
+    "mustNotFire": ["SEC_SWAGGER_PUBLIC", "SEC_DEVTOOLS_ENABLED", "SEC_PLAINTEXT_PASSWORD_PROPERTY"]
+  },
+  "target": { "rules": [], "owner": "qcsec", "status": "covered" }
+}

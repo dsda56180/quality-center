@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.0
+
+**能力继续做深：注解 SQL、`statementType=STATEMENT`、SSRF、反射型 XSS 四条新规则，同时专门做了一轮误报治理。**
+
+- 新增 `AST_MYBATIS_ANNOTATION_SQL`：`@Select/@Insert/@Update/@Delete` 注解文本里出现 `${` 即报（与 Mapper XML 规则对齐，注解写法不再漏检）
+- 新增 `SEC_MYBATIS_STATEMENT_TYPE`：`statementType="STATEMENT"` 会让 MyBatis 退回普通 Statement，`#{}` 也失去绑定保护
+- 新增 `AST_SSRF_EXTERNAL_URL`：`new URL(非字面量)`、`RestTemplate / WebClient` 的首个参数非字面量（`getForObject` / `getForEntity` / `postForObject` / `postForEntity` / `patchForObject` / `exchange`）
+- 新增 `AST_XSS_RESPONSE_WRITE`：`response.getWriter().write/print/println` 参数非字面量
+- 误报治理（每条都加进靶场锁住）：
+  - `@CrossOrigin` 补上「只写 `maxAge` 等属性、未写 origins/value」的情况——Spring 默认仍是通配，此前会漏报；显式白名单数组仍不报
+  - 明文口令规则放行 `ENC(...)`、`{cipher}`、`sm:`/`vault:`/`sops:`/`aws:`/`kms:` 等密钥托管写法
+  - `dev/local/test/it` profile 里的 Swagger 与 devtools 开关按正常用法忽略，避免把本地配置当生产问题
+  - SSRF 与命令执行只放行纯字面量参数；`RestTemplate` 首个参数以字面量开头（固定地址 + 变量 path）不报
+- 靶场新增 6 个用例（4 正例 + `ast-safe-patterns-2`、`config-false-positive-guards` 两个误报回归集合），矩阵扩到 **28 个用例，PASS 28 / GAP 0 / FAIL 0**
+- 文档：`docs/RULES.md` 补 4 行并更新局限（dev profile 豁免、密钥托管放行、XSS 仅覆盖 `getWriter()`、常量中转会报可用 baseline 忽略），README/配置项说明同步为 10 条配置 + 2 条 Mapper + 10 条 AST
+
 ## 0.21.0
 
 **补齐配置层最后两块空白：Swagger 文档开放与 MyBatis `${}` 注入。**

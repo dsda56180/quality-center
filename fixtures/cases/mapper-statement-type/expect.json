@@ -1,0 +1,10 @@
+{
+  "id": "mapper-statement-type",
+  "title": "Mapper 使用 statementType=STATEMENT 退回非预编译",
+  "layer": "config",
+  "cwe": "CWE-89",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_MYBATIS_STATEMENT_TYPE"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_MYBATIS_STATEMENT_TYPE"], "owner": "qcsec", "status": "covered" }
+}

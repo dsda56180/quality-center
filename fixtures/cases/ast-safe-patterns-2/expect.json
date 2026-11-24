@@ -1,0 +1,13 @@
+{
+  "id": "ast-safe-patterns-2",
+  "title": "注解 SQL 用 #{}、固定 URL、字面量输出（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-89",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": [],
+    "mustNotFire": ["AST_MYBATIS_ANNOTATION_SQL", "AST_SSRF_EXTERNAL_URL", "AST_XSS_RESPONSE_WRITE"]
+  },
+  "target": { "rules": [], "owner": "astgrep", "status": "covered" }
+}

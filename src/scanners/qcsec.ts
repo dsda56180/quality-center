@@ -291,7 +291,16 @@ const RULES: RuleDef[] = [
         .filter((entry) => !/stat-view-servlet/.test(entry.key))
         .filter((entry) => {
           const value = entry.value.trim();
-          return value !== '' && !value.startsWith('${') && !value.startsWith('#{') && !/^\*+$/.test(value);
+          return (
+            value !== '' &&
+            !value.startsWith('${') &&
+            !value.startsWith('#{') &&
+            // 常见加密/密钥托管写法，本身就是「已外部化」的等价形态
+            !/^ENC\(/.test(value) &&
+            !/^\{cipher\}/.test(value) &&
+            !/^(sm|vault|sops|aws|kms):/i.test(value) &&
+            !/^\*+$/.test(value)
+          );
         })
         .map((entry) => ({
           line: entry.line,
@@ -450,6 +459,32 @@ function scanMapperDollar(file: string, text: string): Issue[] {
   return issues;
 }
 
+/** `statementType="STATEMENT"` 会退回非预编译 Statement，`#{}` 也失去参数绑定保护 */
+function scanMapperStatementType(file: string, text: string): Issue[] {
+  if (!/<mapper[\s>]/.test(text)) {
+    return [];
+  }
+  const issues: Issue[] = [];
+  const masked = text.replace(/<!--[\s\S]*?-->/g, (block) => block.replace(/[^\n]/g, ' '));
+  const regex = /statementType\s*=\s*["']STATEMENT["']/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(masked)) !== null) {
+    const line = masked.slice(0, match.index).split('\n').length;
+    issues.push({
+      source: 'qcsec',
+      severity: 'medium',
+      file,
+      line,
+      column: 1,
+      rule: 'SEC_MYBATIS_STATEMENT_TYPE',
+      message: '语句使用 statementType="STATEMENT"，MyBatis 会退回普通 Statement，参数绑定保护失效',
+      advice: '改用默认的 PREPARED 模式；确需 STATEMENT（例如动态 DDL）时把 SQL 收敛到常量并做白名单校验。',
+      cwe: ['CWE-89']
+    });
+  }
+  return issues;
+}
+
 export async function scanQcsec(root: string): Promise<QcsecResult> {
   const files = collectConfigFiles(root);
   const issues: Issue[] = [];
@@ -468,7 +503,12 @@ export async function scanQcsec(root: string): Promise<QcsecResult> {
       continue;
     }
     const index = new Index(entries);
+    // dev/test profile 里开文档与 devtools 属于正常用法，避免把这些当生产问题误报
+    const isDevProfile = /-(dev|local|test|it|integration)\.(ya?ml|properties)$/i.test(file);
     for (const rule of RULES) {
+      if (isDevProfile && (rule.id === 'SEC_SWAGGER_PUBLIC' || rule.id === 'SEC_DEVTOOLS_ENABLED')) {
+        continue;
+      }
       let drafts: IssueDraft[];
       try {
         drafts = rule.match(index);
@@ -501,6 +541,7 @@ export async function scanQcsec(root: string): Promise<QcsecResult> {
       }
       const text = fs.readFileSync(mapper, 'utf8');
       issues.push(...scanMapperDollar(mapper, text));
+      issues.push(...scanMapperStatementType(mapper, text));
     } catch {
       continue;
     }

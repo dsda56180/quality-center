@@ -1,0 +1,10 @@
+{
+  "id": "ast-ssrf-external-url",
+  "title": "外部输入作为请求地址（new URL / RestTemplate）",
+  "layer": "code",
+  "cwe": "CWE-918",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_SSRF_EXTERNAL_URL"], "mustNotFire": [] },
+  "target": { "rules": ["AST_SSRF_EXTERNAL_URL"], "owner": "astgrep", "status": "covered" }
+}
