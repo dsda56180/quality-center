@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.22
+
+- 对齐官方实现：diff 内容不再带 FileType（官方 VCS diff 用的是纯 DocumentContent，不带语言类型，编辑器不会为它建 PSI）。带 Java 类型时每次重建 viewer 都要给两个文档建代码高亮 + 语法分析，单次可卡 EDT 数百毫秒——这是历次「点了没反应」的主因
+- 回退 0.1.21 的多面板缓存：平台 `DiffRequestProcessor.doApplyRequest` 每次 setRequest 必然销毁旧 viewer 重建，多留几个面板只会让多个编辑器同时跑守护进程，实测更卡；恢复单一 DiffRequestPanel
+- 点击合并窗口 120ms → 30ms，点击后几乎立刻切换
+- 渲染耗时超过 80ms 会写一条 warn 到 idea.log，便于继续定位
+
 ## 0.1.21
 
 - 文件列表行高被 BoxLayout 拉高的问题：每个文件行锁定 24px 行高，多余空间交给底部 glue，不再出现「3 个文件却每个占 60 多像素、中间大片留白」
