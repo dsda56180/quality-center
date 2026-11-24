@@ -559,6 +559,11 @@ function writeJson(file: string, value: unknown): void {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+/** 把计划候选还原成可执行候选（apply 与面板预览都走同一个函数，保证两边逐字节一致） */
+export function planCandidateToUpgrade(plan: UpgradePlanFile, item: PlanCandidate): UpgradeCandidate {
+  return toCandidate(plan, item);
+}
+
 /** 应用计划：默认只预览；write=true 时原子写回。支持按分组 / 按包推进，失败可二分定位 */
 export function applyUpgradePlan(
   root: string,

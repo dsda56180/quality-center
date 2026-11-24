@@ -16,6 +16,13 @@ import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, Upgrad
 import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '../upgrader';
 import { loadPolicy } from '../upgradePolicy';
 import { buildAgentPrompt } from '../agentPrompt';
+import {
+  applyUpgradePlan,
+  checkUpgradePlan,
+  createUpgradePlan,
+  planCandidateToUpgrade,
+  revertUpgradePlan
+} from '../upgradePlanFile';
 import { indexBomManagement, localRepository, parseBomRefs, parseDependencyTree } from '../dependencies';
 import {
   artifactsForRecipes,
@@ -1324,10 +1331,20 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
 
-    const plan = await this.buildUpgradePlan(root);
-    if (plan.candidates.length === 0) {
-      const detail = plan.skipped.length
-        ? plan.skipped
+    // 面板与 CLI/MCP 走同一条路：先出 Plan V3（plan.json + pom.diff），再按 planId + pomHash 落盘。
+    let plan: ReturnType<typeof createUpgradePlan>;
+    try {
+      plan = createUpgradePlan(root, result.issues);
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `生成升级计划失败：${error instanceof Error ? error.message : String(error)}`
+      );
+      return;
+    }
+    const planFile = plan.plan;
+    if (planFile.candidates.length === 0) {
+      const detail = planFile.skipped.length
+        ? planFile.skipped
             .slice(0, 5)
             .map((item) => `· ${item.packageName}：${item.reason}`)
             .join('\n')
@@ -1335,14 +1352,15 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       void vscode.window.showInformationMessage(`没有可直接升级的依赖：\n${detail}`);
       return;
     }
+    this.log(`升级计划 ${planFile.planId}：${planFile.groups.map((group) => `${group.name} ${group.candidates.length}`).join(' / ')}`);
 
-    let pool: UpgradeCandidate[];
+    let pool: typeof planFile.candidates;
     /** 跨大版本（如 8.x → 13.x）不进一键升级：这类升级通常伴随 API/驱动协议变化，需人工评估 */
-    const crossLine = plan.candidates.filter((item) => item.crossLine);
+    const crossLine = planFile.candidates.filter((item) => item.crossLine);
     if (packageName) {
-      const matched = plan.candidates.find((item) => item.packageName === packageName);
+      const matched = planFile.candidates.find((item) => item.packageName === packageName);
       if (!matched) {
-        const reason = plan.skipped.find((item) => item.packageName === packageName)?.reason;
+        const reason = planFile.skipped.find((item) => item.packageName === packageName)?.reason;
         void vscode.window.showInformationMessage(
           `${packageName} 不在可自动升级范围${reason ? `：${reason}` : ''}。`
         );
@@ -1356,7 +1374,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       }
       pool = [matched];
     } else {
-      pool = plan.candidates.filter((item) => !item.crossLine);
+      pool = planFile.candidates.filter((item) => !item.crossLine);
       if (crossLine.length) {
         this.log(
           `跨大版本需人工处理：${crossLine
@@ -1367,27 +1385,28 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
 
     const original = fs.readFileSync(pomFile, 'utf8');
-    const entries = pool
-      .map((candidate): UpgradePreviewEntry | undefined => {
-        const applied = applyUpgrade(original, candidate);
-        if (!applied) {
-          return undefined;
-        }
-        return {
-          packageName: candidate.packageName,
-          from: candidate.from,
-          to: candidate.to,
-          cveCount: candidate.cveCount,
-          mode: candidate.mode,
-          source: candidate.source,
-          affects: candidate.affects,
-          conflicts: candidate.conflicts,
-          note: candidate.note,
-          alternatives: candidate.alternatives,
-          changes: applied.changes
-        };
-      })
-      .filter((entry): entry is UpgradePreviewEntry => !!entry);
+    // 展示用逐条 diff 来自同一个 applyUpgrade，与实际落盘结果一致；累积顺序与 plan 一致
+    let model = original;
+    const entries: UpgradePreviewEntry[] = [];
+    for (const item of pool) {
+      const applied = applyUpgrade(model, planCandidateToUpgrade(planFile, item));
+      if (!applied) {
+        continue;
+      }
+      model = applied.text;
+      entries.push({
+        packageName: item.packageName,
+        from: item.from,
+        to: item.to,
+        cveCount: item.cveCount,
+        mode: item.mode,
+        source: item.source,
+        affects: item.affects,
+        note: item.note,
+        alternatives: [item.to],
+        changes: applied.changes
+      });
+    }
     if (entries.length === 0) {
       void vscode.window.showInformationMessage('没有可在 pom.xml 中定位到的升级项。');
       return;
@@ -1396,9 +1415,13 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const profile = detectProjectProfile(root);
     const projectParts = [
       profile.javaVersion ? `Java ${profile.javaVersion}` : '',
-      profile.springBootVersion ? `Spring Boot ${profile.springBootVersion}` : ''
+      profile.springBootVersion ? `Spring Boot ${profile.springBootVersion} → ${planFile.project.frameworkTarget ?? '未声明'}` : ''
     ].filter(Boolean);
-    const decision = await this.showUpgradePreview(entries, plan.skipped, projectParts.join(' · '));
+    const decision = await this.showUpgradePreview(
+      entries,
+      planFile.skipped.map((item) => ({ packageName: item.packageName, reason: item.reason })),
+      projectParts.join(' · ')
+    );
     if (!decision) {
       this.log('用户取消了依赖升级预览');
       return;
@@ -1407,30 +1430,28 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     if (chosen.length === 0) {
       return;
     }
-
-    let text = original;
-    for (const item of chosen) {
-      const target = decision.versions[item.packageName] || item.to;
-      const applied = applyUpgrade(text, item, target);
-      if (!applied) {
-        void vscode.window.showErrorMessage(
-          `未在 pom.xml 中找到 ${item.packageName} ${item.from}，已取消本次升级。`
-        );
-        return;
-      }
-      text = applied.text;
-    }
     this.fixCache = undefined;
 
     this.beginDeepFix('写入 pom', 2);
     this.log(
-      `开始升级依赖：${chosen
-        .map((item) => `${item.packageName} ${item.from}→${decision.versions[item.packageName] || item.to}`)
+      `开始升级依赖（计划 ${planFile.planId}，${chosen.length} 项）：${chosen
+        .map((item) => `${item.packageName} ${item.from}→${item.to}`)
         .join(', ')}`
     );
     let compiled = false;
+    let appliedCount = 0;
     try {
-      fs.writeFileSync(pomFile, text, 'utf8');
+      const applied = applyUpgradePlan(root, {
+        planId: planFile.planId,
+        write: true,
+        expectedHash: planFile.pomHash,
+        packages: chosen.map((item) => item.packageName)
+      });
+      if (!applied.ok) {
+        void vscode.window.showErrorMessage(`写入 pom 失败：${applied.reason ?? '未知原因'}`);
+        return;
+      }
+      appliedCount = applied.applied?.length ?? chosen.length;
       this.setDeepFixStage('校验编译');
       const build = await vscode.window.withProgress(
         {
@@ -1441,22 +1462,25 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         () => run('mvn', ['-B', '-q', ...mavenMirrorArgs(), '-DskipTests', 'compile'], root, 20 * 60_000)
       );
       if (build.code !== 0) {
-        fs.writeFileSync(pomFile, original, 'utf8');
+        const revert = revertUpgradePlan(root, planFile.planId);
         const tail = (build.stderr || build.stdout)
           .split(/\r?\n/)
           .filter(Boolean)
           .slice(-6)
           .join('\n');
-        this.log(`依赖升级后编译失败，已还原 pom：\n${tail}`);
+        const rollback = revert.ok
+          ? '已回滚到计划前快照'
+          : `回滚失败：${revert.reason ?? '未知原因'}（请先确认 pom.xml 状态）`;
+        this.log(`依赖升级后编译失败，${rollback}：\n${tail}`);
         const pick = await vscode.window.showErrorMessage(
-          `依赖升级后编译失败，已还原 pom.xml：\n${tail}`,
+          `依赖升级后编译失败，${rollback}：\n${tail}`,
           '复制给 AI',
           '查看日志'
         );
         if (pick === '复制给 AI') {
           await vscode.env.clipboard.writeText(
             buildAgentPrompt(root, {
-              failure: `依赖升级后编译失败，pom.xml 已还原到升级前。Maven 输出：\n${tail}`
+              failure: `依赖升级后编译失败，${rollback}。计划 ${planFile.planId}。Maven 输出：\n${tail}`
             })
           );
           void vscode.window.showInformationMessage(
@@ -1476,15 +1500,21 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     if (compiled) {
       await this.scanAndPush();
+      const state = checkUpgradePlan(root, planFile.planId);
+      const leftover =
+        state.state === 'applied'
+          ? ''
+          : `计划还有 ${(state.total ?? 0) - (state.appliedCount ?? 0)} 个候选未落盘` +
+            `${state.nextGroup ? `（下一组 ${state.nextGroup}）` : ''}，可用「复制给 AI 继续」分批推进。`;
       void vscode.window.showInformationMessage(
-        `已升级 ${chosen.length} 个依赖并通过编译校验，已重新扫描。`
+        `已升级 ${appliedCount} 个依赖并通过编译校验，已重新扫描。${leftover}`
       );
       const spring = chosen.find(
         (item) =>
           item.groupId === 'org.springframework.boot' && (item.mode === 'parent' || item.mode === 'bom')
       );
       if (spring) {
-        const bootVersion = decision.versions[spring.packageName] || spring.to;
+        const bootVersion = spring.to;
         const answer = await vscode.window.showInformationMessage(
           `Spring Boot 已升级到 ${bootVersion} 并通过编译。是否继续执行代码级迁移？` +
             '（rewrite-spring，会改动业务代码，执行前可预览 diff）',
