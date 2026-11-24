@@ -141,6 +141,33 @@ code --install-extension dsda56180.quality-center
 | `质量中心：打开问题位置` | 跳到某条问题对应的文件行 |
 | `质量中心：打开设置` | 打开面板内的扫描范围与配方设置 |
 
+## 给 AI agent 的接口（CLI + Skills）
+
+插件除了侧边栏，还带一个无界面 CLI（扩展包内 `out/cli.js`），用同一套扫描器与同一份基线，可在纯 Node 环境运行，供 agent 与 CI 调用。配套的 `skills/` 目录是可直接加载给 agent 的 Skill 包。
+
+```bash
+node <扩展目录>/out/cli.js scan --json --fail-on high   # 四类扫描，JSON 到 stdout
+node <扩展目录>/out/cli.js scan --only trivy,spotbugs   # 只跑指定扫描器
+node <扩展目录>/out/cli.js build <项目>                 # mvn -B -DskipTests package
+node <扩展目录>/out/cli.js tools status --json          # 工具是否就绪
+node <扩展目录>/out/cli.js tools install mvn            # 缺失工具自动安装
+node <扩展目录>/out/cli.js report --md                  # 复用已有结果
+```
+
+约定：stdout 只放结果，进度和日志全部走 stderr；退出码 `0` 通过、`1` 有达到阈值的问题（默认 `high`）、`2` 工具缺失或执行失败、`3` 用法错误。扫描结果同时写 `.quality-center/issues.json` 与 `report.md`。
+
+`--json` 输出 `schemaVersion: "2"` 的 `AgentPayload`：`summary`（按严重度与来源计数）、`issues`（含相对路径 `file`、绝对路径 `abs`、`rule`、`zhSummary`、`advice`、`fixable`、`package`/`installedVersion`/`fixedVersion`/`cvss`）、`ignored`、`suggestions`（根因级方案）、`skipped`、`errors`、`missingTools`、`nextActions`。字段只增不减，结构变化时升版本号。
+
+`skills/` 内含三个 Skill 与机器可读清单：
+
+| Skill | 触发场景 |
+| --- | --- |
+| `quality-center-scan` | 跑扫描、读结果、判断严重度与交付口径 |
+| `quality-center-tools` | 缺 mvn / gitleaks / trivy 时自动安装，或先构建产物 |
+| `quality-center-dependencies` | 按 CVE 修复版本升级 pom，整组对齐 BOM/父 POM 并编译校验 |
+
+`skills/manifest.json` 声明 CLI 入口、命令、退出码与 Skill 路径，支持清单式发现；把对应 `SKILL.md` 放进 agent 的 skills 目录即可加载。CLI 只做只读扫描、构建与装工具，改代码与改 pom 由 agent 按 Skill 指引完成并复扫确认。
+
 ## 隐私与安全
 
 - 所有扫描均在本机执行，不上传任何代码

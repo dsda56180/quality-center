@@ -61,6 +61,8 @@ export function exportForAgent(root: string, result: ScanResult): AgentExport {
   }));
 
   const payload = {
+    // 给 agent 的稳定契约：字段只增不减，结构变化时升级版本号
+    schemaVersion: '2',
     generatedAt: new Date(result.finishedAt).toISOString(),
     projectRoot: root,
     summary: summarize(result.issues),

@@ -1,0 +1,41 @@
+{
+  "name": "quality-center-agent-kit",
+  "publisher": "dsda56180",
+  "extensionId": "dsda56180.quality-center",
+  "description": "quality-center 的 agent 接口包：无界面 CLI + 三个可直接加载的 Skill，用于代码质量、密钥泄露、依赖漏洞(CVE)与字节码静态缺陷扫描。",
+  "cli": {
+    "runtime": "node",
+    "entry": "out/cli.js",
+    "invoke": "node <扩展目录>/out/cli.js <command>",
+    "commands": ["scan", "build", "tools status", "tools install", "report", "version"],
+    "payloadSchema": "2",
+    "outputs": [".quality-center/issues.json", ".quality-center/report.md"],
+    "exitCodes": {
+      "0": "通过（没有达到 --fail-on 阈值的问题）",
+      "1": "有达到阈值的问题",
+      "2": "执行失败或外部工具缺失",
+      "3": "用法错误"
+    }
+  },
+  "skills": [
+    {
+      "name": "quality-center-scan",
+      "path": "quality-center-scan/SKILL.md",
+      "when": "要跑代码质量/密钥/CVE/静态缺陷扫描，或需要结构化问题清单时"
+    },
+    {
+      "name": "quality-center-tools",
+      "path": "quality-center-tools/SKILL.md",
+      "when": "扫描结果显示缺失 mvn/gitleaks/trivy，或缺构建产物需要先构建时"
+    },
+    {
+      "name": "quality-center-dependencies",
+      "path": "quality-center-dependencies/SKILL.md",
+      "when": "要按 CVE 修复版本升级 pom 依赖，并保证编译与复扫通过时"
+    }
+  ],
+  "docs": {
+    "readme": "README.md",
+    "repository": "https://github.com/dsda56180/quality-center"
+  }
+}

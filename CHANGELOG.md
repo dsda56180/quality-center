@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.18
+
+- 新增无界面 CLI（`out/cli.js`，`npm run agent`）：`scan` / `build` / `tools status` / `tools install` / `report`，用同一套扫描器、同一份基线，可在纯 Node 环境与 CI 中运行，不依赖 vscode API
+- CLI 输出契约固定：stdout 只放结果，进度与日志走 stderr；`--json` 输出 `AgentPayload`（`schemaVersion: "2"`，含 summary / issues / ignored / suggestions / skipped / missingTools / nextActions，问题带相对路径与绝对路径、`fixable`、CVE 修复版本）；退出码 `0` 通过、`1` 有达到阈值的问题（`--fail-on` 默认 high）、`2` 工具缺失或执行失败、`3` 用法错误
+- 新增 `skills/` agent 接口包：`quality-center-scan`、`quality-center-tools`、`quality-center-dependencies` 三个 Skill，外加 `manifest.json`（CLI 入口、命令、退出码、Skill 列表）与 README
+- `.quality-center/issues.json` 与 CLI 输出统一加上 `schemaVersion`，作为稳定的 agent 契约
+- `src/maven.ts` 与 vscode 解耦：编辑器内读用户设置，纯 Node 环境下按默认值走国内镜像，使 CLI 能复用完全相同的 Maven 行为
+- README 新增「给 AI agent 的接口（CLI + Skills）」章节：命令、退出码、输出结构、Skill 触发场景
+
 ## 0.17.17
 
 - 安装与构建改为流式执行：不再等命令跑完才拿结果，边跑边读输出，通知栏与面板顶部实时显示当前阶段（下载 / 解压 / 校验、模块 / 阶段）和已用时间，下载时显示百分比
