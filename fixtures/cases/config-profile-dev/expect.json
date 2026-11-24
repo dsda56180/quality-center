@@ -1,0 +1,10 @@
+{
+  "id": "config-profile-dev",
+  "title": "默认激活开发 profile",
+  "layer": "config",
+  "cwe": "CWE-489",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_PROFILE_DEV_ACTIVE"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_PROFILE_DEV_ACTIVE"], "owner": "qcsec", "status": "covered" }
+}

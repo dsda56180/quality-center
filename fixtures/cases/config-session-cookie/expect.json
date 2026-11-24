@@ -1,0 +1,17 @@
+{
+  "id": "config-session-cookie",
+  "title": "会话超时过长、Cookie 关闭 HttpOnly/Secure、静态资源映射本地目录",
+  "layer": "config",
+  "cwe": "CWE-1004",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": ["SEC_SESSION_TIMEOUT_LONG", "SEC_COOKIE_FLAGS_WEAK", "SEC_STATIC_LOCATIONS_FILE"],
+    "mustNotFire": []
+  },
+  "target": {
+    "rules": ["SEC_SESSION_TIMEOUT_LONG", "SEC_COOKIE_FLAGS_WEAK", "SEC_STATIC_LOCATIONS_FILE"],
+    "owner": "qcsec",
+    "status": "covered"
+  }
+}

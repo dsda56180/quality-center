@@ -1,0 +1,10 @@
+{
+  "id": "config-error-stacktrace",
+  "title": "错误响应回传堆栈与异常细节",
+  "layer": "config",
+  "cwe": "CWE-209",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_ERROR_STACKTRACE"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_ERROR_STACKTRACE"], "owner": "qcsec", "status": "covered" }
+}

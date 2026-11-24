@@ -1,0 +1,14 @@
+{
+  "id": "config-druid-filters",
+  "title": "Druid 注册 config 过滤器且面板 allow 留空",
+  "layer": "config",
+  "cwe": "CWE-200",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_DRUID_FILTERS_CONFIG", "SEC_DRUID_STATVIEW_ALLOW_EMPTY"], "mustNotFire": [] },
+  "target": {
+    "rules": ["SEC_DRUID_FILTERS_CONFIG", "SEC_DRUID_STATVIEW_ALLOW_EMPTY"],
+    "owner": "qcsec",
+    "status": "covered"
+  }
+}

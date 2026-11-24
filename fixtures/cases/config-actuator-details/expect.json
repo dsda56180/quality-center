@@ -1,0 +1,17 @@
+{
+  "id": "config-actuator-details",
+  "title": "健康检查展示细节、管理端点落在根路径、actuator 进文档",
+  "layer": "config",
+  "cwe": "CWE-497",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": ["SEC_HEALTH_SHOW_DETAILS", "SEC_MANAGEMENT_BASE_PATH_ROOT", "SEC_SPRINGDOC_ACTUATOR"],
+    "mustNotFire": ["SEC_ACTUATOR_EXPOSE_ALL"]
+  },
+  "target": {
+    "rules": ["SEC_HEALTH_SHOW_DETAILS", "SEC_MANAGEMENT_BASE_PATH_ROOT", "SEC_SPRINGDOC_ACTUATOR"],
+    "owner": "qcsec",
+    "status": "covered"
+  }
+}

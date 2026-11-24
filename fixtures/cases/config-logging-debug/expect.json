@@ -1,0 +1,10 @@
+{
+  "id": "config-logging-debug",
+  "title": "生产配置把根日志与 SQL 日志开到 DEBUG",
+  "layer": "config",
+  "cwe": "CWE-532",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_ROOT_LOG_DEBUG", "SEC_SQL_LOG_DEBUG"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_ROOT_LOG_DEBUG", "SEC_SQL_LOG_DEBUG"], "owner": "qcsec", "status": "covered" }
+}

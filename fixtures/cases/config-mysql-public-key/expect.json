@@ -1,0 +1,10 @@
+{
+  "id": "config-mysql-public-key",
+  "title": "MySQL 明文链路 + allowPublicKeyRetrieval",
+  "layer": "config",
+  "cwe": "CWE-319",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_MYSQL_PUBLIC_KEY_RETRIEVAL"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_MYSQL_PUBLIC_KEY_RETRIEVAL"], "owner": "qcsec", "status": "covered" }
+}

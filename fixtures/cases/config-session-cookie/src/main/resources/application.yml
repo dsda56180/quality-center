@@ -1,0 +1,13 @@
+server:
+  servlet:
+    session:
+      timeout: 24h
+      cookie:
+        http-only: false
+        secure: false
+spring:
+  web:
+    resources:
+      static-locations:
+        - file:/data/uploads/
+        - classpath:/static/

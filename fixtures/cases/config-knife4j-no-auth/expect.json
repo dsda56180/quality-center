@@ -1,0 +1,10 @@
+{
+  "id": "config-knife4j-no-auth",
+  "title": "Knife4j 显式关闭 Basic 认证",
+  "layer": "config",
+  "cwe": "CWE-306",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_KNIFE4J_NO_AUTH", "SEC_SWAGGER_PUBLIC"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_KNIFE4J_NO_AUTH", "SEC_SWAGGER_PUBLIC"], "owner": "qcsec", "status": "covered" }
+}

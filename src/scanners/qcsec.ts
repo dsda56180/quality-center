@@ -91,7 +91,23 @@ function flattenYaml(text: string): Entry[] {
     }
     const full = [...stack.map((item) => item.key), name].join('.');
     if (value === '') {
-      stack.push({ indent, key: name });
+      // `key:` 后面既可能是嵌套映射，也可能是「值为空」的叶子（例如 `allow:`）。
+      // 只有下一行缩进更深才算嵌套，否则按空值叶子记录——否则「allow 留空 = 放开全部来源」这类写法永远查不到。
+      let nested = false;
+      for (let next = index + 1; next < lines.length; next++) {
+        const rawNext = lines[next];
+        const trimmedNext = rawNext.trim();
+        if (!trimmedNext || trimmedNext.startsWith('#') || trimmedNext === '---') {
+          continue;
+        }
+        nested = rawNext.length - rawNext.trimStart().length > indent;
+        break;
+      }
+      if (nested) {
+        stack.push({ indent, key: name });
+      } else {
+        entries.push({ key: full, value: '', line: lineNo });
+      }
     } else {
       entries.push({ key: full, value, line: lineNo });
     }
@@ -326,6 +342,8 @@ const RULES: RuleDef[] = [
         .all()
         .filter((entry) => /(^|\.)password$/.test(entry.key))
         .filter((entry) => !/stat-view-servlet/.test(entry.key))
+        // Spring Security 内置账号有专门的规则（含 username 组合判断），避免同一行报两次
+        .filter((entry) => !/^spring\.security\.user\./.test(entry.key))
         .filter((entry) => {
           const value = entry.value.trim();
           return (
@@ -556,6 +574,331 @@ const RULES: RuleDef[] = [
           message: 'Spring Cloud Gateway 的 actuator 端点被显式开启，`/actuator/gateway/routes` 会泄露全部路由，POST refresh 还能触发路由刷新',
           advice: '生产环境关闭 `management.endpoint.gateway.enabled`；确需排障时限制到内网并加认证。'
         }))
+  },
+  {
+    id: 'SEC_DRUID_FILTERS_CONFIG',
+    cwe: 'CWE-200',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      for (const entry of index.byKeySuffix(/druid[\w.-]*\.filters$/)) {
+        const filters = entry.value
+          .split(',')
+          .map((item) => item.trim().toLowerCase().replace(/^["']|["']$/g, ''));
+        if (!filters.includes('config')) {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'medium',
+          message: 'Druid 的 filters 里注册了 config 过滤器，`/druid/*/config*` 这类页面会展示 JDBC 连接串、会话与 Web 资源等运行期配置',
+          advice: '生产环境从 filters 中移除 config（只保留 stat/wall 等必要项），确需查看时通过受控入口临时开启。'
+        });
+      }
+      return drafts;
+    }
+  },
+  {
+    id: 'SEC_DRUID_STATVIEW_ALLOW_EMPTY',
+    cwe: 'CWE-668',
+    match: (index) =>
+      index
+        .byKeySuffix(/stat-view-servlet\.allow$/)
+        .filter((entry) => entry.value.trim() === '' || /^["']{2}$/.test(entry.value.trim()))
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'high' as Severity,
+          message: 'Druid 面板的 allow 被留空，等于不限制来源 IP，任何能访问该端口的客户端都能打开监控面板',
+          advice: '显式配置内网白名单（如 `allow: 127.0.0.1,10.0.0.0/8`）；需要远程访问时走跳板机/VPN。'
+        }))
+  },
+  {
+    id: 'SEC_NACOS_DEFAULT_IDENTITY',
+    cwe: 'CWE-1392',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      const identities = index.byKeySuffix(/nacos\.core\.auth\.(default\.identity|server\.identity)\.value$/);
+      for (const entry of identities) {
+        const value = entry.value.trim().replace(/^["']|["']$/g, '');
+        if (value !== '' && value.toLowerCase() !== 'nacos') {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'medium',
+          message: `Nacos 集群身份标识仍是空值或示例值「${value || '空'}」，源码里的示例配置被直接复制上线时，节点间身份校验形同虚设`,
+          advice: '把 `nacos.core.auth.server.identity.key/value` 改成随机且非公开的值并外部化注入，所有节点保持一致。'
+        });
+      }
+      return drafts;
+    }
+  },
+  {
+    id: 'SEC_SPRING_SECURITY_DEFAULT_USER',
+    cwe: 'CWE-1392',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      const names = index.byKeySuffix(/^spring\.security\.user\.name$/);
+      for (const entry of names) {
+        if (entry.value.trim() !== 'user') {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'medium',
+          message: 'Spring Security 的 `spring.security.user.name` 仍是默认 user，等同一个全员皆知的内置账号',
+          advice: '仅用于本地调试；生产改接数据库/LDAP 认证并移除 `spring.security.user` 配置。'
+        });
+      }
+      const passwords = index.byKeySuffix(/^spring\.security\.user\.password$/);
+      for (const entry of passwords) {
+        const value = entry.value.trim();
+        if (/\$\{|^ENC\(|^(sm|vault|sops|aws|kms):/i.test(value)) {
+          continue;
+        }
+        const weak = value === '' || WEAK_PASSWORDS.has(value.toLowerCase());
+        drafts.push({
+          line: entry.line,
+          severity: weak ? 'high' : 'medium',
+          message: `Spring Security 内置账号使用了${weak ? '空口令/弱口令' : '固定口令'}，且该账号不受业务鉴权体系管理`,
+          advice: '移除 `spring.security.user.password` 硬编码；生产用外部认证源，临时账号也要从环境变量注入并限时使用。'
+        });
+      }
+      return drafts;
+    }
+  },
+  {
+    id: 'SEC_HEALTH_SHOW_DETAILS',
+    cwe: 'CWE-497',
+    match: (index) =>
+      index
+        .byKeySuffix(/management\.endpoint\.health\.(show-details|show-components)$/)
+        .filter((entry) => entry.value.toLowerCase() === 'always')
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'medium' as Severity,
+          message: '健康检查端点被设为 always 展示细节，会对外泄露数据库/Redis/磁盘等组件状态与错误原因',
+          advice: '改成 `when-authorized`（配合认证）或 never；需要排障时由运维在受控入口开启。'
+        }))
+  },
+  {
+    id: 'SEC_MANAGEMENT_BASE_PATH_ROOT',
+    cwe: 'CWE-668',
+    match: (index) => {
+      const basePath = index.byKeySuffix(/management\.endpoints\.web\.base-path$/)[0];
+      const exposure = index.byKeySuffix(/management\.endpoints\.web\.exposure\.include$/);
+      if (!basePath || basePath.value.trim() !== '/' || exposure.length === 0) {
+        return [];
+      }
+      return [
+        {
+          line: basePath.line,
+          severity: 'low' as Severity,
+          message: 'Actuator 的 base-path 被改成根路径 `/`，管理端点与业务路径混在同一命名空间，容易被网关规则/鉴权白名单顺带放行',
+          advice: '保留默认 `/actuator` 或换成不易猜的前缀，并在网关层对管理前缀单独做访问控制。'
+        }
+      ];
+    }
+  },
+  {
+    id: 'SEC_ERROR_STACKTRACE',
+    cwe: 'CWE-209',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      for (const entry of index.byKeySuffix(/server\.error\.include-stacktrace$/)) {
+        const value = entry.value.toLowerCase();
+        if (value !== 'always' && value !== 'on_param') {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: value === 'always' ? 'medium' : 'low',
+          message: `错误响应里包含堆栈（include-stacktrace=${value}），异常会暴露类名、框架版本与内部调用链`,
+          advice: '生产环境设为 never；需要定位问题时看服务端日志，不要回传给调用方。'
+        });
+      }
+      for (const entry of index.byKeySuffix(/server\.error\.include-(message|binding-errors)$/)) {
+        if (entry.value.toLowerCase() !== 'always') {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'low',
+          message: '错误响应里回传了异常消息/校验细节，可能泄露表名、字段名等内部信息',
+          advice: '生产环境改为 never，对外只返回统一错误码与追踪 ID。'
+        });
+      }
+      return drafts;
+    }
+  },
+  {
+    id: 'SEC_SQL_LOG_DEBUG',
+    cwe: 'CWE-532',
+    match: (index) =>
+      index
+        .byKeySuffix(/logging\.level\.[\w.$]*$/i)
+        .filter((entry) => /(sql|mybatis|jdbc|hibernate|ibatis|datasource)/i.test(entry.key))
+        .filter((entry) => /^(debug|trace)$/i.test(entry.value.trim()))
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'low' as Severity,
+          message: `SQL/ORM 日志级别被开到 ${entry.value.trim().toUpperCase()}，完整 SQL 与参数会落盘，口令、手机号等敏感字段随日志扩散`,
+          advice: '生产用 INFO；确需排查时临时开启并把日志采集范围收紧，避免参数明文入日志。'
+        }))
+  },
+  {
+    id: 'SEC_ROOT_LOG_DEBUG',
+    cwe: 'CWE-532',
+    match: (index) =>
+      index
+        .byKeySuffix(/logging\.level\.root$/i)
+        .filter((entry) => /^(debug|trace)$/i.test(entry.value.trim()))
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'low' as Severity,
+          message: `根日志级别被设为 ${entry.value.trim().toUpperCase()}，全量 DEBUG 日志会放大磁盘与采集成本，并让内部细节更容易外泄`,
+          advice: '生产环境根日志保持 INFO/WARN，按包名精细化开启需要的调试级别。'
+        }))
+  },
+  {
+    id: 'SEC_PROFILE_DEV_ACTIVE',
+    cwe: 'CWE-489',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      for (const entry of index.byKeySuffix(/spring\.profiles\.(active|include)$/)) {
+        const profiles = entry.value
+          .split(',')
+          .map((item) => item.trim().toLowerCase().replace(/^["']|["']$/g, ''));
+        if (!profiles.some((item) => /^(dev|local|test|debug)$/.test(item))) {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'low',
+          message: `默认激活了开发 profile（${entry.value}），发布包若未显式覆盖会把开发期配置（文档、调试端点、测试账号）带上生产`,
+          advice: '默认 profile 保持生产口径，开发配置放进 `application-dev.yml` 由启动参数显式指定。'
+        });
+      }
+      return drafts;
+    }
+  },
+  {
+    id: 'SEC_COOKIE_FLAGS_WEAK',
+    cwe: 'CWE-1004',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      for (const entry of index.byKeySuffix(/server\.servlet\.session\.cookie\.http-only$/)) {
+        if (entry.value.toLowerCase() !== 'false') {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'medium',
+          message: '会话 Cookie 关闭了 HttpOnly，任意 XSS 都能直接读取会话标识',
+          advice: '保持（或显式设置）`server.servlet.session.cookie.http-only: true`。'
+        });
+      }
+      for (const entry of index.byKeySuffix(/server\.servlet\.session\.cookie\.secure$/)) {
+        if (entry.value.toLowerCase() !== 'false') {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'medium',
+          message: '会话 Cookie 关闭了 Secure，会话标识会随明文 HTTP 请求一起发出',
+          advice: 'HTTPS 部署下保持 `secure: true`；本地调试再临时关闭。'
+        });
+      }
+      return drafts;
+    }
+  },
+  {
+    id: 'SEC_SESSION_TIMEOUT_LONG',
+    cwe: 'CWE-613',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      const keys = [...index.byKeySuffix(/server\.servlet\.session\.timeout$/), ...index.byKeySuffix(/spring\.session\.timeout$/)];
+      for (const entry of keys) {
+        const hours = durationHours(entry.value);
+        if (hours === null || hours < 8) {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'low' as Severity,
+          message: `会话超时被设为 ${entry.value}（约 ${Math.round(hours)} 小时），会话标识泄露后的可用窗口过长`,
+          advice: '普通业务会话建议 30m–2h；确实需要长时间登录时改用滑动续期 + 定期重新鉴权。'
+        });
+      }
+      return drafts;
+    }
+  },
+  {
+    id: 'SEC_STATIC_LOCATIONS_FILE',
+    cwe: 'CWE-22',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      for (const entry of index.byKeySuffix(/(spring\.web\.resources|spring\.resources)\.static-locations(\.\[\])?$/)) {
+        if (!/file:/i.test(entry.value)) {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'medium',
+          message: `静态资源目录映射到了本地文件系统（${entry.value}），上传目录一旦被映射即可被直接下载，配合路径穿越可读取任意文件`,
+          advice: '静态资源用 classpath；必须映射外部目录时与上传目录隔离，并对访问路径做规范化与扩展名白名单校验。'
+        });
+      }
+      return drafts;
+    }
+  },
+  {
+    id: 'SEC_MYSQL_PUBLIC_KEY_RETRIEVAL',
+    cwe: 'CWE-319',
+    match: (index) =>
+      index
+        .all()
+        .filter((entry) => /(^|\.)url$/i.test(entry.key) && /jdbc:mysql/i.test(entry.value))
+        .filter((entry) => /allowPublicKeyRetrieval\s*=\s*true/i.test(entry.value))
+        .filter((entry) => /useSSL\s*=\s*false|sslMode\s*=\s*DISABLED/i.test(entry.value))
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'medium' as Severity,
+          message: 'MySQL 连接串同时开了 allowPublicKeyRetrieval=true 与明文链路（useSSL=false），中间人可替换公钥后拿到数据库凭据',
+          advice: '启用 TLS（`sslMode=VERIFY_CA`）后就不需要 allowPublicKeyRetrieval；确实保留时至少保证链路加密。'
+        }))
+  },
+  {
+    id: 'SEC_SPRINGDOC_ACTUATOR',
+    cwe: 'CWE-497',
+    match: (index) =>
+      index
+        .byKeySuffix(/springdoc\.show-actuator$/)
+        .filter((entry) => entry.value.toLowerCase() === 'true')
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'low' as Severity,
+          message: 'springdoc 把 Actuator 端点也纳入了接口文档，管理端点的路径与参数会被公开',
+          advice: '关闭 `springdoc.show-actuator`；文档本身也应在生产 profile 下禁用。'
+        }))
+  },
+  {
+    id: 'SEC_KNIFE4J_NO_AUTH',
+    cwe: 'CWE-306',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      for (const entry of index.byKeySuffix(/knife4j\.basic\.enable$/)) {
+        if (entry.value.toLowerCase() !== 'false') {
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'medium',
+          message: 'Knife4j 的 Basic 认证被显式关闭，文档页与在线调试接口对任何能访问端口的人开放',
+          advice: '开启 `knife4j.basic.enable: true` 并配置账号口令（外部化），或仅在受控内网开放文档。'
+        });
+      }
+      return drafts;
+    }
   }
 ];
 
@@ -563,8 +906,34 @@ const RULES: RuleDef[] = [
 const DEV_EXEMPT_RULES = new Set([
   'SEC_SWAGGER_PUBLIC',
   'SEC_DEVTOOLS_ENABLED',
-  'SEC_REDIS_NO_PASSWORD'
+  'SEC_REDIS_NO_PASSWORD',
+  // 下面几条在 application-dev.yml 里属于正常调试用法
+  'SEC_SQL_LOG_DEBUG',
+  'SEC_ROOT_LOG_DEBUG',
+  'SEC_PROFILE_DEV_ACTIVE',
+  'SEC_ERROR_STACKTRACE'
 ]);
+
+/** 时长解析：Spring Boot 支持 30m / 8h / 86400s / 1d / 600000ms，返回小时数 */
+function durationHours(value: string): number | null {
+  const matched = /^(\d+)(ms|s|m|h|d)?$/i.exec(value.trim());
+  if (!matched) {
+    return null;
+  }
+  const amount = Number(matched[1]);
+  switch ((matched[2] ?? 's').toLowerCase()) {
+    case 'ms':
+      return amount / 3_600_000;
+    case 's':
+      return amount / 3_600;
+    case 'm':
+      return amount / 60;
+    case 'd':
+      return amount * 24;
+    default:
+      return amount;
+  }
+}
 
 function collectConfigFiles(root: string): string[] {
   const files: string[] = [];
@@ -636,6 +1005,8 @@ function scanMapperDollar(file: string, text: string): Issue[] {
   }
   const masked = text.replace(/<!--[\s\S]*?-->/g, (block) => block.replace(/[^\n]/g, ' '));
   const issues: Issue[] = [];
+  const fragments = collectSqlFragments(masked);
+  const fragmentRefs = collectFragmentReferences(masked);
   const regex = /\$\{([^}]*)\}/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(masked)) !== null) {
@@ -649,19 +1020,75 @@ function scanMapperDollar(file: string, text: string): Issue[] {
       continue;
     }
     const line = masked.slice(0, match.index).split('\n').length;
+    const context = dollarContext(masked, match.index);
+    // 片段内的 `${}` 要能追到真正引用它的 statement，否则只报「片段里有一处」很难定位
+    const fragment = fragments.find((item) => match!.index >= item.start && match!.index <= item.end);
+    const referencedBy = fragment ? fragmentRefs.get(fragment.id) ?? [] : [];
+    const locationNote = fragment
+      ? `（位于 <sql id="${fragment.id}"> 片段${referencedBy.length > 0 ? `，被 ${referencedBy.map((id) => `<${id}>`).join('、')} 引用` : '，未被引用'}）`
+      : '';
     issues.push({
       source: 'qcsec',
-      severity: 'high',
+      severity: context.severity,
       file,
       line,
       column: 1,
       rule: 'SEC_MYBATIS_DOLLAR_SUBSTITUTION',
-      message: `Mapper 里使用了 \${${expression}} 字符串替换，参数会被原样拼进 SQL，可被注入改写`,
+      message: `Mapper 里使用了 \${${expression}} 字符串替换，参数会被原样拼进 SQL，可被注入改写${context.note}${locationNote}`,
       advice: '改成 `#{}` 预编译占位符；确需动态表名/排序字段时用白名单枚举校验，不要直接接收外部值。',
       cwe: ['CWE-89']
     });
   }
   return issues;
+}
+
+/** `<sql id="x">...</sql>` 片段区间，用于把 `${}` 归到具体片段 */
+function collectSqlFragments(text: string): { id: string; start: number; end: number }[] {
+  const fragments: { id: string; start: number; end: number }[] = [];
+  const regex = /<sql\b[^>]*\bid\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>[\s\S]*?<\/sql>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    fragments.push({ id: match[1] ?? match[2] ?? '', start: match.index, end: match.index + match[0].length });
+  }
+  return fragments;
+}
+
+/** refid → 引用它的 statement id 列表（statement 用最近的前置标签判断，mapper 内语句不嵌套） */
+function collectFragmentReferences(text: string): Map<string, string[]> {
+  const refs = new Map<string, string[]>();
+  const statements: { id: string; start: number }[] = [];
+  const statementRegex = /<(select|insert|update|delete|resultMap)\b[^>]*\bid\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+  let statement: RegExpExecArray | null;
+  while ((statement = statementRegex.exec(text)) !== null) {
+    statements.push({ id: statement[2] ?? statement[3] ?? '', start: statement.index });
+  }
+  const includeRegex = /<include\b[^>]*\brefid\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+  let include: RegExpExecArray | null;
+  while ((include = includeRegex.exec(text)) !== null) {
+    const refid = include[1] ?? include[2] ?? '';
+    const owner = [...statements].reverse().find((item) => item.start <= include!.index);
+    if (!owner) {
+      continue;
+    }
+    const list = refs.get(refid) ?? [];
+    if (!list.includes(owner.id)) {
+      list.push(owner.id);
+    }
+    refs.set(refid, list);
+  }
+  return refs;
+}
+
+/** 按 `${}` 出现位置分级：排序/分页字段多为「已加白名单」的写法，降一级但仍提示 */
+function dollarContext(text: string, position: number): { severity: Severity; note: string } {
+  const before = text.slice(Math.max(0, position - 100), position);
+  if (/order\s+by\s+[^,;()]{0,20}$/i.test(before)) {
+    return { severity: 'medium', note: '（用于 ORDER BY 动态排序字段）' };
+  }
+  if (/(limit|offset)\s+[^,;()]{0,20}$/i.test(before)) {
+    return { severity: 'medium', note: '（用于 LIMIT/OFFSET 动态分页参数）' };
+  }
+  return { severity: 'high', note: '' };
 }
 
 /**

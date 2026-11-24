@@ -1,0 +1,10 @@
+{
+  "id": "config-nacos-identity",
+  "title": "Nacos 集群身份标识仍是示例值",
+  "layer": "config",
+  "cwe": "CWE-1392",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_NACOS_DEFAULT_IDENTITY"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_NACOS_DEFAULT_IDENTITY"], "owner": "qcsec", "status": "covered" }
+}

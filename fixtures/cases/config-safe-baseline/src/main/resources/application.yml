@@ -1,0 +1,52 @@
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized
+spring:
+  datasource:
+    url: jdbc:mysql://db.internal:3306/demo?sslMode=VERIFY_CA
+    username: app
+    password: ${DB_PASSWORD}
+  profiles:
+    active: prod
+  web:
+    resources:
+      static-locations:
+        - classpath:/static/
+  security:
+    user:
+      name: ${SECURITY_USER}
+      password: ${SECURITY_PASSWORD}
+server:
+  servlet:
+    session:
+      timeout: 30m
+      cookie:
+        http-only: true
+        secure: true
+  error:
+    include-stacktrace: never
+logging:
+  level:
+    root: INFO
+    org.mybatis: WARN
+springdoc:
+  show-actuator: false
+knife4j:
+  enable: true
+  production: true
+  basic:
+    enable: true
+nacos:
+  core:
+    auth:
+      enabled: true
+      server:
+        identity:
+          key: qcNodeIdentity
+          value: 9f2c7b41e5

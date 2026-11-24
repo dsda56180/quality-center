@@ -1,0 +1,8 @@
+nacos:
+  core:
+    auth:
+      enabled: true
+      server:
+        identity:
+          key: serverIdentity
+          value: nacos

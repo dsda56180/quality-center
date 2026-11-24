@@ -1,0 +1,10 @@
+{
+  "id": "mybatis-fragment-include",
+  "title": "Mapper 片段内的顺序字段替换与 WHERE 值替换（含 include 归属）",
+  "layer": "code",
+  "cwe": "CWE-89",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_MYBATIS_DOLLAR_SUBSTITUTION"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_MYBATIS_DOLLAR_SUBSTITUTION"], "owner": "qcsec", "status": "covered" }
+}

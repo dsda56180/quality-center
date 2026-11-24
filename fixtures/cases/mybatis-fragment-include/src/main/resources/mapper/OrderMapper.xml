@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="p.OrderMapper">
+  <sql id="orderFragment">
+    ORDER BY ${sortColumn}
+  </sql>
+
+  <select id="page" resultType="p.Order">
+    SELECT id, name
+    FROM orders
+    WHERE tenant_id = #{tenantId}
+    <if test="keyword != null">
+      AND name LIKE CONCAT('%', ${keyword}, '%')
+    </if>
+    <include refid="orderFragment"/>
+  </select>
+</mapper>

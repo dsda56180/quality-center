@@ -1,0 +1,10 @@
+{
+  "id": "config-security-default-user",
+  "title": "Spring Security 内置账号使用默认用户名与弱口令",
+  "layer": "config",
+  "cwe": "CWE-1392",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_SPRING_SECURITY_DEFAULT_USER"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_SPRING_SECURITY_DEFAULT_USER"], "owner": "qcsec", "status": "covered" }
+}
