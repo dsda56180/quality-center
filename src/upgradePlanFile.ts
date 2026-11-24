@@ -362,6 +362,16 @@ function newPlanId(): string {
   )}${pad(now.getSeconds())}`;
 }
 
+/** 扫描结果的稳定指纹：只取问题标识，不含 generatedAt / 耗时，重扫同一批问题才能命中复用 */
+function issueSetHash(issues: Issue[]): string {
+  const keys = issues
+    .map((issue) =>
+      [issue.source, issue.rule, issue.packageName ?? '', issue.file ?? '', issue.line ?? 0, issue.severity].join('|')
+    )
+    .sort();
+  return hashText(keys.join('\n'));
+}
+
 /** 生成计划：只读 pom，不写 pom；产物写到 .quality-center/upgrade/<planId>/ */
 export function createUpgradePlan(
   root: string,
@@ -374,7 +384,7 @@ export function createUpgradePlan(
   }
   const original = fs.readFileSync(pomFile, 'utf8');
   const pomHash = hashText(original);
-  const issuesHash = hashText(JSON.stringify(issues));
+  const issuesHash = issueSetHash(issues);
 
   // 复用：pom 与扫描结果都没变、且计划还没落盘时，不新建带时间戳的目录
   if (options?.reuse && !options?.planId) {
@@ -456,8 +466,6 @@ export function createUpgradePlan(
 
   const patch = unifiedDiff(original, text);
   const planId = options?.planId ?? newPlanId();
-  const dir = path.join(planRoot(root), planId);
-  fs.mkdirSync(dir, { recursive: true });
 
   const frameworkVersion = inferFrameworkVersion(original);
 
@@ -499,6 +507,13 @@ export function createUpgradePlan(
     patchFile: 'pom.diff'
   };
 
+  // 没有候选就不落盘：避免留下 0 候选的空计划，让 check / status / apply 走进死胡同
+  if (candidates.length === 0) {
+    return { plan, planDir: '', planPath: '', patchPath: '', patch: '', blockedByPolicy };
+  }
+
+  const dir = path.join(planRoot(root), planId);
+  fs.mkdirSync(dir, { recursive: true });
   const planPath = path.join(dir, 'plan.json');
   const patchPath = path.join(dir, 'pom.diff');
   fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, 'utf8');

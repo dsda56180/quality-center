@@ -246,6 +246,24 @@ async function buildCommand(args: Args): Promise<number> {
       log(args, line.replace(/^\[INFO\]\s*/, ''));
     }
   });
+  if (args.flags['--json'] === true) {
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          ok: outcome.ok,
+          code: outcome.code,
+          seconds: outcome.seconds,
+          jars: outcome.jars,
+          errors: outcome.errors ?? [],
+          tail: outcome.tail ?? '',
+          logFile: outcome.logFile ? path.relative(root, outcome.logFile) : null
+        },
+        null,
+        2
+      )}\n`
+    );
+    return outcome.ok ? 0 : 2;
+  }
   if (!outcome.ok) {
     const errors = outcome.errors ?? [];
     process.stdout.write(
@@ -367,12 +385,27 @@ async function upgradeCommand(args: Args): Promise<number> {
   const planId = typeof args.flags['--plan'] === 'string' ? String(args.flags['--plan']) : undefined;
 
   if (action === 'plan') {
-    const issues = readIssues(root);
-    if (issues.length === 0) {
-      progress('没有扫描结果：先执行 scan（或 scan --only trivy），再生成升级计划');
+    const issuesFile = path.join(root, '.quality-center', 'issues.json');
+    if (!fs.existsSync(issuesFile)) {
+      progress('还没有扫描结果：先执行 scan（或 scan --only trivy），再生成升级计划');
       return 2;
     }
+    const issues = readIssues(root);
     const result = createUpgradePlan(root, issues, { planId, reuse: args.flags['--reuse'] === true });
+    if (result.plan.candidates.length === 0) {
+      const detail = result.plan.skipped.length
+        ? result.plan.skipped
+            .slice(0, 5)
+            .map((item) => `  - ${item.packageName}：${item.reason}`)
+            .join('\n')
+        : '  - 没有带修复版本的直接依赖漏洞';
+      if (args.flags['--json'] === true) {
+        process.stdout.write(`${JSON.stringify({ ...result.plan, empty: true }, null, 2)}\n`);
+      } else {
+        process.stdout.write(`没有可升级的依赖（0 个候选），未生成计划。\n${detail}\n提示：确认已跑过全量扫描；跨大版本项需人工评估后再决定是否升级。\n`);
+      }
+      return 0;
+    }
     if (args.flags['--json'] === true) {
       process.stdout.write(`${JSON.stringify(result.plan, null, 2)}\n`);
       return 0;
@@ -382,11 +415,11 @@ async function upgradeCommand(args: Args): Promise<number> {
       `Java ${result.plan.project.javaVersion ?? '未识别'} · 框架目标 ${result.plan.project.frameworkTarget ?? '未声明'}`
     ];
     result.plan.groups.forEach((group) => {
-      lines.push(`分组 ${group.name}（${group.label}）：${group.candidates.length} 项，覆盖 ${group.cveCount} 条`);
+      lines.push(`分组 ${group.name}（${group.label}）：${group.candidates.length} 项，涉及 ${group.cveCount} 条漏洞`);
     });
     result.plan.candidates.forEach((item) => {
       lines.push(
-        `  [${item.id}] ${item.packageName} ${item.from} → ${item.to}（${item.mode}，${item.group}，覆盖 ${item.cveCount} 条）` +
+        `  [${item.id}] ${item.packageName} ${item.from} → ${item.to}（${item.mode}，${item.group}，涉及 ${item.cveCount} 条漏洞）` +
           `${item.crossLine ? '  ⚠ 跨大版本，需人工确认' : ''}`
       );
     });
@@ -396,7 +429,10 @@ async function upgradeCommand(args: Args): Promise<number> {
     }
     lines.push(`计划：${path.relative(root, result.planPath)}`);
     lines.push(`补丁：${path.relative(root, result.patchPath)}（${result.patch.split('\n').filter((line) => line.startsWith('+') && !line.startsWith('+++')).length} 行新增）`);
-    lines.push('下一步：upgrade apply --group framework --plan <planId> --write 一组一组推进；每组后跑 upgrade check');
+    const firstGroup = result.plan.groups[0]?.name ?? 'framework';
+    lines.push(
+      `下一步：upgrade apply . --plan ${result.plan.planId} --hash ${result.plan.pomHash} --group ${firstGroup} --write（一组一验证，组后跑 upgrade check）`
+    );
     process.stdout.write(`${lines.join('\n')}\n`);
     return 0;
   }
@@ -444,11 +480,20 @@ async function upgradeCommand(args: Args): Promise<number> {
 
   if (action === 'check') {
     const outcome = checkUpgradePlan(root, planId);
-    process.stdout.write(`${outcome.ok ? '✓' : '✗'} ${outcome.state}：${outcome.message}\n`);
+    const stateLabel: Record<string, string> = {
+      pending: '待落盘',
+      partial: '进行中',
+      applied: '已完成',
+      drift: '与计划不一致'
+    };
+    const mark = outcome.state === 'drift' ? '✗' : outcome.state === 'applied' ? '✓' : '·';
+    process.stdout.write(`${mark} ${stateLabel[outcome.state] ?? outcome.state}（${outcome.state}）：${outcome.message}\n`);
     if (outcome.total !== undefined) {
       process.stdout.write(`  进度 ${outcome.appliedCount ?? 0}/${outcome.total}${outcome.nextGroup ? `，下一组 ${outcome.nextGroup}` : ''}\n`);
     }
-    process.stdout.write(`  期望 ${outcome.expectedHash}\n  实际 ${outcome.actualHash}\n`);
+    if (outcome.state === 'drift') {
+      process.stdout.write(`  期望 ${outcome.expectedHash}\n  实际 ${outcome.actualHash}\n  提示：pom 被手工改过；重新 upgrade plan 后再 apply\n`);
+    }
     return outcome.ok ? 0 : 1;
   }
 
@@ -491,7 +536,13 @@ function integrateCommand(args: Args): number {
   }
   process.stdout.write(`${lines.join('\n')}\n`);
   if (!result.ok) {
-    process.stdout.write('生成物与策略不一致：执行 integrate（不加 --check）重新生成\n');
+    const missing = result.files.filter((item) => item.action === 'missing').length;
+    const drifted = result.files.filter((item) => item.action === 'drift').length;
+    process.stdout.write(
+      missing === result.files.length
+        ? '尚未接入：执行 integrate（不加 --check）生成策略、启动器与适配器\n'
+        : `生成物与策略不一致（缺失 ${missing} / 漂移 ${drifted}）：执行 integrate（不加 --check）重新生成\n`
+    );
     return 1;
   }
   return 0;

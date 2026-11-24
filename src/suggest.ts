@@ -136,7 +136,7 @@ export function buildSuggestions(root: string, result: ScanResult): Suggestion[]
       if (major === 2 && minor < 7) {
         suggestions.push({
           category: 'framework',
-          title: `升级 Spring Boot ${bootVersion} → 2.7.18`,
+          title: `Spring Boot ${bootVersion} → 2.7.18`,
           detail:
             `当前 Spring Boot 版本已停止维护，内置的 Spring Framework / Tomcat / Jackson / Logback 均存在已知漏洞，` +
             `仅框架层就命中 ${frameworkCves.length} 条，单独升级子依赖无效（版本被 BOM 锁定）。` +
@@ -186,7 +186,7 @@ export function buildSuggestions(root: string, result: ScanResult): Suggestion[]
       }
       suggestions.push({
         category: 'dependency',
-        title: `升级依赖 ${packageName} ${installed} → ${fixed}`,
+        title: `${packageName} ${installed} → ${fixed}`,
         detail:
           `该组件命中 ${items.length} 条漏洞（${cveSummary(items)}）。` +
           `建议优先升到同一版本线内的 ${fixed}，避免跨大版本引入破坏性变更；` +
@@ -225,7 +225,7 @@ export function buildSuggestions(root: string, result: ScanResult): Suggestion[]
   if (leaks.length > 0) {
     suggestions.push({
       category: 'secret',
-      title: `处理 ${leaks.length} 处硬编码密钥`,
+      title: `硬编码密钥 ${leaks.length} 处`,
       detail:
         '先把密钥值轮换（已进入版本库即视为泄露），再迁移到环境变量或配置中心，' +
         '代码中只保留占位符。迁移完成前不要把密钥原值提交进任何分支。',
@@ -255,7 +255,7 @@ export function buildSuggestions(root: string, result: ScanResult): Suggestion[]
     );
     suggestions.push({
       category: 'manual',
-      title: `处理 ${defects.length} 项字节码级静态缺陷`,
+      title: `字节码级静态缺陷 ${defects.length} 项`,
       detail:
         (security.length > 0
           ? `其中 ${security.length} 项被 FindSecBugs 判定为安全风险（${cveSummary(security)}）。`

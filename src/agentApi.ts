@@ -414,7 +414,7 @@ export function buildPayload(result: ScanResult, root: string, files?: AgentExpo
     nextActions.push('存在可确定性修复的问题（fixable=true）：在 IDE 面板点「一键修复」，或按其 rule 直接改代码');
   }
   if (result.issues.some((issue) => issue.source === 'trivy' && issue.fixedVersion)) {
-    nextActions.push('依赖漏洞给出 fixedVersion：按建议升级 pom（BOM/父 POM 需整组对齐），改完重扫确认');
+    nextActions.push('依赖漏洞有 fixedVersion：先 upgrade plan 生成计划，再按 framework → family → independent 逐组 apply，不要直接改 pom');
   }
   if (result.ignored.length > 0) {
     nextActions.push('.quality-center/baseline.json 中已有忽略项，重扫不会重复计入统计');

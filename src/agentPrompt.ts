@@ -55,11 +55,11 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
   lines.push(
     '',
     '硬性规则：',
-    '1. 只通过 `qc upgrade apply`（或 MCP quality_upgrade_apply）写 pom；禁止手改、禁止 sed/批量替换版本号。',
+    '1. 只通过 `node .quality-center/bin/qc.cjs upgrade apply`（或 MCP quality_upgrade_apply）写 pom；禁止手改、禁止 sed/批量替换版本号。',
     '2. 一次只推进一组：framework → family → independent → cross-line；这组构建没过，不开下一组。',
-    '3. 每组之后：`qc build`（MCP quality_build，errors 里有文件与行号）→ `qc upgrade check` 必须到 applied。',
+    '3. 每组之后：`node .quality-center/bin/qc.cjs build`（MCP quality_build，errors 里有文件与行号）→ `node .quality-center/bin/qc.cjs upgrade check`；组后状态应为 partial 且 appliedCount 增加，全部组完成才是 applied。',
     '4. 跨大版本默认不写；要我确认后才加 `--allow-cross-line`。',
-    '5. 同一组连续两次失败就停手：先 `qc upgrade revert` 回到该组之前，再说明两次失败的差异。',
+    '5. 同一组连续两次失败就停手：先 `node .quality-center/bin/qc.cjs upgrade revert` 回到该组之前，再说明两次失败的差异。',
     '6. `upgrade check` 出现 drift 说明 pom 被手工改过：立刻停手，重新 `upgrade plan`。'
   );
 

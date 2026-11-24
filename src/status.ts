@@ -69,13 +69,26 @@ export function projectStatus(root: string): ProjectStatus {
     pomHash = '';
   }
 
+  let nextStep = '';
+  if (!scan.hasResult) {
+    nextStep = '还没有扫描结果：先跑一次全量 scan，再生成升级计划';
+  } else if ((scan.total ?? 0) === 0) {
+    nextStep = '最近一次扫描 0 条问题：无需依赖升级；改过 pom 后再复扫确认';
+  } else if (upgradePlan && (upgradePlan.total ?? 0) === 0) {
+    nextStep = '当前计划没有候选：重新全量扫描后再 plan（上一次可能只跑了局部扫描）';
+  } else if (!upgradePlan) {
+    nextStep = '还没有升级计划：先 quality_upgrade_plan 生成计划，再按 groups 顺序 apply';
+  } else if (upgradePlan.state === 'applied') {
+    nextStep = `计划 ${String(upgradePlan.planId)} 已全部落盘：跑 quality_build 与 delta 复扫确认`;
+  } else {
+    nextStep = `计划 ${String(upgradePlan.planId)} 处于 ${String(upgradePlan.state)}；按 groups 顺序推进，别重新 plan`;
+  }
+
   return {
     tools,
     scan,
     upgradePlan,
     pom: { file: 'pom.xml', hash: pomHash },
-    nextStep: upgradePlan
-      ? `计划 ${String(upgradePlan.planId)} 处于 ${String(upgradePlan.state)}；按 groups 顺序推进，别重新 plan`
-      : '还没有升级计划：先 quality_upgrade_plan 生成计划，再 apply'
+    nextStep
   };
 }

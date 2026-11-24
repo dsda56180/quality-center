@@ -185,6 +185,23 @@ async function main() {
   );
   const reuseRun = run(['upgrade', 'plan', dir, '--reuse', '--json']);
   check('plan --reuse 复用同 hash 的计划', JSON.parse(reuseRun.out).planId === plan.planId);
+
+  // 同一批问题、只是扫描时间变了：仍应命中复用（issuesHash 不含 generatedAt）
+  const issuesFile = path.join(dir, '.quality-center', 'issues.json');
+  const repayload = JSON.parse(fs.readFileSync(issuesFile, 'utf8'));
+  repayload.generatedAt = new Date(Date.now() + 3600_000).toISOString();
+  fs.writeFileSync(issuesFile, JSON.stringify(repayload, null, 2), 'utf8');
+  const reuseAgain = run(['upgrade', 'plan', dir, '--reuse', '--json']);
+  check('重扫时间戳变化不影响复用', JSON.parse(reuseAgain.out).planId === plan.planId, reuseAgain.out.slice(0, 200));
+
+  // 0 候选：不生成计划目录，避免留下 0/0 空计划
+  const { createUpgradePlan } = await import(pathToFileURL(path.join(ROOT, 'out', 'upgradePlanFile.js')).href);
+  const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qc-empty-'));
+  fs.writeFileSync(path.join(emptyDir, 'pom.xml'), POM, 'utf8');
+  const emptyPlan = createUpgradePlan(emptyDir, []);
+  check('0 候选不生成计划', emptyPlan.plan.candidates.length === 0 && emptyPlan.planPath === '');
+  check('0 候选不写目录', !fs.existsSync(path.join(emptyDir, '.quality-center', 'upgrade')));
+  fs.rmSync(emptyDir, { recursive: true, force: true });
   check('pom 未被改动', fs.readFileSync(pomFile, 'utf8') === original);
   check('pom.diff 已生成', fs.existsSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff')));
   check(
@@ -391,6 +408,7 @@ async function main() {
   check('回滚后 pom 与计划前一致', fs.readFileSync(pom2, 'utf8') === original2);
   const afterRevert = run(['upgrade', 'check', dir2, '--plan', plan2.planId]);
   check('回滚后 check 回到 pending', afterRevert.out.includes('pending'), afterRevert.out.trim());
+  check('pending 用进度符号而不是失败叉号', !afterRevert.out.trimStart().startsWith('✗') && afterRevert.out.includes('待落盘'), afterRevert.out.trim());
 
   const replay = run([
     'upgrade',
@@ -467,6 +485,7 @@ async function main() {
   check('status 一屏给出 pom 哈希', typeof projectStat.pom.hash === 'string' && projectStat.pom.hash.startsWith('sha256:'));
   check('status 列出三个工具', projectStat.tools.length === 3);
   check('status 未扫描时 hasResult=false', projectStat.scan.hasResult === false);
+  check('status 未扫描时引导先扫描', projectStat.nextStep.includes('扫描'), projectStat.nextStep);
   fs.rmSync(statusDir, { recursive: true, force: true });
 
   console.log(`\n结果：${passed} 通过，${failures.length} 失败`);

@@ -367,12 +367,22 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       if (!fs.existsSync(root)) {
         return asText({ error: `目录不存在：${root}` }, true);
       }
-      const issues = readIssues(root);
-      if (issues.length === 0) {
+      const issuesFile = path.join(root, '.quality-center', 'issues.json');
+      if (!fs.existsSync(issuesFile)) {
         return asText({ error: '还没有扫描结果：先调用 quality_scan（可只跑 trivy）' }, true);
       }
+      const issues = readIssues(root);
       const customId = typeof params.planId === 'string' && params.planId.trim() ? params.planId.trim() : undefined;
       const result = createUpgradePlan(root, issues, { planId: customId, reuse: params.reuse !== false });
+      if (result.plan.candidates.length === 0) {
+        return asText({
+          empty: true,
+          candidateCount: 0,
+          skippedCount: result.plan.skipped.length,
+          skippedTop3: result.plan.skipped.slice(0, 3),
+          hint: '没有可升级的依赖，未生成计划。确认已跑全量 quality_scan；跨大版本项需人工评估。'
+        });
+      }
       const detail = params.detail === 'full';
       const requestedGroup = typeof params.group === 'string' ? params.group : undefined;
       const shownGroup = requestedGroup ?? result.plan.groups[0]?.name;

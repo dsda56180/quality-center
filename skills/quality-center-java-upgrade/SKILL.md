@@ -82,9 +82,10 @@ node .quality-center/bin/qc.cjs upgrade revert . --plan <planId>
 ```
 
 MCP 等价：`quality_upgrade_plan` → `quality_upgrade_apply(group=…, write=false)` → `write=true` → `quality_build`
-（`errors` 已解析出文件/行号）→ `quality_upgrade_check`（`state=applied` 才算完成）→ 失败时 `quality_upgrade_revert`。
+（`errors` 已解析出文件/行号）→ `quality_upgrade_check`（组后应为 `partial` 且 `appliedCount` 增加；
+全部组落盘后才是 `applied`）→ 失败时 `quality_upgrade_revert`。
 
-验收四条，缺一条不算完成：`upgrade check` 退出码 0；构建成功；目标 CVE 在复扫中消失；`errors` 为空。
+验收四条，缺一条不算完成：**全部组完成后** `upgrade check` 退出码 0；每组后构建成功；目标 CVE 在复扫中消失；`errors` 为空。
 涉及代码级改动时再跑单测（策略 `buildGate: test` 时强制）。
 
 ### 3.1 止损规则（硬性）
