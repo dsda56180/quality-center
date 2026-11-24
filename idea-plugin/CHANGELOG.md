@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.24
+
+- 原生 diff 面板改成「当前文件 + 下一个文件」两块缓存：停留 250ms 后后台把列表里下一个文件的面板建好，按顺序点下去就是纯换卡片（实测命中时 <1ms，未命中才是 60–140ms 的重建）
+- 改用官方公开 API `DiffManager.createRequestPanel(project, disposable, window)`（原先前者的反射写法已不需要），面板统一挂在一个 Disposable 下，对话框关闭一次回收
+- 保留 0.1.23 的严格补丁回放与语法高亮
+
 ## 0.1.23
 
 - 恢复语法高亮：diff 内容重新带上 FileType（日志已证明 284ms 的耗时是一次重建原生 viewer 的固定成本，和带不带 FileType 无关）
