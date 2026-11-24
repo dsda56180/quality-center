@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.20.0
+
+**AST 语义规则从 3 条扩到 7 条，代码层常见注入面基本覆盖。**
+
+- 新增 `AST_SQL_STRING_CONCAT`：`executeQuery` / `executeUpdate` / `execute` / `query` / `queryForList` / `update` 等调用的参数里出现「字面量 + 变量/调用」的二元表达式。只看 AST 上的 `binary_expression` 是否含 `identifier` / `method_invocation` / `field_access`，`"a" + "b"` 纯字面量拼接不报；`PreparedStatement` + `?` 占位符的反例不误报
+- 新增 `AST_CROSS_ORIGIN_WILDCARD`：`@CrossOrigin(origins = "*")`、裸 `@CrossOrigin`（默认就是通配）、以及 `allowCredentials = true` 的组合（后者直接升为高危）
+- 新增 `AST_SPEL_INJECTION`：`parseExpression` / `Ognl.getValue` 的参数不是字面量即报（变量、拼接、String.format 都算外部可控）
+- 新增 `AST_RUNTIME_EXEC_CONCAT`：`Runtime.exec` 的参数非字面量、`new ProcessBuilder(..., "-c", ...)` 走 shell
+- 每条规则都配正反例：新增 `ast-sql-string-concat`、`ast-crossorigin-wildcard`、`ast-spel-injection`、`ast-runtime-exec` 与反例集合 `ast-hardened-patterns`（预编译 SQL + 显式来源 + 字面量表达式 + 固定命令，四类均不得告警），矩阵扩到 **18 个用例，PASS 18 / GAP 0 / FAIL 0**
+- 文档同步：`docs/RULES.md` 代码层补 4 行并写明新局限（SQL 只覆盖拼接结果直接进执行调用、变量中转会漏报；`@CrossOrigin` 不合并全局 CORS 配置），README 与配置项说明改为 7 条规则口径
+
 ## 0.19.0
 
 **新增第六类扫描：AST 语义规则（`astgrep`），代码层不再只有字节码视角。**

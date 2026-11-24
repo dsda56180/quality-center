@@ -1,0 +1,10 @@
+{
+  "id": "ast-runtime-exec",
+  "title": "Runtime.exec / ProcessBuilder 拼接外部输入",
+  "layer": "code",
+  "cwe": "CWE-78",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_RUNTIME_EXEC_CONCAT"], "mustNotFire": [] },
+  "target": { "rules": ["AST_RUNTIME_EXEC_CONCAT"], "owner": "astgrep", "status": "covered" }
+}

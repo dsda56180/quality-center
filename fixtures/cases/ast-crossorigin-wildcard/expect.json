@@ -1,0 +1,10 @@
+{
+  "id": "ast-crossorigin-wildcard",
+  "title": "@CrossOrigin 通配或裸注解，来源未限定",
+  "layer": "code",
+  "cwe": "CWE-942",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_CROSS_ORIGIN_WILDCARD"], "mustNotFire": [] },
+  "target": { "rules": ["AST_CROSS_ORIGIN_WILDCARD"], "owner": "astgrep", "status": "covered" }
+}

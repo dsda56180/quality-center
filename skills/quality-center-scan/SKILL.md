@@ -37,7 +37,7 @@ qc scan                                  # 当前目录，六类全扫，人读�
 qc scan --json --fail-on high            # 机器读：JSON 到 stdout，进度在 stderr
 qc scan --only trivy,spotbugs --json     # 只跑指定扫描器
 qc scan --only qcsec --json              # 只查 application.yml / properties（无需 mvn/trivy）
-qc scan --only astgrep --json            # 只查 Java 语法树规则（permitAll / 日志脱敏 / 上传校验）
+qc scan --only astgrep --json            # 只查 Java 语法树规则（permitAll / 日志脱敏 / 上传校验 / SQL 拼接 / CrossOrigin / SpEL / 命令执行）
 qc scan --fail-on none --json            # 只取数据，不要退出码
 ```
 

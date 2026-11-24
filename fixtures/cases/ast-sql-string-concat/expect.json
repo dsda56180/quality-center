@@ -1,0 +1,10 @@
+{
+  "id": "ast-sql-string-concat",
+  "title": "SQL 用字符串拼接后直接执行",
+  "layer": "code",
+  "cwe": "CWE-89",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_SQL_STRING_CONCAT"], "mustNotFire": [] },
+  "target": { "rules": ["AST_SQL_STRING_CONCAT"], "owner": "astgrep", "status": "covered" }
+}

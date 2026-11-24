@@ -289,6 +289,183 @@ function checkUploadValidation(file: string, root: SgNode): Issue[] {
   return issues;
 }
 
+/** 规则 4：SQL 由字符串拼接构造后直接执行（预编译占位符之外的写法） */
+const SQL_APIS = new Set([
+  'executeQuery',
+  'executeUpdate',
+  'execute',
+  'query',
+  'queryForList',
+  'queryForObject',
+  'queryForMap',
+  'update'
+]);
+
+function checkSqlConcat(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name');
+    if (!name || !SQL_APIS.has(name.text())) {
+      continue;
+    }
+    const args = call.field('arguments');
+    if (!args) {
+      continue;
+    }
+    const concat = args
+      .findAll({ rule: { kind: 'binary_expression' } })
+      .find((bin) => {
+        if (!bin.text().includes('+')) {
+          return false;
+        }
+        // 只把「字符串 + 变量/调用」当成风险；`"a" + "b"` 这种纯字面量拼接不算
+        return (
+          bin.findAll({ rule: { kind: 'identifier' } }).length > 0 ||
+          bin.findAll({ rule: { kind: 'method_invocation' } }).length > 0 ||
+          bin.findAll({ rule: { kind: 'field_access' } }).length > 0
+        );
+      });
+    if (!concat) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_SQL_STRING_CONCAT',
+        'high',
+        'CWE-89',
+        `${name.text()}() 的 SQL 由字符串拼接构造，外部输入可直接改写语义（注入）`,
+        '改用 PreparedStatement 的 `?` 占位符 + setXxx 绑定参数，或 MyBatis 的 `#{}`；不要用 `+` 或 String.format 拼 SQL。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 5：@CrossOrigin 通配或未限定来源 */
+function checkCrossOrigin(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  const annotations = root
+    .findAll({ rule: { kind: 'annotation' } })
+    .concat(root.findAll({ rule: { kind: 'marker_annotation' } }));
+  for (const ann of annotations) {
+    if (!/^@CrossOrigin/i.test(ann.text())) {
+      continue;
+    }
+    const text = ann.text();
+    // 裸 @CrossOrigin 的默认就是 origins="*"，和显式通配等价
+    const bare = /^@CrossOrigin\s*$/.test(text);
+    const wildcard = bare || /\*/.test(text);
+    const credentials = /allowCredentials\s*=\s*true/i.test(text);
+    if (!wildcard && !credentials) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        ann,
+        'AST_CROSS_ORIGIN_WILDCARD',
+        credentials ? 'high' : 'medium',
+        'CWE-942',
+        credentials
+          ? '@CrossOrigin 允许任意来源且允许携带凭证，任意站点都能带 Cookie 跨域调用该接口'
+          : '@CrossOrigin 未限定来源（origins="*"），任意站点都能读取该接口的响应',
+        '改成显式域名白名单（origins = "https://a.example.com"）；需要携带凭证时绝不能使用通配来源。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 6：SpEL / OGNL 解析外部输入 */
+function checkExpressionInjection(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    const receiver = call.field('object')?.text() ?? '';
+    const spel =
+      name === 'parseExpression' ||
+      (name === 'getValue' && /ognl|Ognl/.test(receiver));
+    if (!spel) {
+      continue;
+    }
+    const args = call.field('arguments')?.text() ?? '';
+    // 只放行纯字面量表达式；变量、拼接、String.format 都视为外部可控
+    const literalOnly = /^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)$/.test(args);
+    if (literalOnly) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_SPEL_INJECTION',
+        'high',
+        'CWE-94',
+        `${name}() 的参数不是字面量，外部输入可直接执行 SpEL/OGNL 表达式`,
+        '不要用外部输入构造表达式；确需动态求值就改成固定表达式 + 变量（EvaluationContext），或使用白名单模板。'
+      )
+    );
+  }
+  return issues;
+}
+
+/** 规则 7：Runtime.exec / ProcessBuilder 拼接外部输入 */
+function checkCommandExec(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    if (name !== 'exec') {
+      continue;
+    }
+    const receiver = call.field('object')?.text() ?? '';
+    if (!/runtime|Runtime/i.test(receiver)) {
+      continue;
+    }
+    const args = call.field('arguments');
+    if (!args) {
+      continue;
+    }
+    const isLiteralOnly = /^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)$/.test(args.text());
+    if (isLiteralOnly) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_RUNTIME_EXEC_CONCAT',
+        'high',
+        'CWE-78',
+        'Runtime.exec 的命令由变量或拼接构造，外部可控时可直接执行任意命令',
+        '改成固定命令 + 参数数组，或用 ProcessBuilder 传参列表；不要拼接 shell 字符串，必要时严格白名单校验。'
+      )
+    );
+  }
+  for (const creation of root.findAll({ rule: { kind: 'object_creation_expression' } })) {
+    const text = creation.text();
+    if (!/new\s+ProcessBuilder/.test(text)) {
+      continue;
+    }
+    if (!/"-c"|'-c'/.test(text)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        creation,
+        'AST_RUNTIME_EXEC_CONCAT',
+        'high',
+        'CWE-78',
+        'ProcessBuilder 以 `-c` 走 shell 执行拼接命令，参数会被 shell 解释',
+        '去掉 shell 包装，直接传命令与参数数组，并对参数做白名单校验。'
+      )
+    );
+  }
+  return issues;
+}
+
 export async function scanAstgrep(root: string): Promise<AstscanResult> {
   const ast = loadEngine();
   if (!ast) {
@@ -326,6 +503,10 @@ export async function scanAstgrep(root: string): Promise<AstscanResult> {
     issues.push(...checkPermitAll(file, treeRoot));
     issues.push(...checkSensitiveLog(file, treeRoot));
     issues.push(...checkUploadValidation(file, treeRoot));
+    issues.push(...checkSqlConcat(file, treeRoot));
+    issues.push(...checkCrossOrigin(file, treeRoot));
+    issues.push(...checkExpressionInjection(file, treeRoot));
+    issues.push(...checkCommandExec(file, treeRoot));
   }
 
   return { issues, files: parsed };

@@ -1,0 +1,18 @@
+{
+  "id": "ast-hardened-patterns",
+  "title": "预编译 SQL / 显式来源 / 字面量表达式 / 固定命令（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-89",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": [],
+    "mustNotFire": [
+      "AST_SQL_STRING_CONCAT",
+      "AST_CROSS_ORIGIN_WILDCARD",
+      "AST_SPEL_INJECTION",
+      "AST_RUNTIME_EXEC_CONCAT"
+    ]
+  },
+  "target": { "rules": [], "owner": "astgrep", "status": "covered" }
+}

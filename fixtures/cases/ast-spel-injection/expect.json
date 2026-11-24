@@ -1,0 +1,10 @@
+{
+  "id": "ast-spel-injection",
+  "title": "SpEL / OGNL 用外部输入构造表达式",
+  "layer": "code",
+  "cwe": "CWE-94",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_SPEL_INJECTION"], "mustNotFire": [] },
+  "target": { "rules": ["AST_SPEL_INJECTION"], "owner": "astgrep", "status": "covered" }
+}
