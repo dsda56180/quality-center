@@ -139,7 +139,21 @@ if (Test-Path $disabled) {
 }
 
 # ---------------------------------------------------------------- 6. 重启 IDEA
+# 重要：脚本可能被一个环境变量被裁剪过的父进程（如 AI 沙箱里的 shell）调用，
+# 那样 Start-Process 拉起的 IDEA 会继承残缺的 PATH，插件里所有 "git/mvn/cmd" 调用都会失败。
+# 启动前用注册表里的机器级 + 用户级 PATH 把环境补回来。
+function Repair-PathEnv {
+    $machinePath = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -ErrorAction SilentlyContinue).Path
+    $userPath = (Get-ItemProperty 'HKCU:\Environment' -ErrorAction SilentlyContinue).Path
+    $parts = @()
+    foreach ($p in @($machinePath, $userPath, $env:PATH)) {
+        if ($p) { $parts += $p.TrimEnd(';') }
+    }
+    $env:PATH = ($parts -join ';')
+}
+
 if ($wasRunning -and -not $NoRestart) {
+    Repair-PathEnv
     Write-Host "正在启动 IDEA..."
     Start-Process -FilePath $ideaExe -WorkingDirectory $IdeaHome | Out-Null
     Write-Host "IDEA 已启动，插件已生效。"

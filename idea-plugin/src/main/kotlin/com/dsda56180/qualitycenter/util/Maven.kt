@@ -61,11 +61,16 @@ object Maven {
         }
     }
 
+    /** mvn 只解析一次：PATH 不可靠时（IDEA 从裁剪环境启动）回退到常见安装目录 */
+    private val mvnExe: String by lazy {
+        Exec.resolveBinary("mvn") ?: "mvn"
+    }
+
     /** 执行 mvn 命令（阻塞），参数由调用方决定是否追加镜像参数 */
     fun runMvn(
         root: File,
         args: List<String>,
         timeoutMs: Long = 180_000,
         env: Map<String, String> = emptyMap()
-    ): Exec.Result = Exec.run("mvn", args, root, timeoutMs, env)
+    ): Exec.Result = Exec.run(mvnExe, args, root, timeoutMs, env)
 }
