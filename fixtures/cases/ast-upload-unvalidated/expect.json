@@ -1,0 +1,10 @@
+{
+  "id": "ast-upload-unvalidated",
+  "title": "上传接口接收 MultipartFile 但没有任何校验",
+  "layer": "code",
+  "cwe": "CWE-434",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_UPLOAD_WITHOUT_VALIDATION"], "mustNotFire": [] },
+  "target": { "rules": ["AST_UPLOAD_WITHOUT_VALIDATION"], "owner": "astgrep", "status": "covered" }
+}

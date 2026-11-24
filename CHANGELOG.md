@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.19.0
+
+**新增第六类扫描：AST 语义规则（`astgrep`），代码层不再只有字节码视角。**
+
+- 接入 `@ast-grep/napi`（原生 napi）+ `@ast-grep/lang-java`（tree-sitter Java wasm），直接解析 Java 语法树，不依赖 Maven、不需要先编译
+- 实现 3 条起步规则：
+  - `AST_PERMIT_ALL_SENSITIVE_PATH`：`permitAll()` 覆盖 `/actuator`、`/admin`、`/druid`、`/swagger`、`/doc.html`、`/h2-console`、`/jolokia` 等敏感路径，或出现 `anyRequest().permitAll()`。判断只取**该调用链自己的**匹配器参数（`antMatchers` / `requestMatchers` 等），多行链式写法里 `.antMatchers("/x").hasRole(...)` 不会被同一语句里的敏感路径带偏（这条在第一版里误报过，已加反例用例锁住）
+  - `AST_LOG_SENSITIVE_FIELD`：`log/logger.debug|info|warn|error(...)` 的参数里出现 password / token / secret / idcard / mobile 等敏感字段
+  - `AST_UPLOAD_WITHOUT_VALIDATION`：`MultipartFile` 参数所在方法体内没有 `getSize()`、`getContentType`、扩展名白名单、`@Size` 等校验
+- 引擎按平台打包：`scripts/fetch-astgrep.mjs` 把 Windows x64/arm64、macOS x64/arm64、Linux x64/arm64 六个平台的 napi 二进制补齐进 vsix（约 13.6 MB），用户侧无需额外下载；平台不匹配时该层以「已跳过」说明原因，其余扫描器不受影响
+- 打包链路修正：此前 `vsce package --no-dependencies` 会把 `node_modules` 整个排除，导致装出来的扩展加载不到 AST 引擎；改为 `npm run package`（先补平台二进制再打包），GitHub Actions 同步改用该命令，`.vscodeignore` 增加 `!node_modules/@ast-grep/**` 并排除 `idea-plugin/`、`tools/`、`.quality-center/` 等无关目录
+- `IssueSource` 扩为六值，面板新增「语义规则」Tab 与开关（面板内设置、快速模式均包含），新增配置项 `qualityCenter.astgrep.enabled`；`report.md` 分组、`summary` 计数、CLI `--only astgrep`、MCP `quality_scan` 枚举全部同步
+- 规则靶场扩到 13 个用例（新增 permitAll 正例/反例、日志敏感字段、上传缺少校验），`npm run rules:matrix` = **PASS 13 / GAP 0 / FAIL 0**；`docs/RULES.md` 把代码层这 3 条从缺口改为已覆盖，并写明 AST 层局限（只解析 Java 源码、不解 Spring 装配、常量拼接路径会漏报）
+- 文档：README 六类口径 + AST 章节与打包说明，`skills/` 三个 Skill 与 `manifest.json` 同步六类并补 `--only astgrep` 用法
+
 ## 0.18.0
 
 **这是一个跨大版本的更新：从四类扫描扩到五类，新增插件内置的配置层安全扫描器 `qcsec`。**

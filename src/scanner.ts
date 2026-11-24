@@ -10,6 +10,7 @@ import type { ToolId } from './tools';
 import { CheckstyleResult, resolveConfig, scanCheckstyle } from './scanners/checkstyle';
 import { scanGitleaks } from './scanners/gitleaks';
 import { scanQcsec } from './scanners/qcsec';
+import { scanAstgrep } from './scanners/astscan';
 import { scanSpotbugs, SpotbugsResult } from './scanners/spotbugs';
 import { scanTrivy, TrivyResult } from './scanners/trivy';
 import { buildSuggestions } from './suggest';
@@ -252,6 +253,25 @@ export class ScanRunner {
             issues.push(...res.issues);
             if (res.error) {
               errors.push({ source: 'qcsec', message: res.error });
+            }
+          })
+        });
+      }
+
+      // AST 语义规则直接解析源码，不依赖 Maven；平台不支持时降级为 skipped
+      if (!config.get<boolean>('astgrep.enabled', true)) {
+        skipped.push({ source: 'astgrep', reason: '已在设置中关闭' });
+      } else {
+        jobs.push({
+          label: '语义规则',
+          run: () => scanAstgrep(root).then((res) => {
+            if (res.unavailable) {
+              skipped.push({ source: 'astgrep', reason: res.unavailable });
+              return;
+            }
+            issues.push(...res.issues);
+            if (res.error) {
+              errors.push({ source: 'astgrep', message: res.error });
             }
           })
         });

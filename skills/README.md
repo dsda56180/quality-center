@@ -7,7 +7,7 @@
 | 路径 | 用途 |
 | --- | --- |
 | `manifest.json` | 机器可读入口：CLI 命令、退出码、MCP 工具、Skill 清单与触发条件 |
-| `quality-center-scan/SKILL.md` | 扫描与结果解读（五类检查含 qcsec 配置安全、AgentPayload v2） |
+| `quality-center-scan/SKILL.md` | 扫描与结果解读（六类检查含 qcsec 配置安全与 astgrep 语义规则、AgentPayload v2） |
 | `quality-center-tools/SKILL.md` | 检查/安装外部工具、构建 jar 产物 |
 | `quality-center-dependencies/SKILL.md` | 按 CVE 修复版本升级 pom 并校验 |
 | `quality-center-mcp/SKILL.md` | 接成 MCP 服务端，编排工具调用顺序 |

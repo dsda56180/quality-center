@@ -27,7 +27,9 @@ jobs:
         run: npm run compile
 
       - name: Package VSIX
-        run: npx vsce package --no-dependencies
+        run: npm run package
+        env:
+          ASTGREP_NPM_REGISTRY: https://registry.npmjs.org
 
       - name: Publish to Open VSX
         run: npx ovsx publish *.vsix -p ${{ secrets.OVSX_TOKEN }}

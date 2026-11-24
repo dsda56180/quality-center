@@ -1,9 +1,15 @@
 .vscode/**
 src/**
 node_modules/**
+!node_modules/@ast-grep/**
+idea-plugin/**
+tools/**
+.quality-center/**
+.github/**
 fixtures/**
 docs/**
 scripts/**
+package-lock.json
 tsconfig.json
 **/*.map
 *.vsix

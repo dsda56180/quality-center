@@ -58,6 +58,7 @@ export interface Snapshot {
     trivy: boolean;
     spotbugs: boolean;
     qcsec: boolean;
+    astgrep: boolean;
     scanOnSave: boolean;
     /** 手动启用的深度修复配方 */
     recipes: string[];
@@ -408,6 +409,7 @@ export function getHtml(nonce: string): string {
     <button class="tab" data-tab="trivy">依赖漏洞</button>
     <button class="tab" data-tab="spotbugs">静态缺陷</button>
     <button class="tab" data-tab="qcsec">配置安全</button>
+    <button class="tab" data-tab="astgrep">语义规则</button>
     <button class="tab" data-tab="ignored">已忽略</button>
     <button class="tab" data-tab="suggest">建议</button>
   </div>
@@ -435,6 +437,7 @@ export function getHtml(nonce: string): string {
       <label class="dlg-row"><input type="checkbox" id="opt-trivy" /> 依赖漏洞（Trivy）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-spotbugs" /> 静态缺陷（SpotBugs，较慢）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-qcsec" /> 配置安全（qcsec：Druid/Actuator/CORS/明文口令）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-astgrep" /> 语义规则（AST：permitAll 敏感路径/日志敏感字段/上传校验）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-scansave" /> 保存文件后自动扫描</label>
       <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。保存后下次扫描生效。</div>
       <div class="dlg-sec">深度修复配方</div>
@@ -465,7 +468,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架升级', dependency: '依赖升级', secret: '密钥治理', manual: '人工处理' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, paused: false, deepFix: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, qcsec: true, scanOnSave: true, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
+  let state = { scanning: false, paused: false, deepFix: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, qcsec: true, astgrep: true, scanOnSave: true, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
   let activeTab = 'all';
   /** 各来源分组的折叠状态，跨渲染保留 */
   let collapsed = {};
@@ -913,7 +916,7 @@ export function getHtml(nonce: string): string {
           + '</div>';
       } else {
         const savedScroll = list.scrollTop;
-        list.innerHTML = ['checkstyle', 'gitleaks', 'qcsec', 'spotbugs', 'trivy'].map(function (source) {
+        list.innerHTML = ['checkstyle', 'gitleaks', 'qcsec', 'astgrep', 'spotbugs', 'trivy'].map(function (source) {
           const group = filtered.filter(function (i) { return i.source === source; });
           if (!group.length) return '';
           const items = group.map(function (issue) {
@@ -1014,7 +1017,7 @@ export function getHtml(nonce: string): string {
     vscode.postMessage({ type: 'upgradeDeps' });
   });
 
-  var SETTING_KEYS = ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec'];
+  var SETTING_KEYS = ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec', 'astgrep'];
   var RECIPE_BOXES = [];
   var RISK_LABEL = { low: '低风险', medium: '中风险', high: '高风险' };
   var RISK_ORDER = ['low', 'medium', 'high'];

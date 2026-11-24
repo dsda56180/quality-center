@@ -1,7 +1,7 @@
 /** 插件不会自动下载的外部工具，缺失时由 UI 引导安装 */
 import type { ToolId } from './tools';
 
-export type IssueSource = 'checkstyle' | 'gitleaks' | 'trivy' | 'spotbugs' | 'qcsec';
+export type IssueSource = 'checkstyle' | 'gitleaks' | 'trivy' | 'spotbugs' | 'qcsec' | 'astgrep';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
@@ -73,7 +73,8 @@ export const SOURCE_LABEL: Record<IssueSource, string> = {
   gitleaks: '密钥泄露',
   trivy: '依赖漏洞',
   spotbugs: '静态缺陷',
-  qcsec: '配置安全'
+  qcsec: '配置安全',
+  astgrep: '语义规则'
 };
 
 export const SEVERITY_LABEL: Record<Severity, string> = {

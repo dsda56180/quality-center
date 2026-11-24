@@ -64,6 +64,7 @@ interface ScanSettingsInput {
   trivy?: boolean;
   spotbugs?: boolean;
   qcsec?: boolean;
+  astgrep?: boolean;
   scanOnSave?: boolean;
   recipes?: string[];
   autoRecipes?: boolean;
@@ -1636,6 +1637,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       ['trivy.enabled', options.trivy],
       ['spotbugs.enabled', options.spotbugs],
       ['qcsec.enabled', options.qcsec],
+      ['astgrep.enabled', options.astgrep],
       ['scanOnSave', options.scanOnSave]
     ];
     for (const [key, value] of updates) {
@@ -2042,6 +2044,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         trivy: config.get<boolean>('trivy.enabled', true),
         spotbugs: config.get<boolean>('spotbugs.enabled', true),
         qcsec: config.get<boolean>('qcsec.enabled', true),
+        astgrep: config.get<boolean>('astgrep.enabled', true),
         scanOnSave: config.get<boolean>('scanOnSave', true),
         recipes: config.get<string[]>('openRewrite.recipes', []),
         autoRecipes: config.get<boolean>('openRewrite.autoRecipes', true),

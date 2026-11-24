@@ -22,7 +22,7 @@ import { EXTERNAL_TOOLS, installLocation, installPlan, ToolId } from './tools';
 
 export const PACKAGE_ROOT = path.resolve(__dirname, '..');
 
-export const SOURCES: IssueSource[] = ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec'];
+export const SOURCES: IssueSource[] = ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec', 'astgrep'];
 export const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
 
 export function packageVersion(): string {

@@ -1,0 +1,10 @@
+{
+  "id": "ast-permit-all-actuator",
+  "title": "permitAll 打到 /actuator/** 管理端点",
+  "layer": "code",
+  "cwe": "CWE-284",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_PERMIT_ALL_SENSITIVE_PATH"], "mustNotFire": [] },
+  "target": { "rules": ["AST_PERMIT_ALL_SENSITIVE_PATH"], "owner": "astgrep", "status": "covered" }
+}

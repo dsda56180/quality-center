@@ -6,6 +6,7 @@
 ## 覆盖口径
 
 - **代码层**（Java 源码 / 字节码）：由 `SpotBugs + FindSecBugs 1.14`（144 个 pattern）承担，`PERMISSIVE_CORS`、`SPRING_CSRF_*` 等由字节码 + Spring 语义检测。
+- **源码语义层**（Java AST）：由 `astgrep` 承担（`@ast-grep/napi` + `@ast-grep/lang-java`），用于「方法链 + 字符串字面量」这类字节码会丢失语义、正则又容易误报的规则。
 - **配置层**（`application*.yml/yaml/properties`、`bootstrap*.yml`）：由内置扫描器 `qcsec` 承担，把配置文件拍平成「键路径 + 值 + 行号」，支持跨键组合判断（Druid 面板开启但未设口令这类），不依赖任何外部二进制。当前 9 条规则中 8 条已实现，Swagger 仍为缺口。
 - **依赖层**：`Trivy --scanners vuln`，按依赖坐标查漏洞库（CVE），只能回答"这个版本有没有已知漏洞"。
 - 覆盖度不是承诺"100%"，而是：清单条目 → 规则 ID → fixture 用例，一一对应，可跑可查；缺口在表里写明。
@@ -25,9 +26,9 @@
 | 不安全反序列化 | 502 | `OBJECT_DESERIALIZATION` 等 | 已覆盖 | 待补 |
 | 路径穿越 | 22 | `PATH_TRAVERSAL_IN` | 已覆盖 | 待补 |
 | SSRF | 918 | `URLCONNECTION_SSRF_FD` 等 | 已覆盖 | 待补 |
-| `permitAll()` 打到 actuator / admin 路径 | 284 | 无 | **缺口**（Semgrep 社区规则可移植） | 待补 |
-| 日志打印口令 / 令牌等敏感字段 | 532 | 无 | **缺口** | 待补 |
-| 文件上传未校验类型与大小 | 434 | 无 | **缺口** | 待补 |
+| `permitAll()` 打到 actuator / admin 路径 | 284 | `AST_PERMIT_ALL_SENSITIVE_PATH`（astgrep：只看该调用链自己的匹配器参数，或 `anyRequest().permitAll()`） | 已覆盖 | `ast-permit-all-actuator` / `ast-permit-all-hardened` |
+| 日志打印口令 / 令牌等敏感字段 | 532 | `AST_LOG_SENSITIVE_FIELD`（astgrep：`log/logger.debug|info|warn|error` 参数匹配敏感字段） | 已覆盖 | `ast-log-sensitive` |
+| 文件上传未校验类型与大小 | 434 | `AST_UPLOAD_WITHOUT_VALIDATION`（astgrep：`MultipartFile` 参数所在方法体无 `getSize`/`getContentType`/白名单等校验） | 已覆盖 | `ast-upload-unvalidated` |
 
 ## 配置层（由 `qcsec` 承担）
 
@@ -57,3 +58,4 @@ FindSecBugs 必须写进 pom 的 `<build><plugins>` 才生效（`spotbugs-maven-
 - **多模块工程**：只注入根 pom，SpotBugs 在子模块上运行时不会带上 FindSecBugs（后续计划改用 SpotBugs 独立发行版 + `-pluginList` 解决）。
 - 需要 `target/classes`（或先执行构建），否则 SpotBugs 直接跳过。
 - 配置层由 `qcsec` 覆盖，但它只解析配置文本、不做运行期验证：`${ENV}` 占位视为已外部化，不会跟进到实际生效值；profile 差异按文件计，不会合并 `application-*.yml` 的覆盖关系。Swagger 类规则仍是缺口。
+- 语义层由 `astgrep` 覆盖，局限是：只解析 Java 源码（不处理 Kotlin / Groovy / 编译产物）；不解析 Spring 继承与 `@Configuration` 装配关系，`/actuator` 这类路径靠字面量匹配；`anyRequest()` / 匹配器判断只看同一条方法链，路径由常量拼接时会漏报；`MultipartFile` 校验只看方法体内的关键字，跨方法封装的校验会判为缺失（可用 `baseline` 忽略）。

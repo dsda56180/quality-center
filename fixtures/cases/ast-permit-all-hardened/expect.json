@@ -1,0 +1,10 @@
+{
+  "id": "ast-permit-all-hardened",
+  "title": "permitAll 只放在公开路径，管理路径要求角色（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-284",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["AST_PERMIT_ALL_SENSITIVE_PATH"] },
+  "target": { "rules": [], "owner": "astgrep", "status": "covered" }
+}

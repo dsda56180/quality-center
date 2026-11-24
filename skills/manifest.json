@@ -23,7 +23,7 @@
     "args": ["<扩展目录>/out/cli.js", "mcp"],
     "protocolVersion": "2024-11-05",
     "tools": [
-      { "name": "quality_scan", "purpose": "五类扫描（含 qcsec 配置安全），返回 AgentPayload(schemaVersion 2) 与 exitCode" },
+      { "name": "quality_scan", "purpose": "六类扫描（含 qcsec 配置安全与 astgrep 语义规则），返回 AgentPayload(schemaVersion 2) 与 exitCode" },
       { "name": "quality_build", "purpose": "mvn -B -DskipTests package，返回 jar 列表与失败原因" },
       { "name": "quality_tools_status", "purpose": "外部工具是否就绪、路径、能否自动安装" },
       { "name": "quality_tools_install", "purpose": "按当前系统自动安装 mvn / gitleaks / trivy" },
@@ -35,7 +35,7 @@
     {
       "name": "quality-center-scan",
       "path": "quality-center-scan/SKILL.md",
-      "when": "要跑代码质量/密钥/CVE/静态缺陷/配置安全扫描，或需要结构化问题清单时"
+      "when": "要跑代码质量/密钥/CVE/静态缺陷/配置安全/AST 语义规则扫描，或需要结构化问题清单时"
     },
     {
       "name": "quality-center-tools",

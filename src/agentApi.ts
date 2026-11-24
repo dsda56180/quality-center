@@ -15,6 +15,7 @@ import { Issue, IssueSource, ScanResult, SEVERITY_LABEL, SEVERITY_ORDER, Severit
 import { resolveConfig, scanCheckstyle } from './scanners/checkstyle';
 import { scanGitleaks } from './scanners/gitleaks';
 import { scanQcsec } from './scanners/qcsec';
+import { scanAstgrep } from './scanners/astscan';
 import { scanSpotbugs } from './scanners/spotbugs';
 import { scanTrivy, TrivyOptions } from './scanners/trivy';
 import { buildSuggestions } from './suggest';
@@ -26,7 +27,8 @@ const DEFAULT_ENABLED: Record<IssueSource, boolean> = {
   gitleaks: true,
   trivy: true,
   spotbugs: true,
-  qcsec: true
+  qcsec: true,
+  astgrep: true
 };
 
 export interface AgentScanOptions {
@@ -106,6 +108,7 @@ export function optionsFromProject(
     trivy: bool('trivy.enabled', DEFAULT_ENABLED.trivy),
     spotbugs: bool('spotbugs.enabled', DEFAULT_ENABLED.spotbugs),
     qcsec: bool('qcsec.enabled', DEFAULT_ENABLED.qcsec),
+    astgrep: bool('astgrep.enabled', DEFAULT_ENABLED.astgrep),
     ...overrides.enabled
   };
 
@@ -135,7 +138,7 @@ export function optionsFromProject(
   };
 }
 
-/** 跑一遍五类扫描，返回与面板同构的 ScanResult（已按基线拆分） */
+/** 跑一遍六类扫描，返回与面板同构的 ScanResult（已按基线拆分） */
 export async function runAgentScan(options: AgentScanOptions): Promise<ScanResult> {
   const root = options.root;
   const packageRoot = options.packageRoot;
@@ -268,6 +271,18 @@ export async function runAgentScan(options: AgentScanOptions): Promise<ScanResul
     skip('qcsec', '已在配置中关闭');
   }
 
+  if (enabled.astgrep) {
+    options.onProgress?.({ type: 'start', source: 'astgrep' });
+    const result = await scanAstgrep(root);
+    if (result.unavailable) {
+      skip('astgrep', result.unavailable);
+    } else {
+      emit('astgrep', result);
+    }
+  } else {
+    skip('astgrep', '已在配置中关闭');
+  }
+
   issues.sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
   const split = splitByBaseline(root, issues);
   const result: ScanResult = {
@@ -306,7 +321,7 @@ export function summarize(result: ScanResult): AgentSummary {
     summary[severity] = result.issues.filter((issue) => issue.severity === severity).length;
   }
   summary.ignored = result.ignored.length;
-  for (const source of ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec'] as const) {
+  for (const source of ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec', 'astgrep'] as const) {
     summary[source] = result.issues.filter((issue) => issue.source === source).length;
   }
   return summary;

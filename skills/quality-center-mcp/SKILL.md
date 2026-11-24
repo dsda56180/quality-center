@@ -45,7 +45,7 @@ MCP 客户端配置（Trae / Claude Desktop / Cursor 通用）：
 
 ## 3. 判定与交付
 
-1. 读 `summary`：确认五类扫描（含 `qcsec` 配置安全）都真的跑了。
+1. 读 `summary`：确认六类扫描（含 `qcsec` 配置安全与 `astgrep` 语义规则）都真的跑了。
 2. `critical/high` 逐条处理；`fixable=true` 的用 `quality_fix`，其余按 `advice` 手改。
 3. CVE 按 `fixedVersion`（同版本线取最小修复、BOM 整组对齐），改完 `quality_build` + `quality_scan` 复核。
 4. 汇报引用 `rule`、`file:line`、`installedVersion → fixedVersion`，不编造 CVE 编号。

@@ -1,0 +1,10 @@
+{
+  "id": "ast-log-sensitive",
+  "title": "日志直接打印口令与令牌",
+  "layer": "code",
+  "cwe": "CWE-532",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_LOG_SENSITIVE_FIELD"], "mustNotFire": [] },
+  "target": { "rules": ["AST_LOG_SENSITIVE_FIELD"], "owner": "astgrep", "status": "covered" }
+}
