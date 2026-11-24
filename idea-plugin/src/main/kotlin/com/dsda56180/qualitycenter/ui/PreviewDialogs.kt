@@ -44,7 +44,9 @@ data class DeepFixPreviewInfo(
     val patchText: String?,
     val files: List<String>,
     /** true = 内嵌 IDEA 原生 diff 渲染，false = 插件内置的自绘列表 */
-    val nativeDiff: Boolean = false
+    val nativeDiff: Boolean = false,
+    /** true = 本次预览复用上次的预演结果，没有重新跑 OpenRewrite */
+    val reusedPreview: Boolean = false
 )
 
 data class UpgradeDecision(
@@ -148,6 +150,9 @@ private class DeepFixPreviewDialog(
                 }
                 if (info.advice.isNotEmpty()) {
                     appendLine("推荐（未启用）：${info.advice.joinToString("；")}")
+                }
+                if (info.reusedPreview) {
+                    appendLine("本次复用上次的预演结果（代码或提交有变化会重新预演）。")
                 }
                 appendLine("共 ${info.files.size} 个文件将被修改：单击文件查看该文件的代码变更，勾选框控制是否应用。")
             }
@@ -307,7 +312,13 @@ private class DeepFixPreviewDialog(
             return
         }
         renderInFlight = true
-        if (useNative) renderNative(path) else renderBuiltIn(path)
+        try {
+            if (useNative) renderNative(path) else renderBuiltIn(path)
+        } catch (e: Throwable) {
+            // 任何同步异常都要把单飞标记放开，否则后续点击会被永久排队
+            logWarn("渲染失败", e)
+            finishRender()
+        }
     }
 
     private fun finishRender() {
@@ -356,18 +367,10 @@ private class DeepFixPreviewDialog(
 
     /** 对话框一打开就在后台把所有文件的行数据预处理好，之后点任何条目都是纯内存赋值 */
     private fun prebuildAll() {
+        // 原生模式不做后台预热：批量 loadText 会一直持读锁，偶尔和 EDT 的写动作撞上，
+        // 表现为「多数点击正常、突然有一次点了卡住 1 秒」。按需构建（单次读一个小文件）更稳。
+        if (useNative) return
         val app = com.intellij.openapi.application.ApplicationManager.getApplication()
-        if (useNative) {
-            val pending = info.files.filter { synchronized(nativeCache) { nativeCache[it] } == null }
-            if (pending.isEmpty()) return
-            app.executeOnPooledThread {
-                pending.forEach { path ->
-                    val texts = runCatching { buildNativeTexts(path, diffLines(path)) }.getOrNull() ?: return@forEach
-                    synchronized(nativeCache) { nativeCache[path] = texts }
-                }
-            }
-            return
-        }
         val pending = info.files.filter { synchronized(dataCache) { dataCache[it] } == null }
         if (pending.isEmpty()) return
         app.executeOnPooledThread {
