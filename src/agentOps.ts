@@ -67,6 +67,10 @@ export interface ScanRequest {
   failOn?: Severity | 'none';
   outDir?: string;
   exportFiles?: boolean;
+  /** 规则静音，覆盖配置里的 qualityCenter.rules.mute */
+  mute?: string[];
+  /** 同文件聚合（medium 及以下） */
+  aggregate?: boolean;
   onProgress?: (event: AgentScanEvent) => void;
 }
 
@@ -89,6 +93,8 @@ export async function scanProject(request: ScanRequest): Promise<ScanOutcome> {
     enabled,
     outDir: request.outDir,
     exportFiles: request.exportFiles ?? true,
+    mute: request.mute,
+    aggregate: request.aggregate,
     onProgress: request.onProgress
   });
 
@@ -99,7 +105,8 @@ export async function scanProject(request: ScanRequest): Promise<ScanOutcome> {
       : {
           dir: path.join(request.root, '.quality-center'),
           jsonPath: path.join(request.root, '.quality-center', 'issues.json'),
-          markdownPath: path.join(request.root, '.quality-center', 'report.md')
+          markdownPath: path.join(request.root, '.quality-center', 'report.md'),
+          sarifPath: path.join(request.root, '.quality-center', 'report.sarif')
         };
   const payload = buildPayload(result, request.root, exported);
   const exitCode = payload.missingTools.length > 0 ? 2 : exitCodeFor(result, request.failOn ?? 'high');

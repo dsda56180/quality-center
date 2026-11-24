@@ -34,6 +34,8 @@ export interface Issue {
   publishedAt?: string;
   /** SpotBugs 缺陷类别，例如 SECURITY / CORRECTNESS */
   category?: string;
+  /** 同文件聚合后的总处数（未聚合时不设置） */
+  occurrences?: number;
 }
 
 export interface ScanError {
@@ -63,6 +65,8 @@ export interface ScanResult {
   skipped: { source: IssueSource; reason: string; tool?: ToolId }[];
   /** 本轮缺失的外部工具（去重），用于弹「一键安装」提示 */
   missingTools?: ToolId[];
+  /** 本次被规则静音（rules.mute）过滤掉的条数 */
+  mutedByRule?: number;
   suggestions: Suggestion[];
   /** 未使用构建产物扫描时给出的提示，UI 据此展示「构建并扫描」按钮 */
   buildHint?: string;
