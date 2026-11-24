@@ -42,7 +42,9 @@ data class DeepFixPreviewInfo(
     val dirtyCount: Int,
     val selectable: Boolean,
     val patchText: String?,
-    val files: List<String>
+    val files: List<String>,
+    /** true = 内嵌 IDEA 原生 diff 渲染，false = 插件内置的自绘列表 */
+    val nativeDiff: Boolean = false
 )
 
 data class UpgradeDecision(
@@ -63,7 +65,7 @@ fun showDeepFixPreview(project: Project, info: DeepFixPreviewInfo): List<String>
 }
 
 private class DeepFixPreviewDialog(
-    project: Project,
+    private val project: Project,
     private val info: DeepFixPreviewInfo
 ) : DialogWrapper(project, true) {
 
@@ -96,6 +98,13 @@ private class DeepFixPreviewDialog(
         border = JBUI.Borders.empty(2, 6, 2, 6)
     }
     private val diffCards = JPanel(CardLayout())
+    private val nativeHost = JPanel(BorderLayout())
+    private var nativePanel: com.intellij.diff.DiffRequestPanel? = null
+    /** 原生面板构造失败后置位，后续一律回退内置渲染，避免反复抛异常 */
+    private var nativeFailed = false
+    private var useNative = info.nativeDiff
+    /** 对话框尚未显示时暂存的待渲染请求（此时拿不到 Window，无法创建原生面板） */
+    private var pendingNative: Pair<String, NativeTexts>? = null
     private val modeSwitch = ModeSwitch(listOf("统一", "并排")) { index -> applyMode(index == 1) }
 
     init {
@@ -191,11 +200,25 @@ private class DeepFixPreviewDialog(
         sidePanel.add(sideBlock("修改后", rightScroll))
         diffCards.add(sidePanel, CARD_SIDE_BY_SIDE)
 
+        // 原生视图：内嵌 IDEA 自己的 diff 面板（真实编辑器，虚拟化渲染）
+        nativeHost.isOpaque = false
+        diffCards.add(nativeHost, CARD_NATIVE)
+        // 对话框还没显示时创建原生面板拿不到 Window，等它真正 show 出来再补渲染
+        nativeHost.addHierarchyListener { e ->
+            if (e.changeFlags and java.awt.event.HierarchyEvent.SHOWING_CHANGED.toLong() != 0L && nativeHost.isShowing) {
+                pendingNative?.let { pending ->
+                    pendingNative = null
+                    showNative(pending.first, pending.second)
+                }
+            }
+        }
+
         val modeBar = JPanel(BorderLayout(JBUI.scale(6), 0))
-        val hint = JLabel("绿色为新增、红色为删除")
+        val hint = JLabel(if (useNative) "由 IDEA 原生对比渲染，布局用面板自带工具栏切换" else "绿色为新增、红色为删除")
         hint.font = JBUI.Fonts.smallFont()
         hint.foreground = MUTED_FOREGROUND
         modeBar.add(hint, BorderLayout.WEST)
+        modeSwitch.isVisible = !useNative
         modeBar.add(modeSwitch, BorderLayout.EAST)
 
         val diffBlock = JPanel(BorderLayout())
@@ -232,6 +255,7 @@ private class DeepFixPreviewDialog(
     }
 
     private fun applyMode(side: Boolean) {
+        if (useNative) return
         (diffCards.layout as CardLayout).show(diffCards, if (side) CARD_SIDE_BY_SIDE else CARD_UNIFIED)
         // 两种视图的数据在切文件时已一起准备好，切模式只需换卡片，不做任何重建
         if (unifiedList.model.size == 0) renderActive()
@@ -260,6 +284,10 @@ private class DeepFixPreviewDialog(
      */
     private fun renderActive() {
         val path = selectedPath ?: return
+        if (useNative) {
+            renderNative(path)
+            return
+        }
         val token = ++renderToken
         val cached = synchronized(dataCache) { dataCache[path] }
         if (cached != null) {
@@ -289,6 +317,7 @@ private class DeepFixPreviewDialog(
 
     /** 对话框一打开就在后台把所有文件的行数据预处理好，之后点任何条目都是纯内存赋值 */
     private fun prebuildAll() {
+        if (useNative) return
         val pending = info.files.filter { synchronized(dataCache) { dataCache[it] } == null }
         if (pending.isEmpty()) return
         val app = com.intellij.openapi.application.ApplicationManager.getApplication()
@@ -322,6 +351,218 @@ private class DeepFixPreviewDialog(
             g.dispose()
             w
         }.getOrNull()?.takeIf { it > 0 } ?: JBUI.scale(8)
+    }
+
+    // ------------------------------------------------------------ 原生 diff 渲染
+
+    private class NativeTexts(
+        val before: String,
+        val after: String,
+        val file: com.intellij.openapi.vfs.VirtualFile?
+    )
+
+    /**
+     * 原生模式：用平台的 DiffRequestPanel 渲染（内部就是真实编辑器，虚拟化、增量重绘）。
+     * 内容按补丁 hunk 的行号还原成「整文件的改前 / 改后」，这样行号、上下文、语法高亮都和
+     * IDEA 自己的对比窗口一致。
+     */
+    private fun renderNative(path: String) {
+        val token = ++renderToken
+        val lines = diffLines(path)
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        app.executeOnPooledThread {
+            val texts = try {
+                buildNativeTexts(path, lines)
+            } catch (_: Throwable) {
+                null
+            } ?: return@executeOnPooledThread
+            app.invokeLater({
+                if (token != renderToken) return@invokeLater
+                showNative(path, texts)
+            }, com.intellij.openapi.application.ModalityState.any())
+        }
+    }
+
+    private fun showNative(path: String, texts: NativeTexts) {
+        if (javax.swing.SwingUtilities.getWindowAncestor(nativeHost) == null) {
+            // 对话框尚未显示：先记下来，等 hierarchy 显示事件触发后再渲染
+            pendingNative = path to texts
+            return
+        }
+        val panel = ensureNativePanel() ?: run {
+            fallbackToBuiltIn()
+            return
+        }
+        val request = try {
+            val factory = com.intellij.diff.DiffContentFactory.getInstance()
+            val file = texts.file
+            val before = if (file != null) factory.create(project, texts.before, file)
+            else factory.create(project, texts.before)
+            val after = if (file != null) factory.create(project, texts.after, file)
+            else factory.create(project, texts.after)
+            com.intellij.diff.requests.SimpleDiffRequest(path, before, after, "修改前", "修改后")
+        } catch (e: Throwable) {
+            logWarn("构造 diff 请求失败", e)
+            fallbackToBuiltIn()
+            return
+        }
+        try {
+            panel.setRequest(request)
+        } catch (e: Throwable) {
+            logWarn("原生 diff 面板渲染失败", e)
+            fallbackToBuiltIn()
+            return
+        }
+        val counts = countChanges(diffLines(path))
+        pathLabel.text = "${path}    +${counts.first} / -${counts.second}"
+        (diffCards.layout as CardLayout).show(diffCards, CARD_NATIVE)
+        nativeHost.revalidate()
+        nativeHost.repaint()
+    }
+
+    /** 反射构造平台的 DiffRequestPanel 实现：该类在内部包里，直接引用会绑死某个版本 */
+    private fun ensureNativePanel(): com.intellij.diff.DiffRequestPanel? {
+        nativePanel?.let { return it }
+        if (nativeFailed) return null
+        return try {
+            val type = Class.forName("com.intellij.diff.impl.DiffRequestPanelImpl")
+            val ctor = type.getConstructor(Project::class.java, java.awt.Window::class.java)
+            val window = javax.swing.SwingUtilities.getWindowAncestor(nativeHost)
+            val instance = ctor.newInstance(project, window) as com.intellij.diff.DiffRequestPanel
+            nativeHost.removeAll()
+            nativeHost.add(instance.component, BorderLayout.CENTER)
+            nativeHost.revalidate()
+            nativePanel = instance
+            instance
+        } catch (e: Throwable) {
+            logWarn("无法创建原生 diff 面板，回退内置渲染", e)
+            nativeFailed = true
+            null
+        }
+    }
+
+    private fun fallbackToBuiltIn() {
+        if (!useNative) return
+        useNative = false
+        modeSwitch.isVisible = true
+        (diffCards.layout as CardLayout).show(diffCards, CARD_UNIFIED)
+        val path = selectedPath ?: return
+        val cached = synchronized(dataCache) { dataCache[path] }
+        if (cached != null) applyRender(path, cached) else renderActive()
+    }
+
+    private fun logWarn(message: String, error: Throwable) {
+        com.intellij.openapi.diagnostic.Logger.getInstance(DeepFixPreviewDialog::class.java).warn(message, error)
+    }
+
+    private fun countChanges(lines: List<String>?): Pair<Int, Int> {
+        var added = 0
+        var removed = 0
+        lines?.forEach { line ->
+            when {
+                line.startsWith("+") && !line.startsWith("+++") -> added++
+                line.startsWith("-") && !line.startsWith("---") -> removed++
+            }
+        }
+        return added to removed
+    }
+
+    private fun buildNativeTexts(path: String, lines: List<String>?): NativeTexts {
+        val virtualFile = findVirtualFile(path)
+        val original = virtualFile?.let { readVirtualText(it) }
+        val rebuilt = if (original != null && !lines.isNullOrEmpty()) applyHunks(original.lines(), lines) else null
+        if (original != null && rebuilt != null) {
+            return NativeTexts(original, rebuilt, virtualFile)
+        }
+        if (lines == null) return NativeTexts("", "", virtualFile)
+        return NativeTexts(fragment(lines, old = true), fragment(lines, old = false), virtualFile)
+    }
+
+    private fun findVirtualFile(path: String): com.intellij.openapi.vfs.VirtualFile? {
+        val base = project.basePath ?: return null
+        val candidate = if (path.startsWith("/")) path else "$base/$path"
+        return com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByPath(candidate.replace('\\', '/'))
+    }
+
+    private fun readVirtualText(file: com.intellij.openapi.vfs.VirtualFile): String? =
+        com.intellij.openapi.application.ApplicationManager.getApplication().runReadAction<String?> {
+            runCatching { com.intellij.openapi.vfs.VfsUtilCore.loadText(file) }.getOrNull()
+        }
+
+    /**
+     * 按 hunk 头里的行号把补丁套回原文件，得到完整的「改后」文本。
+     * 任何一处行号越界就返回 null，调用方退化到只对比补丁片段。
+     */
+    private fun applyHunks(original: List<String>, lines: List<String>): String? {
+        val out = ArrayList<String>(original.size + 64)
+        var cursor = 0
+        var index = 0
+        while (index < lines.size) {
+            val line = lines[index]
+            if (!line.startsWith("@@")) {
+                index++
+                continue
+            }
+            val header = HUNK_HEADER.find(line) ?: return null
+            val oldStart = header.groupValues[1].toIntOrNull() ?: return null
+            val declared = header.groupValues[2].takeIf { it.isNotEmpty() }?.toIntOrNull()
+            var body = index + 1
+            var consumed = 0
+            val replacement = ArrayList<String>()
+            while (body < lines.size && !lines[body].startsWith("@@") && !lines[body].startsWith("diff --git")) {
+                val text = lines[body]
+                when {
+                    text.startsWith("+") && !text.startsWith("+++") -> replacement += text.substring(1)
+                    text.startsWith("-") && !text.startsWith("---") -> consumed++
+                    text.startsWith("\\") -> Unit
+                    text.startsWith(" ") -> {
+                        replacement += text.substring(1)
+                        consumed++
+                    }
+                    else -> {
+                        replacement += text
+                        consumed++
+                    }
+                }
+                body++
+            }
+            val target = oldStart - 1
+            if (target < cursor || target > original.size) return null
+            while (cursor < target) {
+                out += original[cursor]
+                cursor++
+            }
+            cursor = minOf(original.size, target + (declared ?: consumed))
+            out += replacement
+            index = body
+        }
+        while (cursor < original.size) {
+            out += original[cursor]
+            cursor++
+        }
+        return out.joinToString("\n")
+    }
+
+    /** 退化路径：把整份补丁拼成「改前 / 改后」两段文本（只有 hunk 片段，行号从 1 起） */
+    private fun fragment(lines: List<String>, old: Boolean): String {
+        val out = ArrayList<String>(lines.size)
+        lines.forEach { line ->
+            when {
+                line.startsWith("+") && !line.startsWith("+++") -> if (!old) out += line.substring(1)
+                line.startsWith("-") && !line.startsWith("---") -> if (old) out += line.substring(1)
+                line.startsWith(" ") -> out += line.substring(1)
+                line.startsWith("@@") -> out += line
+                line.startsWith("diff ") || line.startsWith("index ") -> Unit
+                else -> out += line
+            }
+        }
+        return out.joinToString("\n")
+    }
+
+    override fun dispose() {
+        runCatching { nativePanel?.dispose() }
+        nativePanel = null
+        super.dispose()
     }
 
     /**
@@ -524,6 +765,7 @@ private class DeepFixPreviewDialog(
     private companion object {
         const val CARD_UNIFIED = "unified"
         const val CARD_SIDE_BY_SIDE = "sideBySide"
+        const val CARD_NATIVE = "native"
         const val MAX_DIFF_LINES = 1200
         const val MAX_LINE_LENGTH = 400
     }
@@ -650,6 +892,9 @@ private fun parsePatch(patch: String?): Map<String, List<String>> {
 
 private val ROW_SELECTED_BACKGROUND = JBColor(Color(0xE8F0FE), Color(0x2E3540))
 private val SEGMENT_SELECTED_BACKGROUND = JBColor(Color(0xE3EBFA), Color(0x2F3A4E))
+
+/** unified diff 的 hunk 头：@@ -12,7 +12,7 @@ */
+private val HUNK_HEADER = Regex("""^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@""")
 
 /**
  * 紧凑的分段切换（统一 / 并排）：整条自绘、18px 高。

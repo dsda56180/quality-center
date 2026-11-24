@@ -470,7 +470,8 @@ class QualityCenterService(val project: Project) : Disposable {
                         dirtyCount = dirty,
                         selectable = selectable,
                         patchText = previewPatch,
-                        files = previewFiles
+                        files = previewFiles,
+                        nativeDiff = settings.previewNativeDiff
                     )
                     val decision = onEdt { showDeepFixPreview(project, info) } ?: run {
                         notifyInfo("已取消深度修复。")
