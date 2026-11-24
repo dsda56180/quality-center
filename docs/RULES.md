@@ -7,7 +7,7 @@
 
 - **代码层**（Java 源码 / 字节码）：由 `SpotBugs + FindSecBugs 1.14`（144 个 pattern）承担，`PERMISSIVE_CORS`、`SPRING_CSRF_*` 等由字节码 + Spring 语义检测。
 - **源码语义层**（Java AST）：由 `astgrep` 承担（`@ast-grep/napi` + `@ast-grep/lang-java`），用于「方法链 + 字符串字面量」这类字节码会丢失语义、正则又容易误报的规则；当前 7 条规则，全部有正例/反例靶场。
-- **配置层**（`application*.yml/yaml/properties`、`bootstrap*.yml`）：由内置扫描器 `qcsec` 承担，把配置文件拍平成「键路径 + 值 + 行号」，支持跨键组合判断（Druid 面板开启但未设口令这类），不依赖任何外部二进制。当前 9 条规则中 8 条已实现，Swagger 仍为缺口。
+- **配置层**（`application*.yml/yaml/properties`、`bootstrap*.yml`、MyBatis Mapper XML）：由内置扫描器 `qcsec` 承担，把配置拍平成「键路径 + 值 + 行号」或按 XML 行号定位，支持跨键组合判断（Druid 面板开启但未设口令这类），不依赖任何外部二进制。当前 10 条配置规则 + 1 条 Mapper 规则，全部实现且有靶场。
 - **依赖层**：`Trivy --scanners vuln`，按依赖坐标查漏洞库（CVE），只能回答"这个版本有没有已知漏洞"。
 - 覆盖度不是承诺"100%"，而是：清单条目 → 规则 ID → fixture 用例，一一对应，可跑可查；缺口在表里写明。
 
@@ -44,9 +44,10 @@
 | Druid stat-view 绑定 `0.0.0.0` / 对外暴露 | 668 | `SEC_DRUID_STATVIEW_PUBLIC_BIND` | 已覆盖 | `druid-statview-default` |
 | JDBC URL 打开 `allowMultiQueries=true`（注入可堆叠执行） | 89 | `SEC_JDBC_ALLOW_MULTI_QUERIES` | 已覆盖 | `jdbc-allow-multi-queries` |
 | Actuator 全端点暴露（含 `env` / `heapdump`） | 497 | `SEC_ACTUATOR_EXPOSE_ALL` | 已覆盖 | `actuator-expose-all` |
-| Swagger / knife4j 在生产环境开放 | 200 | `SEC_SWAGGER_PUBLIC` | **缺口** | 待补 |
+| Swagger / knife4j 在生产环境开放 | 200 | `SEC_SWAGGER_PUBLIC`（springdoc / springfox / knife4j 的 enabled 开关为 true，且未用 `knife4j.production=true` 保护） | 已覆盖 | `swagger-public` / `swagger-hardened` |
 | `spring.devtools` 在生产启用 | 489 | `SEC_DEVTOOLS_ENABLED` | 已覆盖 | `config-hardening-mixed` |
 | 配置文件里明文口令（非 `${...}` 占位） | 798 | `SEC_PLAINTEXT_PASSWORD_PROPERTY` | 已覆盖 | `config-hardening-mixed`（反例） |
+| MyBatis Mapper XML 使用 `${}` 字符串替换 | 89 | `SEC_MYBATIS_DOLLAR_SUBSTITUTION`（qcsec：扫描含 `<mapper>` 的 XML，逐行定位 `${...}`，XML 注释内的示例不算） | 已覆盖 | `mybatis-dollar-substitution` / `mybatis-hash-only` |
 | 关闭 HTTPS / `server.ssl.enabled: false` | 319 | `SEC_SSL_DISABLED` | 已覆盖 | `config-hardening-mixed` |
 
 ## 接线现状与局限
@@ -61,5 +62,5 @@ FindSecBugs 必须写进 pom 的 `<build><plugins>` 才生效（`spotbugs-maven-
 
 - **多模块工程**：只注入根 pom，SpotBugs 在子模块上运行时不会带上 FindSecBugs（后续计划改用 SpotBugs 独立发行版 + `-pluginList` 解决）。
 - 需要 `target/classes`（或先执行构建），否则 SpotBugs 直接跳过。
-- 配置层由 `qcsec` 覆盖，但它只解析配置文本、不做运行期验证：`${ENV}` 占位视为已外部化，不会跟进到实际生效值；profile 差异按文件计，不会合并 `application-*.yml` 的覆盖关系。Swagger 类规则仍是缺口。
+- 配置层由 `qcsec` 覆盖，但它只解析配置文本、不做运行期验证：`${ENV}` 占位视为已外部化，不会跟进到实际生效值；profile 差异按文件计，不会合并 `application-*.yml` 的覆盖关系；Swagger 规则只认显式 enabled 开关，依赖引入但未显式配置时不会报；MyBatis 规则只看 XML 里的 `${}`，`@Select` 注解里的 SQL 与 `statementType="STATEMENT"` 不在覆盖范围。
 - 语义层由 `astgrep` 覆盖，局限是：只解析 Java 源码（不处理 Kotlin / Groovy / 编译产物）；不解析 Spring 继承与 `@Configuration` 装配关系，`/actuator` 这类路径靠字面量匹配；`anyRequest()` / 匹配器判断只看同一条方法链，路径由常量拼接时会漏报；`MultipartFile` 校验只看方法体内关键字，跨方法封装的校验会判为缺失；SQL 拼接只覆盖「拼接结果直接进执行调用」，`String sql = ... + x` 再执行的变量中转会漏报；`@CrossOrigin` 只认注解本身，不合并全局 CORS 配置。以上都可用 `baseline` 忽略。

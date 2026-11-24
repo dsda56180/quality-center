@@ -1,0 +1,10 @@
+{
+  "id": "swagger-hardened",
+  "title": "Knife4j production 开启、springdoc 显式关闭（应不告警）",
+  "layer": "config",
+  "cwe": "CWE-200",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["SEC_SWAGGER_PUBLIC"] },
+  "target": { "rules": [], "owner": "qcsec", "status": "covered" }
+}

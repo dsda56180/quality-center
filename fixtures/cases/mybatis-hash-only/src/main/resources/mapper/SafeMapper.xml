@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mapper namespace="p.SafeMapper">
+  <select id="findByName" resultType="p.User">
+    select * from t_user where name = #{name} and id = #{id}
+  </select>
+</mapper>

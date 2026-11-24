@@ -1,0 +1,10 @@
+{
+  "id": "mybatis-dollar-substitution",
+  "title": "MyBatis Mapper 使用 ${} 字符串替换",
+  "layer": "config",
+  "cwe": "CWE-89",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_MYBATIS_DOLLAR_SUBSTITUTION"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_MYBATIS_DOLLAR_SUBSTITUTION"], "owner": "qcsec", "status": "covered" }
+}

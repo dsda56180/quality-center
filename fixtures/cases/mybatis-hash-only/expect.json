@@ -1,0 +1,10 @@
+{
+  "id": "mybatis-hash-only",
+  "title": "Mapper 全部使用 #{} 预编译占位符（应不告警）",
+  "layer": "config",
+  "cwe": "CWE-89",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["SEC_MYBATIS_DOLLAR_SUBSTITUTION"] },
+  "target": { "rules": [], "owner": "qcsec", "status": "covered" }
+}

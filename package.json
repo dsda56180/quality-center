@@ -182,7 +182,7 @@
         "qualityCenter.qcsec.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "启用配置安全扫描（qcsec）：检查 application.yml / properties 里的 Druid 默认口令与公网绑定、Actuator 全暴露、CORS 通配、allowMultiQueries、明文口令、devtools、SSL 关闭等，无需外部工具"
+          "description": "启用配置安全扫描（qcsec）：检查 application.yml / properties 里的 Druid 默认口令与公网绑定、Actuator 全暴露、CORS 通配、allowMultiQueries、明文口令、devtools、SSL 关闭、Swagger/Knife4j 文档开放，以及 MyBatis Mapper 的 ${} 字符串替换，无需外部工具"
         },
         "qualityCenter.astgrep.enabled": {
           "type": "boolean",

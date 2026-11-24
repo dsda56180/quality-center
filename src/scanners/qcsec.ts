@@ -301,6 +301,35 @@ const RULES: RuleDef[] = [
         }))
   },
   {
+    id: 'SEC_SWAGGER_PUBLIC',
+    cwe: 'CWE-200',
+    match: (index) => {
+      const drafts: IssueDraft[] = [];
+      const toggles = [
+        ...index.byKeySuffix(/springdoc\.(api-docs|swagger-ui)\.enabled$/),
+        ...index.byKeySuffix(/springfox\.documentation\.enabled$/),
+        ...index.byKeySuffix(/knife4j\.enable$/)
+      ];
+      const knife4jProd = index.byKeySuffix(/knife4j\.production$/)[0];
+      for (const entry of toggles) {
+        if (entry.value.toLowerCase() !== 'true') {
+          continue;
+        }
+        if (/knife4j\.enable$/.test(entry.key) && knife4jProd && knife4jProd.value.toLowerCase() === 'true') {
+          // knife4j.production=true 就是「生产环境关闭」，属于正确写法
+          continue;
+        }
+        drafts.push({
+          line: entry.line,
+          severity: 'medium',
+          message: '接口文档（Swagger / Knife4j）被显式开启且没有生产开关保护，接口清单与在线调试入口会对外公开',
+          advice: '生产 profile 关闭文档（`springdoc.api-docs.enabled=false` / `knife4j.production=true`），保留时至少加认证与内网限制。'
+        });
+      }
+      return drafts;
+    }
+  },
+  {
     id: 'SEC_DEVTOOLS_ENABLED',
     cwe: 'CWE-489',
     match: (index) => {
@@ -362,6 +391,65 @@ function collectConfigFiles(root: string): string[] {
   return files.sort();
 }
 
+/** MyBatis Mapper XML 单独收集：只看真正含 `<mapper>` 的 XML，避免把 pom / spring 配置算进来 */
+function collectMapperFiles(root: string): string[] {
+  const files: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 8) {
+      return;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
+          walk(path.join(dir, entry.name), depth + 1);
+        }
+        continue;
+      }
+      if (entry.name.endsWith('.xml')) {
+        files.push(path.join(dir, entry.name));
+      }
+    }
+  };
+  walk(root, 0);
+  return files.sort();
+}
+
+/**
+ * MyBatis `${}` 是字符串替换而不是预编译占位符：`${name}` 会被原样拼进 SQL。
+ * 这里按行定位，先抹掉 XML 注释（保持换行数量）免得注释里的示例被误报。
+ */
+function scanMapperDollar(file: string, text: string): Issue[] {
+  if (!/<mapper[\s>]/.test(text)) {
+    return [];
+  }
+  const masked = text.replace(/<!--[\s\S]*?-->/g, (block) => block.replace(/[^\n]/g, ' '));
+  const issues: Issue[] = [];
+  const regex = /\$\{([^}]*)\}/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(masked)) !== null) {
+    const expression = match[1].trim();
+    const line = masked.slice(0, match.index).split('\n').length;
+    issues.push({
+      source: 'qcsec',
+      severity: 'high',
+      file,
+      line,
+      column: 1,
+      rule: 'SEC_MYBATIS_DOLLAR_SUBSTITUTION',
+      message: `Mapper 里使用了 \${${expression}} 字符串替换，参数会被原样拼进 SQL，可被注入改写`,
+      advice: '改成 `#{}` 预编译占位符；确需动态表名/排序字段时用白名单枚举校验，不要直接接收外部值。',
+      cwe: ['CWE-89']
+    });
+  }
+  return issues;
+}
+
 export async function scanQcsec(root: string): Promise<QcsecResult> {
   const files = collectConfigFiles(root);
   const issues: Issue[] = [];
@@ -403,7 +491,22 @@ export async function scanQcsec(root: string): Promise<QcsecResult> {
     }
   }
 
-  return { issues, files: files.length };
+  // MyBatis Mapper XML：`${}` 是字符串替换，和 yml 一样属于「资源层配置」，同一类结果归到此处
+  const mappers = collectMapperFiles(root);
+  for (const mapper of mappers) {
+    try {
+      const stat = fs.statSync(mapper);
+      if (stat.size > 2_000_000) {
+        continue;
+      }
+      const text = fs.readFileSync(mapper, 'utf8');
+      issues.push(...scanMapperDollar(mapper, text));
+    } catch {
+      continue;
+    }
+  }
+
+  return { issues, files: files.length + mappers.length };
 }
 
 /** 供文档/CLI 展示的规则清单 */

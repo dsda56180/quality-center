@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.0
+
+**补齐配置层最后两块空白：Swagger 文档开放与 MyBatis `${}` 注入。**
+
+- 新增 `SEC_SWAGGER_PUBLIC`：`springdoc.api-docs.enabled` / `springdoc.swagger-ui.enabled` / `springfox.documentation.enabled` / `knife4j.enable` 显式为 `true` 时报中危；`knife4j.production: true` 视为「生产关闭」的正确写法，不报
+- 新增 `SEC_MYBATIS_DOLLAR_SUBSTITUTION`：扫描含 `<mapper>` 的 XML，逐行定位 `${...}` 并给出表达式原文；先抹掉 XML 注释（保留换行，行号不漂移），注释里的示例写法不会误报；`#{}` 预编译写法不报
+- 这两条归到 `qcsec`（配置与资源层），不新增扫描器：面板「配置安全」Tab、`report.md`、`summary`、CLI/MCP 都直接生效
+- 靶场新增 4 个用例：`swagger-public`、`swagger-hardened`（production + springdoc 关闭的反例）、`mybatis-dollar-substitution`（含注释干扰项）、`mybatis-hash-only`（纯 `#{}` 反例），矩阵扩到 **22 个用例，PASS 22 / GAP 0 / FAIL 0**
+- `docs/RULES.md`：配置层 9 条 + Mapper 1 条全部标为已覆盖，`docs/RULES.md` 与 README 的「缺口」段清空，改为写明新局限（Swagger 只认显式开关、MyBatis 只认 XML 里的 `${}`，`@Select` 注解与 `statementType="STATEMENT"` 不在范围内）
+
 ## 0.20.0
 
 **AST 语义规则从 3 条扩到 7 条，代码层常见注入面基本覆盖。**

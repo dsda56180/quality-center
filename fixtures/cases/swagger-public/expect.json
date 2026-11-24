@@ -1,0 +1,10 @@
+{
+  "id": "swagger-public",
+  "title": "Swagger / Knife4j 文档端点在生产配置里开启",
+  "layer": "config",
+  "cwe": "CWE-200",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_SWAGGER_PUBLIC"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_SWAGGER_PUBLIC"], "owner": "qcsec", "status": "covered" }
+}
