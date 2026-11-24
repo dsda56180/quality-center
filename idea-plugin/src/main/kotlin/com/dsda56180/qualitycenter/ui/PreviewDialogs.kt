@@ -380,9 +380,10 @@ private class DeepFixPreviewDialog(
 
     /** 对话框一打开就在后台把所有文件的行数据预处理好，之后点任何条目都是纯内存赋值 */
     private fun prebuildAll() {
-        // 原生模式不做后台预热：批量 loadText 会一直持读锁，偶尔和 EDT 的写动作撞上，
-        // 表现为「多数点击正常、突然有一次点了卡住 1 秒」。按需构建（单次读一个小文件）更稳。
-        if (useNative) return
+        if (useNative) {
+            prebuildNative()
+            return
+        }
         val app = com.intellij.openapi.application.ApplicationManager.getApplication()
         val pending = info.files.filter { synchronized(dataCache) { dataCache[it] } == null }
         if (pending.isEmpty()) return
@@ -394,6 +395,29 @@ private class DeepFixPreviewDialog(
                     null
                 } ?: return@forEach
                 synchronized(dataCache) { dataCache[path] = data }
+            }
+        }
+    }
+
+    /**
+     * 原生模式：后台把所有文件的「改前 / 改后」文本一次准备好。
+     * 这样点击条目时 EDT 上只剩下 setRequest 一件事，不再有「点击 → 排队 → 读文件 → 再渲染」的延迟链。
+     */
+    private fun prebuildNative() {
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        val pending = info.files.filter { synchronized(nativeCache) { nativeCache[it] } == null }
+        if (pending.isEmpty()) return
+        app.executeOnPooledThread {
+            pending.forEach { path ->
+                val texts = try {
+                    buildNativeTexts(path, diffLines(path))
+                } catch (_: Throwable) {
+                    null
+                } ?: return@forEach
+                synchronized(nativeCache) {
+                    if (nativeCache.size >= 200) nativeCache.keys.firstOrNull()?.let { nativeCache.remove(it) }
+                    nativeCache[path] = texts
+                }
             }
         }
     }
@@ -459,15 +483,9 @@ private class DeepFixPreviewDialog(
                 nativeCache[path] = texts
             }
             app.invokeLater({
-                val start = System.nanoTime()
                 try {
                     if (token == renderToken) showNative(path, texts)
                 } finally {
-                    val elapsedMs = (System.nanoTime() - start) / 1_000_000
-                    if (elapsedMs > 80) {
-                        com.intellij.openapi.diagnostic.Logger.getInstance(DeepFixPreviewDialog::class.java)
-                            .warn("原生 diff 渲染耗时 ${elapsedMs}ms（$path）")
-                    }
                     finishRender()
                 }
             }, com.intellij.openapi.application.ModalityState.any())
@@ -484,6 +502,7 @@ private class DeepFixPreviewDialog(
             fallbackToBuiltIn()
             return
         }
+        val t0 = System.nanoTime()
         val request = try {
             buildNativeRequest(path, texts)
         } catch (e: Throwable) {
@@ -491,6 +510,8 @@ private class DeepFixPreviewDialog(
             fallbackToBuiltIn()
             return
         }
+        val tRequest = (System.nanoTime() - t0) / 1_000_000
+        val t1 = System.nanoTime()
         try {
             panel.setRequest(request)
         } catch (e: Throwable) {
@@ -498,10 +519,16 @@ private class DeepFixPreviewDialog(
             fallbackToBuiltIn()
             return
         }
+        val tPanel = (System.nanoTime() - t1) / 1_000_000
         updatePathLabel(path)
         (diffCards.layout as CardLayout).show(diffCards, CARD_NATIVE)
         nativeHost.revalidate()
         nativeHost.repaint()
+        val tTotal = (System.nanoTime() - t0) / 1_000_000
+        if (tTotal > 60) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(DeepFixPreviewDialog::class.java)
+                .warn("原生 diff 渲染耗时 ${tTotal}ms（构造请求 ${tRequest}ms / setRequest ${tPanel}ms，$path）")
+        }
     }
 
     private fun updatePathLabel(path: String) {
@@ -532,11 +559,10 @@ private class DeepFixPreviewDialog(
 
     private fun buildNativeRequest(path: String, texts: NativeTexts): com.intellij.diff.requests.DiffRequest {
         val factory = com.intellij.diff.DiffContentFactory.getInstance()
-        // 关键：不传 FileType。官方 VCS 的 diff 内容都是 DocumentContent，编辑器不会为它建 PSI；
-        // 一旦带上 Java FileType，DiffRequestProcessor 每次 setRequest 重建 viewer 时都会
-        // 给两个文档建代码高亮 + 语法分析（非物理文件，没有索引缓存），单次就能卡住 EDT 几百毫秒。
-        val before = factory.create(project, texts.before)
-        val after = factory.create(project, texts.after)
+        val fileType = texts.file?.fileType
+            ?: com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getFileTypeByFileName(path)
+        val before = factory.create(project, texts.before, fileType)
+        val after = factory.create(project, texts.after, fileType)
         return com.intellij.diff.requests.SimpleDiffRequest(path, before, after, "修改前", "修改后")
     }
 
@@ -568,13 +594,23 @@ private class DeepFixPreviewDialog(
     private fun buildNativeTexts(path: String, lines: List<String>?): NativeTexts {
         val virtualFile = findVirtualFile(path)
         val original = virtualFile?.let { readVirtualText(it) }
-        val rebuilt = if (original != null && !lines.isNullOrEmpty()) applyHunks(original.lines(), lines) else null
+        // 保留原始行尾：改前/改后两侧必须是同一种换行风格，否则原生面板会标成 CRLF vs LF
+        val sep = if (original != null && original.contains("\r\n")) "\r\n" else "\n"
+        val rebuilt = if (original != null && !lines.isNullOrEmpty()) {
+            applyHunks(splitLines(original), lines, sep)
+        } else {
+            null
+        }
         if (original != null && rebuilt != null) {
             return NativeTexts(original, rebuilt, virtualFile)
         }
         if (lines == null) return NativeTexts("", "", virtualFile)
         return NativeTexts(fragment(lines, old = true), fragment(lines, old = false), virtualFile)
     }
+
+    /** 按 \n 切行但去掉 \r，保留结尾空行（与 String.lines() 相比不会吞掉末尾换行） */
+    private fun splitLines(text: String): List<String> =
+        text.split("\n").map { if (it.endsWith("\r")) it.dropLast(1) else it }
 
     private fun findVirtualFile(path: String): com.intellij.openapi.vfs.VirtualFile? {
         val base = project.basePath ?: return null
@@ -589,12 +625,14 @@ private class DeepFixPreviewDialog(
 
     /**
      * 按 hunk 头里的行号把补丁套回原文件，得到完整的「改后」文本。
-     * 任何一处行号越界就返回 null，调用方退化到只对比补丁片段。
+     * 和 git apply 一样，每一行上下文 / 删除行都必须和当前文件逐字对上，行数也必须和 hunk 头一致；
+     * 任何一处对不上就整份放弃（退回只显示补丁片段），绝不把错位的行拼进结果。
      */
-    private fun applyHunks(original: List<String>, lines: List<String>): String? {
+    private fun applyHunks(original: List<String>, lines: List<String>, sep: String): String? {
         val out = ArrayList<String>(original.size + 64)
         var cursor = 0
         var index = 0
+        var hunks = 0
         while (index < lines.size) {
             val line = lines[index]
             if (!line.startsWith("@@")) {
@@ -603,42 +641,63 @@ private class DeepFixPreviewDialog(
             }
             val header = HUNK_HEADER.find(line) ?: return null
             val oldStart = header.groupValues[1].toIntOrNull() ?: return null
-            val declared = header.groupValues[2].takeIf { it.isNotEmpty() }?.toIntOrNull()
-            var body = index + 1
-            var consumed = 0
-            val replacement = ArrayList<String>()
-            while (body < lines.size && !lines[body].startsWith("@@") && !lines[body].startsWith("diff --git")) {
-                val text = lines[body]
-                when {
-                    text.startsWith("+") && !text.startsWith("+++") -> replacement += text.substring(1)
-                    text.startsWith("-") && !text.startsWith("---") -> consumed++
-                    text.startsWith("\\") -> Unit
-                    text.startsWith(" ") -> {
-                        replacement += text.substring(1)
-                        consumed++
-                    }
-                    else -> {
-                        replacement += text
-                        consumed++
-                    }
-                }
-                body++
-            }
+            val oldCount = header.groupValues[2].takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 1
+            val newCount = header.groupValues[4].takeIf { it.isNotEmpty() }?.toIntOrNull() ?: 1
             val target = oldStart - 1
-            if (target < cursor || target > original.size) return null
+            if (target < cursor || target + oldCount > original.size) return null
             while (cursor < target) {
                 out += original[cursor]
                 cursor++
             }
-            cursor = minOf(original.size, target + (declared ?: consumed))
-            out += replacement
+            var body = index + 1
+            var oldSeen = 0
+            var newSeen = 0
+            var oldPos = target
+            while (body < lines.size && oldSeen < oldCount && newSeen < newCount) {
+                val raw = lines[body]
+                when {
+                    // \ No newline at end of file
+                    raw.startsWith("\\") -> Unit
+                    raw.startsWith("+") && !raw.startsWith("+++") -> {
+                        out += raw.substring(1)
+                        newSeen++
+                    }
+                    raw.startsWith("-") && !raw.startsWith("---") -> {
+                        if (oldPos >= original.size || original[oldPos].trimEnd() != raw.substring(1).trimEnd()) return null
+                        oldPos++
+                        oldSeen++
+                    }
+                    raw.startsWith(" ") -> {
+                        if (oldPos >= original.size || original[oldPos].trimEnd() != raw.substring(1).trimEnd()) return null
+                        // 用原文而不是补丁里的副本，避免行尾空白被补丁工具裁掉
+                        out += original[oldPos]
+                        oldPos++
+                        oldSeen++
+                        newSeen++
+                    }
+                    // 空行只可能是「被裁掉行尾空格的空上下文行」，同样要和原文对上
+                    raw.isEmpty() -> {
+                        if (oldPos >= original.size || original[oldPos] != "") return null
+                        out += ""
+                        oldPos++
+                        oldSeen++
+                        newSeen++
+                    }
+                    else -> return null
+                }
+                body++
+            }
+            if (oldSeen != oldCount || newSeen != newCount) return null
+            cursor = oldPos
             index = body
+            hunks++
         }
+        if (hunks == 0) return null
         while (cursor < original.size) {
             out += original[cursor]
             cursor++
         }
-        return out.joinToString("\n")
+        return out.joinToString(sep)
     }
 
     /** 退化路径：把整份补丁拼成「改前 / 改后」两段文本（只有 hunk 片段，行号从 1 起） */
@@ -996,7 +1055,7 @@ private val ROW_SELECTED_BACKGROUND = JBColor(Color(0xE8F0FE), Color(0x2E3540))
 private val SEGMENT_SELECTED_BACKGROUND = JBColor(Color(0xE3EBFA), Color(0x2F3A4E))
 
 /** unified diff 的 hunk 头：@@ -12,7 +12,7 @@ */
-private val HUNK_HEADER = Regex("""^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@""")
+private val HUNK_HEADER = Regex("""^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@""")
 
 /**
  * 紧凑的分段切换（统一 / 并排）：整条自绘、18px 高。
