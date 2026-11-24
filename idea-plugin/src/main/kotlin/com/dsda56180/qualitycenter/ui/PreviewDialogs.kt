@@ -21,6 +21,7 @@ import java.awt.Graphics2D
 import java.awt.RenderingHints
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JCheckBox
 import javax.swing.JComponent
@@ -107,8 +108,13 @@ private class DeepFixPreviewDialog(
         border = JBUI.Borders.empty(2, 6, 2, 6)
     }
     private val diffCards = JPanel(CardLayout())
-    private val nativeHost = JPanel(BorderLayout())
+    /** 原生区用 CardLayout 挂多个「按文件」的面板，来回点已看过的文件时只换卡片、不重建编辑器 */
+    private val nativeHost = JPanel(CardLayout())
     private var nativePanel: com.intellij.diff.DiffRequestPanel? = null
+    /** 原生面板缓存（key = 路径）：单次点击就建两个编辑器很贵，已看过的文件直接复用 */
+    private val nativeCards = LinkedHashMap<String, com.intellij.diff.DiffRequestPanel>()
+    private val nativeCardNames = LinkedHashMap<String, String>()
+    private var nativeCardSeq = 0
     /** 原生面板构造失败后置位，后续一律回退内置渲染，避免反复抛异常 */
     private var nativeFailed = false
     private var useNative = info.nativeDiff
@@ -176,12 +182,18 @@ private class DeepFixPreviewDialog(
                     cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                     toolTipText = file
                 }
+                val rowHeight = JBUI.scale(24)
                 val rowPanel = JPanel(BorderLayout(JBUI.scale(4), 0)).apply {
                     isOpaque = true
                     background = bg
                     border = JBUI.Borders.empty(2, 2)
                     add(checkBox, BorderLayout.WEST)
                     add(label, BorderLayout.CENTER)
+                    // BoxLayout 默认拿 JComponent 的最大尺寸（Short.MAX_VALUE）分配剩余空间，
+                    // 文件少的时候每行会被拉成几十像素高。这里锁死行高，多余空间交给底部 glue。
+                    preferredSize = Dimension(JBUI.scale(600), rowHeight)
+                    minimumSize = Dimension(0, rowHeight)
+                    maximumSize = Dimension(Short.MAX_VALUE.toInt(), rowHeight)
                 }
                 val row = Row(file, checkBox, rowPanel)
                 rows += row
@@ -193,6 +205,8 @@ private class DeepFixPreviewDialog(
                 filesPanel.add(rowPanel)
             }
         }
+
+        filesPanel.add(Box.createVerticalGlue())
 
         val filesScroll = thinScrollPane(filesPanel).apply {
             preferredSize = Dimension(JBUI.scale(1040), JBUI.scale(200))
@@ -461,57 +475,111 @@ private class DeepFixPreviewDialog(
             pendingNative = path to texts
             return
         }
-        val panel = ensureNativePanel() ?: run {
+        val cachedName = nativeCardNames[path]
+        if (cachedName != null) {
+            // 已经渲染过这个文件：直接换卡片，零重建
+            (nativeHost.layout as CardLayout).show(nativeHost, cachedName)
+            (diffCards.layout as CardLayout).show(diffCards, CARD_NATIVE)
+            touchNative(path)
+            updatePathLabel(path)
+            nativeHost.revalidate()
+            nativeHost.repaint()
+            return
+        }
+        if (createNativePanel(path, texts) == null) {
             fallbackToBuiltIn()
             return
         }
-        val request = try {
-            val factory = com.intellij.diff.DiffContentFactory.getInstance()
-            // 只按文件类型创建轻量内容，不把内容绑到真实 VirtualFile：
-            // 绑真实文件会让编辑器把「改后文本」当成真实文件去建 PSI（整文件重新解析），
-            // 每次点击都会卡住 EDT 数百毫秒，表现为点了没反应。
-            val fileType = texts.file?.fileType
-                ?: com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getFileTypeByFileName(path)
-            val before = factory.create(project, texts.before, fileType)
-            val after = factory.create(project, texts.after, fileType)
-            com.intellij.diff.requests.SimpleDiffRequest(path, before, after, "修改前", "修改后")
-        } catch (e: Throwable) {
-            logWarn("构造 diff 请求失败", e)
-            fallbackToBuiltIn()
-            return
-        }
-        try {
-            panel.setRequest(request)
-        } catch (e: Throwable) {
-            logWarn("原生 diff 面板渲染失败", e)
-            fallbackToBuiltIn()
-            return
-        }
-        val counts = countChanges(diffLines(path))
-        pathLabel.text = "${path}    +${counts.first} / -${counts.second}"
+        (nativeHost.layout as CardLayout).show(nativeHost, nativeCardNames[path] ?: return)
         (diffCards.layout as CardLayout).show(diffCards, CARD_NATIVE)
+        updatePathLabel(path)
         nativeHost.revalidate()
         nativeHost.repaint()
     }
 
-    /** 反射构造平台的 DiffRequestPanel 实现：该类在内部包里，直接引用会绑死某个版本 */
-    private fun ensureNativePanel(): com.intellij.diff.DiffRequestPanel? {
-        nativePanel?.let { return it }
+    private fun updatePathLabel(path: String) {
+        val counts = countChanges(diffLines(path))
+        pathLabel.text = "${path}    +${counts.first} / -${counts.second}"
+    }
+
+    /** 新建一个按文件的 native 面板，挂进 CardLayout，并按 LRU 淘汰多余的面板 */
+    private fun createNativePanel(path: String, texts: NativeTexts): com.intellij.diff.DiffRequestPanel? {
         if (nativeFailed) return null
-        return try {
-            val type = Class.forName("com.intellij.diff.impl.DiffRequestPanelImpl")
+        val type = try {
+            Class.forName("com.intellij.diff.impl.DiffRequestPanelImpl")
+        } catch (e: Throwable) {
+            logWarn("无法加载原生 diff 面板类，回退内置渲染", e)
+            nativeFailed = true
+            return null
+        }
+        val window = javax.swing.SwingUtilities.getWindowAncestor(nativeHost)
+        val instance = try {
             val ctor = type.getConstructor(Project::class.java, java.awt.Window::class.java)
-            val window = javax.swing.SwingUtilities.getWindowAncestor(nativeHost)
-            val instance = ctor.newInstance(project, window) as com.intellij.diff.DiffRequestPanel
-            nativeHost.removeAll()
-            nativeHost.add(instance.component, BorderLayout.CENTER)
-            nativeHost.revalidate()
-            nativePanel = instance
-            instance
+            ctor.newInstance(project, window) as com.intellij.diff.DiffRequestPanel
         } catch (e: Throwable) {
             logWarn("无法创建原生 diff 面板，回退内置渲染", e)
             nativeFailed = true
-            null
+            return null
+        }
+        val request = try {
+            buildNativeRequest(path, texts)
+        } catch (e: Throwable) {
+            logWarn("构造 diff 请求失败", e)
+            runCatching { instance.dispose() }
+            nativeFailed = true
+            return null
+        }
+        try {
+            instance.setRequest(request)
+        } catch (e: Throwable) {
+            logWarn("原生 diff 面板渲染失败", e)
+            runCatching { instance.dispose() }
+            nativeFailed = true
+            return null
+        }
+        val name = "native-" + (++nativeCardSeq)
+        nativeCards[path] = instance
+        nativeCardNames[path] = name
+        nativeHost.add(instance.component, name)
+        nativePanel = instance
+        evictNativeCards(path)
+        return instance
+    }
+
+    private fun buildNativeRequest(path: String, texts: NativeTexts): com.intellij.diff.requests.DiffRequest {
+        val factory = com.intellij.diff.DiffContentFactory.getInstance()
+        // 只按文件类型创建轻量内容，不把内容绑到真实 VirtualFile：
+        // 绑真实文件会让编辑器把「改后文本」当成真实文件去建 PSI（整文件重新解析），
+        // 每次点击都会卡住 EDT 数百毫秒，表现为点了没反应。
+        val fileType = texts.file?.fileType
+            ?: com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getFileTypeByFileName(path)
+        val before = factory.create(project, texts.before, fileType)
+        val after = factory.create(project, texts.after, fileType)
+        return com.intellij.diff.requests.SimpleDiffRequest(path, before, after, "修改前", "修改后")
+    }
+
+    /** 最多保留 3 个文件的面板，超出就 dispose 最久未用的那个（当前路径除外） */
+    private fun evictNativeCards(current: String) {
+        while (nativeCards.size > 3) {
+            val eldest = nativeCards.keys.firstOrNull { it != current } ?: return
+            val panel = nativeCards.remove(eldest) ?: return
+            val name = nativeCardNames.remove(eldest)
+            if (name != null) nativeHost.remove(panel.component)
+            runCatching { panel.dispose() }
+            if (nativePanel === panel) nativePanel = null
+        }
+    }
+
+    /** 把命中的文件挪到 LRU 末尾 */
+    private fun touchNative(path: String) {
+        nativeCards[path]?.let { panel ->
+            val name = nativeCardNames[path]
+            nativeCards.remove(path)
+            nativeCards[path] = panel
+            if (name != null) {
+                nativeCardNames.remove(path)
+                nativeCardNames[path] = name
+            }
         }
     }
 
@@ -635,7 +703,9 @@ private class DeepFixPreviewDialog(
     override fun dispose() {
         renderAlarm.cancelAllRequests()
         runCatching { renderAlarm.dispose() }
-        runCatching { nativePanel?.dispose() }
+        nativeCards.values.forEach { runCatching { it.dispose() } }
+        nativeCards.clear()
+        nativeCardNames.clear()
         nativePanel = null
         super.dispose()
     }
