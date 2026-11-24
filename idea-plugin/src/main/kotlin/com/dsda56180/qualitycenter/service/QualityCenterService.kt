@@ -1124,7 +1124,7 @@ class QualityCenterService(val project: Project) : Disposable {
         text.lines().filter { it.isNotBlank() }.takeLast(6).joinToString("\n")
 
     private fun File.readTextSafely(): String? =
-        runCatching { readText(StandardCharsets.UTF_8) }.getOrNull()
+        runCatching { com.dsda56180.qualitycenter.util.TextIO.decode(readBytes()) }.getOrNull()
 
     fun notifyInfo(message: String) = notify(message, NotificationType.INFORMATION)
 

@@ -42,8 +42,8 @@ object Exec {
 
         var stdout = ""
         var stderr = ""
-        val outTask = drainer.submit { stdout = process.inputStream.bufferedReader(Charsets.UTF_8).readText() }
-        val errTask = drainer.submit { stderr = process.errorStream.bufferedReader(Charsets.UTF_8).readText() }
+        val outTask = drainer.submit { stdout = TextIO.decode(process.inputStream.readBytes()) }
+        val errTask = drainer.submit { stderr = TextIO.decode(process.errorStream.readBytes()) }
 
         val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
         if (!finished) {
