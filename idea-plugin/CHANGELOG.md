@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.29
+
+- 修「预览区域全空、没有 diff」的真正原因：`EditorFactory.createDocument` 遇到**混用 LF / CRLF** 的文本会抛 `Wrong line separators: '…'\r\n…' at offset 50`（补丁回放按原文件保留行尾，片段模式下又会拼上 \n，两种混在一起就炸）。现在所有进文档的文本先统一成 `\n`，面板切换不再抛异常
+- `showNative` 整体包进兜底：任何异常都立刻退回内置渲染，不会再留下空白区
+- 0.1.26/0.1.27 里"没有 diff + 卡"就是这条异常：每次点击都抛一次带完整堆栈的异常、面板又没内容，看起来既卡又空
+
 ## 0.1.28
 
 - 修「深度修复需要在 Git 仓库中运行」误报：0.1.27 那次是由受限环境启动的 IDEA，进程 PATH 里没有 `D:\Tools\Git\cmd`，插件用裸 `git` 调用全部失败。现在 git / mvn 都先解析成绝对路径（PATH → Program Files\Git → 各盘 Tools\Git 等常见位置），并改用绝对路径的 `cmd.exe`（原先前 PATH 缺 System32 时连 shell 都起不来）
