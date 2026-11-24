@@ -14,6 +14,7 @@ import { ScanRunner } from '../scanner';
 import { mavenMirrorArgs } from '../maven';
 import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, UpgradePreviewEntry } from './deepFixPanel';
 import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '../upgrader';
+import { loadPolicy } from '../upgradePolicy';
 import { indexBomManagement, localRepository, parseBomRefs, parseDependencyTree } from '../dependencies';
 import {
   artifactsForRecipes,
@@ -1335,6 +1336,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
 
     let pool: UpgradeCandidate[];
+    /** 跨大版本（如 8.x → 13.x）不进一键升级：这类升级通常伴随 API/驱动协议变化，需人工评估 */
+    const crossLine = plan.candidates.filter((item) => item.crossLine);
     if (packageName) {
       const matched = plan.candidates.find((item) => item.packageName === packageName);
       if (!matched) {
@@ -1344,9 +1347,22 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         );
         return;
       }
+      if (matched.crossLine) {
+        void vscode.window.showInformationMessage(
+          `${packageName} 的修复版本 ${matched.to} 跨大版本（当前 ${matched.from}），不做一键升级，请人工评估。`
+        );
+        return;
+      }
       pool = [matched];
     } else {
-      pool = plan.candidates;
+      pool = plan.candidates.filter((item) => !item.crossLine);
+      if (crossLine.length) {
+        this.log(
+          `跨大版本需人工处理：${crossLine
+            .map((item) => `${item.packageName} ${item.from}→${item.to}`)
+            .join('，')}`
+        );
+      }
     }
 
     const original = fs.readFileSync(pomFile, 'utf8');
@@ -1506,7 +1522,13 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return this.depContextCache.context;
     }
 
-    const context: UpgradeContext = {};
+    // 框架目标走统一的策略文件（.quality-center/upgrade-policy.json + Java 版本推导），
+    // 面板与 CLI/MCP 必须同一个口径，否则面板会把 spring-* 逐个推到 7.x。
+    const loaded = loadPolicy(root, pom);
+    const context: UpgradeContext = { frameworkTarget: loaded.frameworkTarget };
+    if (loaded.frameworkTarget) {
+      this.log(`框架目标版本 ${loaded.frameworkTarget}（${loaded.sources[0] ?? '策略推导'}）`);
+    }
     try {
       await vscode.window.withProgress(
         {

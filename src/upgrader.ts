@@ -42,6 +42,8 @@ export interface UpgradeCandidate {
   conflicts?: string[];
   /** 可选目标版本，多个时预览里给用户下拉选择 */
   alternatives?: string[];
+  /** 目标版本跨大版本（如 8.x → 13.x），默认不进入一键升级，需人工评估 */
+  crossLine?: boolean;
   note?: string;
 }
 
@@ -120,6 +122,12 @@ function compareVersion(a: string, b: string): number {
   return 0;
 }
 
+/** 取主版本号；解析失败按 0 处理，避免把语义化版本误判成跨大版本 */
+function majorOf(version: string): number {
+  const match = /^\d+/.exec(version.trim());
+  return match ? Number.parseInt(match[0], 10) : 0;
+}
+
 function versionPair(version: string): [number, number] {
   const match = /^(\d+)\.(\d+)/.exec(version.trim());
   return match ? [Number(match[1]), Number(match[2])] : [0, 0];
@@ -151,6 +159,29 @@ function isSpringFamily(packageName: string): boolean {
     return false;
   }
   if (groupId === 'org.springframework') {
+    return true;
+  }
+  /** Spring Boot BOM 直接管理的第三方族：升级框架时版本会一起对齐，不该逐个固定 */
+  const managedGroups = new Set([
+    'io.micrometer',
+    'io.projectreactor',
+    'io.projectreactor.netty',
+    'io.netty',
+    'io.lettuce',
+    'org.jetbrains.kotlin',
+    'org.jetbrains.kotlinx',
+    'org.slf4j',
+    'com.zaxxer',
+    'mysql',
+    'org.apache.kafka',
+    'org.springframework.kafka',
+    'org.springframework.amqp',
+    'org.springframework.data',
+    'org.springframework.security',
+    'org.springframework.retry',
+    'org.springframework.boot'
+  ]);
+  if (managedGroups.has(groupId)) {
     return true;
   }
   return [
@@ -326,6 +357,16 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
     const dep = deps.find((item) => `${item.groupId}:${item.artifactId}` === packageName);
     const managedEntry = managed?.get(packageName);
 
+    // 框架族组件（spring-*/tomcat-embed/jackson/netty/logback…）的版本由父 POM 或 BOM 管理，
+    // 没有框架目标时逐个固定会把 5.x 推到 7.x，直接拒绝，交给框架升级或人工处理。
+    if (!frameworkTarget && isSpringFamily(packageName) && !(dep && dep.version)) {
+      skipped.push({
+        packageName,
+        reason: '版本由父 POM / BOM 管理，未推导出框架目标版本，需先升级框架或人工评估'
+      });
+      continue;
+    }
+
     let from = '';
     let mode: UpgradeMode = 'manage';
     let property: string | undefined;
@@ -413,6 +454,7 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
       source,
       sourceKind,
       property,
+      crossLine: majorOf(to) !== majorOf(from),
       conflicts: conflicts.length ? conflicts : undefined,
       alternatives,
       note
