@@ -12,6 +12,7 @@ import java.awt.RenderingHints
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JScrollBar
+import javax.swing.JScrollPane
 import javax.swing.plaf.basic.BasicScrollBarUI
 
 /**
@@ -63,6 +64,9 @@ private class ThinScrollBarUI : BasicScrollBarUI() {
 /** 统一的细滚动条容器，替换默认 JBScrollPane 的粗浅色滚动条 */
 internal fun thinScrollPane(component: JComponent): JBScrollPane {
     val scroll = JBScrollPane(component)
+    // 明确按需显示：一旦被设成 NEVER 就再也滚不动了
+    scroll.horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
+    scroll.verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
     scroll.horizontalScrollBar.applyThin(JScrollBar.HORIZONTAL)
     scroll.verticalScrollBar.applyThin(JScrollBar.VERTICAL)
     return scroll
@@ -73,10 +77,10 @@ private fun JScrollBar.applyThin(orientation: Int) {
     isOpaque = false
     border = JBUI.Borders.empty()
     if (orientation == JScrollBar.HORIZONTAL) {
-        preferredSize = Dimension(0, JBUI.scale(7))
-        minimumSize = Dimension(0, JBUI.scale(7))
+        preferredSize = Dimension(0, JBUI.scale(8))
+        minimumSize = Dimension(0, JBUI.scale(8))
     } else {
-        preferredSize = Dimension(JBUI.scale(7), 0)
-        minimumSize = Dimension(JBUI.scale(7), 0)
+        preferredSize = Dimension(JBUI.scale(8), 0)
+        minimumSize = Dimension(JBUI.scale(8), 0)
     }
 }

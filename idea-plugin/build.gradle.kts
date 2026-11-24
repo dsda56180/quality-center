@@ -8,7 +8,7 @@ plugins {
 
 group = "com.dsda56180"
 // 本地默认版本；CI 发布时通过 -PpluginVersion=<tag版本> 覆盖
-version = providers.gradleProperty("pluginVersion").getOrElse("0.1.20")
+version = providers.gradleProperty("pluginVersion").getOrElse("0.1.21")
 
 repositories {
     maven("https://maven.aliyun.com/repository/public")
