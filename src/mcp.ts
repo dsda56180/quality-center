@@ -12,6 +12,7 @@ import {
   fixProject,
   installToolHeadless,
   packageVersion,
+  parseBuildErrors,
   readReport,
   ReportFormat,
   scanProject,
@@ -19,7 +20,15 @@ import {
 } from './agentOps';
 import { ToolId, EXTERNAL_TOOLS } from './tools';
 import { AgentScanEvent } from './agentApi';
-import { applyUpgradePlan, checkUpgradePlan, createUpgradePlan, readIssues, revertUpgradePlan } from './upgradePlanFile';
+import {
+  applyUpgradePlan,
+  checkUpgradePlan,
+  createUpgradePlan,
+  readIssues,
+  revertUpgradePlan
+} from './upgradePlanFile';
+import { digestScan } from './scanDigest';
+import { projectStatus } from './status';
 
 interface RpcRequest {
   jsonrpc: '2.0';
@@ -68,7 +77,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'quality_scan',
     description:
-      '对项目执行六类扫描（Checkstyle 代码质量 / Gitleaks 密钥泄露 / Trivy 依赖 CVE / SpotBugs+FindSecBugs 静态缺陷 / qcsec 配置安全 / astgrep AST 语义规则），返回 schemaVersion 2 的结构化问题清单与下一步建议。工具缺失时返回 missingTools 与退出码 2。',
+      '对项目执行六类扫描（Checkstyle 代码质量 / Gitleaks 密钥泄露 / Trivy 依赖 CVE / SpotBugs+FindSecBugs 静态缺陷 / qcsec 配置安全 / astgrep AST 语义规则）。默认返回摘要 + Top N（明细写 issues.json），避免把上百条问题全塞进上下文；复扫用 delta=true 只看新增/消失。工具缺失时返回 missingTools 与退出码 2。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -86,8 +95,27 @@ const TOOLS: ToolDef[] = [
         exportFiles: {
           type: 'boolean',
           description: '是否写 .quality-center/issues.json 与 report.md，默认 true'
+        },
+        detail: {
+          type: 'string',
+          enum: ['summary', 'full'],
+          description: 'summary（默认）：计数 + Top N；full：返回全部 issues / ignored / suggestions'
+        },
+        top: { type: 'number', description: 'summary 模式返回的问题条数，默认 10，上限 50' },
+        delta: {
+          type: 'boolean',
+          description: '与上一次扫描比较，只回新增/消失的数量与代表项，用于复扫验收'
         }
       }
+    }
+  },
+  {
+    name: 'quality_status',
+    description:
+      '一次拿到全局状态：外部工具就绪情况、最近一次扫描与问题计数、当前升级计划的分组进度（pending/partial/applied/drift）、pom 哈希。开始工作或怀疑状态变化时先调它，不要分别调 report/check 去猜。',
+    inputSchema: {
+      type: 'object',
+      properties: { path: PATH_PROP }
     }
   },
   {
@@ -148,12 +176,19 @@ const TOOLS: ToolDef[] = [
   {
     name: 'quality_upgrade_plan',
     description:
-      '生成依赖升级计划：只读 pom.xml 与扫描结果，把候选、跳过原因、pom 补丁（unified diff）落到 .quality-center/upgrade/<planId>/，不会修改 pom。返回 planId、pomHash、pomHashAfter 与补丁路径；后续 apply 必须带这三个值。',
+      '生成依赖升级计划：只读 pom.xml 与扫描结果，把候选、分组、跳过原因与 pom 补丁（unified diff）落到 .quality-center/upgrade/<planId>/，不会修改 pom。默认只返回分组概览 + 当前首组候选（避免一次列出几十条），要看别的组传 group，要全量传 detail=full。pom 与扫描结果都没变且 plan 未落盘时传 reuse=true 会复用已有计划而不是新建。',
     inputSchema: {
       type: 'object',
       properties: {
         path: PATH_PROP,
-        planId: { type: 'string', description: '自定义计划 ID，缺省按时间生成' }
+        planId: { type: 'string', description: '自定义计划 ID，缺省按时间生成' },
+        group: {
+          type: 'string',
+          enum: ['framework', 'family', 'independent', 'cross-line'],
+          description: '只返回该分组的候选，缺省返回首组（framework）'
+        },
+        detail: { type: 'string', enum: ['summary', 'full'], description: 'full 才返回全部候选与完整补丁预览' },
+        reuse: { type: 'boolean', description: 'pomHash 与 issuesHash 都没变时复用已有计划，默认 true' }
       }
     }
   },
@@ -219,28 +254,18 @@ function asText(result: unknown, isError = false): Record<string, unknown> {
   };
 }
 
-/** 把 Maven 输出里的编译错误拆成结构化条目，AI 不用再从整段尾巴里扒文件和行号 */
-function parseBuildErrors(text: string, limit = 20): { file: string; line: number; column?: number; message: string }[] {
-  const errors: { file: string; line: number; column?: number; message: string }[] = [];
-  const pattern = /\[ERROR\]\s+([^\s\[]+\.java):\[(\d+)(?:,(\d+))?\]\s*(.*)/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null && errors.length < limit) {
-    errors.push({
-      file: match[1],
-      line: Number.parseInt(match[2], 10),
-      column: match[3] ? Number.parseInt(match[3], 10) : undefined,
-      message: match[4]?.trim() ?? ''
-    });
-  }
-  return errors;
-}
-
 async function callTool(name: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const root = path.resolve(
     typeof params.path === 'string' && params.path.trim() ? params.path : process.cwd()
   );
 
   switch (name) {
+    case 'quality_status': {
+      if (!fs.existsSync(root)) {
+        return asText({ error: `目录不存在：${root}` }, true);
+      }
+      return asText(projectStatus(root));
+    }
     case 'quality_scan': {
       const only = Array.isArray(params.only)
         ? (params.only as string[]).filter((item) => item in { checkstyle: 1, gitleaks: 1, trivy: 1, spotbugs: 1 })
@@ -259,7 +284,12 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
           }
         }
       });
-      return asText({ exitCode: scan.exitCode, seconds: Number(scan.seconds.toFixed(1)), ...scan.payload });
+      const digest = digestScan(root, scan.payload, {
+        detail: params.detail === 'full' ? 'full' : 'summary',
+        top: typeof params.top === 'number' ? params.top : undefined,
+        delta: Boolean(params.delta)
+      });
+      return asText({ exitCode: scan.exitCode, seconds: Number(scan.seconds.toFixed(1)), ...digest.body });
     }
     case 'quality_build': {
       const timeoutSec = typeof params.timeoutSec === 'number' ? params.timeoutSec : undefined;
@@ -278,10 +308,11 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         seconds: Number(outcome.seconds.toFixed(1)),
         jars: outcome.jars,
         reason: outcome.tail,
-        errors: parseBuildErrors(outcome.tail),
+        errors: outcome.errors ?? parseBuildErrors(outcome.tail),
+        logFile: outcome.logFile ? path.relative(root, outcome.logFile) : undefined,
         nextStep: outcome.ok
-          ? '产物已就绪：现在调用 quality_scan 可补齐 SpotBugs 与依赖清单'
-          : '构建失败：先按 errors 定向修复（文件/行号已解析），或调用 quality_tools_install 装 mvn'
+          ? '产物已就绪：现在调用 quality_scan(delta=true) 复扫，确认目标 CVE 消失'
+          : `构建失败：errors 已给出文件/行号（共 ${outcome.errors?.length ?? 0} 条），完整日志在 ${outcome.logFile ? path.relative(root, outcome.logFile) : '输出中'}`
       };
       if (timeoutSec && Date.now() - started > timeoutSec * 1000) {
         (result as Record<string, unknown>).note = '超时设置只作提示，实际超时为 30 分钟';
@@ -341,32 +372,56 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         return asText({ error: '还没有扫描结果：先调用 quality_scan（可只跑 trivy）' }, true);
       }
       const customId = typeof params.planId === 'string' && params.planId.trim() ? params.planId.trim() : undefined;
-      const result = createUpgradePlan(root, issues, { planId: customId });
-      const patchPreview = result.patch.length > 2000 ? `${result.patch.slice(0, 2000)}\n…（完整补丁见 patchFile）` : result.patch;
+      const result = createUpgradePlan(root, issues, { planId: customId, reuse: params.reuse !== false });
+      const detail = params.detail === 'full';
+      const requestedGroup = typeof params.group === 'string' ? params.group : undefined;
+      const shownGroup = requestedGroup ?? result.plan.groups[0]?.name;
+      const compact = (item: (typeof result.plan.candidates)[number]): Record<string, unknown> => ({
+        id: item.id,
+        packageName: item.packageName,
+        from: item.from,
+        to: item.to,
+        mode: item.mode,
+        group: item.group,
+        cveCount: item.cveCount,
+        crossLine: item.crossLine,
+        note: item.note ? item.note.slice(0, 120) : undefined
+      });
+      const candidates = detail
+        ? result.plan.candidates
+        : result.plan.candidates.filter((item) => item.group === shownGroup);
       return asText({
         planId: result.plan.planId,
+        reused: result.reused === true,
         schemaVersion: result.plan.schemaVersion,
         pomHash: result.plan.pomHash,
         pomHashAfter: result.plan.pomHashAfter,
-        project: result.plan.project,
-        candidates: result.plan.candidates.map((item) => ({
-          id: item.id,
-          packageName: item.packageName,
-          from: item.from,
-          to: item.to,
-          mode: item.mode,
-          cveCount: item.cveCount,
-          crossLine: item.crossLine,
-          group: item.group,
-          note: item.note
+        project: {
+          javaVersion: result.plan.project.javaVersion,
+          frameworkVersion: result.plan.project.frameworkVersion,
+          frameworkTarget: result.plan.project.frameworkTarget,
+          buildCommand: result.plan.project.buildCommand
+        },
+        groups: result.plan.groups.map((group) => ({
+          name: group.name,
+          label: group.label,
+          count: group.candidates.length,
+          cveCount: group.cveCount
         })),
-        groups: result.plan.groups,
-        skipped: result.plan.skipped,
+        groupShown: shownGroup,
+        candidates: candidates.map((item) => (detail ? item : compact(item))),
+        candidateCount: result.plan.candidates.length,
+        skippedCount: result.plan.skipped.length,
+        skippedTop3: result.plan.skipped.slice(0, 3),
         blockedByPolicy: result.blockedByPolicy,
         planFile: path.relative(root, result.planPath),
         patchFile: path.relative(root, result.patchPath),
-        patchPreview,
-        nextStep: '先审阅 diff，再按 groups 顺序一组一组调用 quality_upgrade_apply（带 planId 与当前 pomHash）；每组写完跑 quality_build，不要手工改 pom'
+        patchPreview: detail
+          ? result.patch.length > 4000
+            ? `${result.patch.slice(0, 4000)}\n…（完整补丁见 patchFile）`
+            : result.patch
+          : undefined,
+        nextStep: `这是 ${String(shownGroup)} 组：审阅后可 apply(group=${String(shownGroup)})；要其他组传 group=，要全量传 detail=full；不要手工改 pom`
       });
     }
     case 'quality_upgrade_apply': {

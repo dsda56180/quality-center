@@ -26,18 +26,21 @@ import {
 import { AgentScanEvent } from './agentApi';
 import { EXTERNAL_TOOLS, ToolId } from './tools';
 import { applyUpgradePlan, checkUpgradePlan, createUpgradePlan, readIssues, revertUpgradePlan } from './upgradePlanFile';
+import { digestScan } from './scanDigest';
+import { projectStatus } from './status';
 import { integrate } from './integrate';
 
 const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 CI 用的无界面接口
 
 用法:
   quality-center scan [目录] [选项]      跑六类扫描，输出结构化结果
+  quality-center status [目录] [--json]  一屏看工具/扫描/升级计划/pom 状态
   quality-center build [目录]            执行 mvn package 生成 target 产物
   quality-center fix [目录] [--write]    应用确定性修复（默认只预览）
   quality-center tools status [--json]   查看外部工具安装状态
   quality-center tools install <id>      自动安装 mvn / gitleaks / trivy
   quality-center report [--json|--md]    复用 .quality-center/issues.json 输出结果
-  quality-center upgrade plan [目录]     生成升级计划（plan.json + pom.diff），不改 pom
+  quality-center upgrade plan [目录]     生成升级计划（plan.json + pom.diff），不改 pom；--reuse 复用同 hash 的计划
   quality-center upgrade apply [目录]    按计划落盘（默认只预览，--write 才写；--group/--only 分批）
   quality-center upgrade check [目录]    校验当前 pom 是否与计划一致（CI 门禁）
   quality-center upgrade revert [目录]   回滚到计划生成前的 pom 快照
@@ -47,6 +50,9 @@ const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 
 
 scan 选项:
   --json                 以 JSON（AgentPayload, schemaVersion=2）输出到 stdout
+  --detail <summary|full> 配合 --json：summary 只给计数 + Top N（默认 full，兼容旧用法）
+  --top <N>              summary 模式返回的问题条数，默认 10
+  --delta                与上一次扫描比较，只回新增/消失数量
   --only <a,b,c>         只跑指定扫描器（checkstyle,gitleaks,trivy,spotbugs）
   --fail-on <级别>       critical|high|medium|low|info|none，命中即退出码 1（默认 high）
   --out <目录>           中间报告目录（默认 <目录>/.quality-center/scans）
@@ -83,7 +89,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const flags: Record<string, string | true> = {};
   const positional: string[] = [];
-  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group']);
+  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group', '--detail', '--top']);
   for (let i = 0; i < argv.length; i += 1) {
     const item = argv[i];
     if (item.startsWith('--')) {
@@ -188,7 +194,23 @@ async function scanCommand(args: Args): Promise<number> {
   }
 
   if (args.flags['--json'] === true) {
-    process.stdout.write(`${JSON.stringify(scan.payload, null, 2)}\n`);
+    const wantsDigest =
+      typeof args.flags['--detail'] === 'string' ||
+      args.flags['--delta'] === true ||
+      typeof args.flags['--top'] === 'string';
+    if (wantsDigest) {
+      const digest = digestScan(root, scan.payload, {
+        detail: args.flags['--detail'] === 'full' ? 'full' : 'summary',
+        top: typeof args.flags['--top'] === 'string' ? Number(args.flags['--top']) : undefined,
+        delta: args.flags['--delta'] === true
+      });
+      process.stdout.write(
+        `${JSON.stringify({ exitCode: scan.exitCode, seconds: Number(scan.seconds.toFixed(1)), ...digest.body }, null, 2)}\n`
+      );
+    } else {
+      // 兼容旧消费者：显式不加 --detail 时仍输出完整 payload
+      process.stdout.write(`${JSON.stringify(scan.payload, null, 2)}\n`);
+    }
   } else {
     const { payload } = scan;
     process.stdout.write(
@@ -225,9 +247,21 @@ async function buildCommand(args: Args): Promise<number> {
     }
   });
   if (!outcome.ok) {
+    const errors = outcome.errors ?? [];
     process.stdout.write(
       `构建失败（退出码 ${outcome.code}，用时 ${outcome.seconds.toFixed(1)} 秒）\n${outcome.tail || '无可用错误输出'}\n`
     );
+    if (errors.length > 0) {
+      process.stdout.write(
+        `编译错误 ${errors.length} 条：${errors
+          .slice(0, 3)
+          .map((item) => `${item.file}:${item.line} ${item.message}`)
+          .join('；')}\n`
+      );
+    }
+    if (outcome.logFile) {
+      process.stdout.write(`完整日志：${path.relative(root, outcome.logFile)}\n`);
+    }
     return 2;
   }
   process.stdout.write(
@@ -338,13 +372,13 @@ async function upgradeCommand(args: Args): Promise<number> {
       progress('没有扫描结果：先执行 scan（或 scan --only trivy），再生成升级计划');
       return 2;
     }
-    const result = createUpgradePlan(root, issues, { planId });
+    const result = createUpgradePlan(root, issues, { planId, reuse: args.flags['--reuse'] === true });
     if (args.flags['--json'] === true) {
       process.stdout.write(`${JSON.stringify(result.plan, null, 2)}\n`);
       return 0;
     }
     const lines: string[] = [
-      `升级计划 ${result.plan.planId}（schemaVersion ${result.plan.schemaVersion}）`,
+      `升级计划 ${result.plan.planId}（schemaVersion ${result.plan.schemaVersion}）${result.reused ? '（复用：pom 与扫描结果未变）' : ''}`,
       `Java ${result.plan.project.javaVersion ?? '未识别'} · 框架目标 ${result.plan.project.frameworkTarget ?? '未声明'}`
     ];
     result.plan.groups.forEach((group) => {
@@ -463,6 +497,32 @@ function integrateCommand(args: Args): number {
   return 0;
 }
 
+async function statusCommand(args: Args): Promise<number> {
+  const root = targetRoot(args);
+  if (!fs.existsSync(root)) {
+    progress(`目录不存在：${root}`);
+    return 2;
+  }
+  const status = projectStatus(root);
+  if (args.flags['--json'] === true) {
+    process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
+    return 0;
+  }
+  const tools = status.tools.map((tool) => `${tool.id}${tool.found ? '✓' : tool.installable ? '✗(可装)' : '✗'}`).join(' ');
+  const scan = status.scan.hasResult
+    ? `扫描 ${String(status.scan.total ?? 0)} 项（${String(status.scan.generatedAt ?? '')}）`
+    : '扫描 尚未执行';
+  const plan = status.upgradePlan
+    ? `计划 ${String(status.upgradePlan.planId)} ${String(status.upgradePlan.state)} ${String(
+        status.upgradePlan.appliedCount ?? 0
+      )}/${String(status.upgradePlan.total ?? 0)}${status.upgradePlan.nextGroup ? `，下一组 ${String(status.upgradePlan.nextGroup)}` : ''}`
+    : '计划 尚未生成';
+  process.stdout.write(
+    [`工具 ${tools}`, scan, plan, `pom ${status.pom.hash || '未找到'}`, `下一步 ${status.nextStep}`].join('\n') + '\n'
+  );
+  return 0;
+}
+
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2));
   if (args.flags['--version'] === true || args.command === 'version') {
@@ -472,6 +532,8 @@ async function main(): Promise<number> {
   switch (args.command) {
     case 'scan':
       return scanCommand(args);
+    case 'status':
+      return statusCommand(args);
     case 'build':
       return buildCommand(args);
     case 'fix':

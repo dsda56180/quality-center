@@ -10,9 +10,11 @@ description: 按 quality-center 的标准化流程完成一次 Java 项目依赖
 
 ## 0. 前置
 
+先调一次 `quality_status`（CLI: `qc status`）拿全局：工具就绪、最近扫描计数、计划分组进度、pom hash。不要分别调 report/check 去猜状态。
+
 ```bash
-node .quality-center/bin/qc.cjs scan . --json --fail-on none   # 或 quality_scan
-node .quality-center/bin/qc.cjs upgrade plan .                 # 只读 pom，产出 plan.json + pom.diff
+node .quality-center/bin/qc.cjs scan . --json --detail summary --top 10   # 只给计数 + Top N（或 quality_scan）
+node .quality-center/bin/qc.cjs upgrade plan . --reuse                    # 同 hash 复用计划，不新建目录
 ```
 
 计划里出现 `frameworkTarget: null` 或 `skipped` 提示「未声明框架目标版本」时：向用户确认该 Java 版本允许的
@@ -63,7 +65,8 @@ node .quality-center/bin/qc.cjs upgrade plan .                 # 只读 pom，�
 # 1) 框架先落地并验证
 node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <当前 pomHash> --group framework --write
 node .quality-center/bin/qc.cjs upgrade check . --plan <planId>        # partial = 还有分组未落盘
-node .quality-center/bin/qc.cjs build .
+node .quality-center/bin/qc.cjs build .                                # 失败只读 errors 的 file/line，全文在 .quality-center/build.log
+node .quality-center/bin/qc.cjs scan . --json --only trivy --delta      # 复扫只看新增/消失，别要全量
 
 # 2) 通过后继续下一组；--hash 用上一步返回的 hashAfter
 node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <上一步 hashAfter> --group family --write

@@ -111,6 +111,13 @@ export async function scanProject(request: ScanRequest): Promise<ScanOutcome> {
   };
 }
 
+export interface BuildError {
+  file: string;
+  line: number;
+  column?: number;
+  message: string;
+}
+
 export interface BuildOutcome {
   ok: boolean;
   code: number;
@@ -118,6 +125,26 @@ export interface BuildOutcome {
   jars: string[];
   /** 失败时的末尾几行原因（已过滤进度条与 ANSI） */
   tail: string;
+  /** 从完整输出解析出的编译错误（文件/行号/列/消息），AI 不用自己扒日志 */
+  errors?: BuildError[];
+  /** 完整构建日志落盘位置 */
+  logFile?: string;
+}
+
+/** 把 Maven 输出拆成结构化编译错误，便于定向修复 */
+export function parseBuildErrors(text: string, limit = 20): BuildError[] {
+  const errors: BuildError[] = [];
+  const pattern = /\[ERROR\]\s+([^\s\[]+\.java):\[(\d+)(?:,(\d+))?\]\s*(.*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null && errors.length < limit) {
+    errors.push({
+      file: match[1],
+      line: Number.parseInt(match[2], 10),
+      column: match[3] ? Number.parseInt(match[3], 10) : undefined,
+      message: match[4]?.trim() ?? ''
+    });
+  }
+  return errors;
 }
 
 export function artifactJars(root: string): string[] {
@@ -164,7 +191,28 @@ export async function buildProject(
   const outcome = await handle.result;
   const seconds = (Date.now() - startedAt) / 1000;
   if (outcome.code !== 0) {
-    return { ok: false, code: outcome.code, seconds, jars: [], tail: tailLines(outcome.stdout, outcome.stderr) };
+    const full = stripAnsi([outcome.stdout, outcome.stderr].filter(Boolean).join('\n'));
+    const errors = parseBuildErrors(full);
+    let logFile: string | undefined;
+    try {
+      const dir = path.join(root, '.quality-center');
+      fs.mkdirSync(dir, { recursive: true });
+      logFile = path.join(dir, 'build.log');
+      // 超大日志只留尾部，避免把磁盘写爆
+      const kept = full.length > 2 * 1024 * 1024 ? full.slice(-2 * 1024 * 1024) : full;
+      fs.writeFileSync(logFile, kept, 'utf8');
+    } catch {
+      logFile = undefined;
+    }
+    return {
+      ok: false,
+      code: outcome.code,
+      seconds,
+      jars: [],
+      tail: tailLines(outcome.stdout, outcome.stderr, 8),
+      errors,
+      logFile
+    };
   }
   return { ok: true, code: 0, seconds, jars: artifactJars(root), tail: '' };
 }

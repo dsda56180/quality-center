@@ -10,7 +10,7 @@
  * 5) integrate 幂等 + 漂移检测
  * 6) MCP tools/list 含升级工具，错误哈希返回 isError
  */
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -183,6 +183,8 @@ async function main() {
     Array.isArray(plan.candidates) &&
       plan.candidates.some((item) => item.groupId === 'org.springframework.boot' && item.mode === 'parent')
   );
+  const reuseRun = run(['upgrade', 'plan', dir, '--reuse', '--json']);
+  check('plan --reuse 复用同 hash 的计划', JSON.parse(reuseRun.out).planId === plan.planId);
   check('pom 未被改动', fs.readFileSync(pomFile, 'utf8') === original);
   check('pom.diff 已生成', fs.existsSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff')));
   check(
@@ -321,6 +323,26 @@ async function main() {
     arguments: { path: dir, planId: plan.planId }
   });
   check('MCP check 返回 applied', checkCall.result?.content?.[0]?.text?.includes('"state": "applied"'));
+
+  const statusCall = await client.request('tools/call', { name: 'quality_status', arguments: { path: dir } });
+  const status = JSON.parse(statusCall.result?.content?.[0]?.text ?? '{}');
+  check('MCP status 带工具状态', Array.isArray(status.tools) && status.tools.length > 0);
+  check('MCP status 带扫描计数', status.scan?.hasResult === true && status.scan?.total === 3);
+  check('MCP status 带计划进度', status.upgradePlan?.state === 'applied');
+
+  const grouped = await client.request('tools/call', {
+    name: 'quality_upgrade_plan',
+    arguments: { path: dir, group: 'framework', reuse: true, top: 1 }
+  });
+  const groupedPlan = JSON.parse(grouped.result?.content?.[0]?.text ?? '{}');
+  check(
+    'MCP plan 默认按组返回',
+    groupedPlan.groupShown === 'framework' &&
+      Array.isArray(groupedPlan.candidates) &&
+      groupedPlan.candidates.every((item) => item.group === 'framework') &&
+      groupedPlan.patchPreview === undefined,
+    JSON.stringify({ group: groupedPlan.groupShown, n: groupedPlan.candidates?.length })
+  );
   client.close();
 
   console.log('8) 分组推进：跨线拒绝 → 逐组落盘 → 回滚');
@@ -383,6 +405,69 @@ async function main() {
     'framework'
   ]);
   check('回滚后可重新推进', replay.code === 0, replay.err.trim());
+
+  console.log('9) scan 摘要：默认不带全量、delta 只比变化');
+  const { digestScan } = await import(pathToFileURL(path.join(ROOT, 'out', 'scanDigest.js')).href);
+  const baseIssue = (over) => ({
+    id: 1,
+    source: 'trivy',
+    severity: 'high',
+    severityLabel: '高危',
+    rule: 'CVE-2024-0001',
+    file: '',
+    abs: '',
+    line: 0,
+    column: 0,
+    message: 'm',
+    zhSummary: '说明',
+    advice: '',
+    fixable: false,
+    package: 'a:b',
+    installedVersion: '1.0.0',
+    fixedVersion: '1.0.1',
+    cvss: 7.5,
+    cwe: [],
+    ...over
+  });
+  const dir3 = prepare();
+  const payloadA = {
+    schemaVersion: '2',
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    projectRoot: dir3,
+    summary: { total: 3 },
+    issues: [baseIssue({ id: 1 }), baseIssue({ id: 2, rule: 'CVE-2' }), baseIssue({ id: 3, rule: 'CVE-3' })],
+    ignored: [],
+    suggestions: [],
+    errors: [],
+    skipped: [],
+    missingTools: [],
+    buildHint: '',
+    files: { issuesJson: '.quality-center/issues.json' },
+    nextActions: []
+  };
+  const digestA = digestScan(dir3, payloadA, { top: 2 });
+  check('summary 不带全量 issues', digestA.body.issues === undefined);
+  check('summary 只给 Top N', digestA.body.top.length === 2 && digestA.body.issueCount === 3);
+  check('摘要提示明细位置', typeof digestA.body.detailHint === 'string' && digestA.body.files?.issuesJson);
+
+  const payloadB = {
+    ...payloadA,
+    generatedAt: '2026-01-02T00:00:00.000Z',
+    summary: { total: 3 },
+    issues: [baseIssue({ id: 1 }), baseIssue({ id: 4, rule: 'CVE-4' }), baseIssue({ id: 5, rule: 'CVE-5' })]
+  };
+  const digestB = digestScan(dir3, payloadB, { delta: true });
+  check('delta 统计新增/消失', digestB.body.delta.added === 2 && digestB.body.delta.removed === 2, JSON.stringify(digestB.body.delta));
+  check('delta 带基线时间', digestB.body.delta.baseline === payloadA.generatedAt);
+
+  const { projectStatus } = await import(pathToFileURL(path.join(ROOT, 'out', 'status.js')).href);
+  const statusDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qc-status-'));
+  fs.writeFileSync(path.join(statusDir, 'pom.xml'), '<project/>');
+  const projectStat = projectStatus(statusDir);
+  check('status 一屏给出 pom 哈希', typeof projectStat.pom.hash === 'string' && projectStat.pom.hash.startsWith('sha256:'));
+  check('status 列出三个工具', projectStat.tools.length === 3);
+  check('status 未扫描时 hasResult=false', projectStat.scan.hasResult === false);
+  fs.rmSync(statusDir, { recursive: true, force: true });
 
   console.log(`\n结果：${passed} 通过，${failures.length} 失败`);
   if (failures.length) {

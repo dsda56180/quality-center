@@ -178,12 +178,17 @@ code --install-extension dsda56180.quality-center
 
 | 工具 | 作用 |
 | --- | --- |
-| `quality_scan` | 六类扫描，返回 `AgentPayload`（schemaVersion 2）与 `exitCode` |
-| `quality_build` | `mvn -B -DskipTests package`，返回 jar 列表与失败原因 |
+| `quality_status` | 一次返回工具就绪、最近扫描计数、升级计划分组进度与 pom hash，开局先调它 |
+| `quality_scan` | 六类扫描；默认摘要 + Top N（`detail=full` 才给全量），`delta=true` 只比新增/消失 |
+| `quality_build` | `mvn -B -DskipTests package`，失败时给结构化 `errors`（文件/行号）与 `.quality-center/build.log` |
 | `quality_tools_status` | 工具是否就绪、解析到的路径、能否自动安装 |
 | `quality_tools_install` | 按当前系统自动安装 mvn / gitleaks / trivy |
 | `quality_report` | 读取已落盘的 issues.json / report.md，不重新扫描 |
 | `quality_fix` | 确定性修复，默认只预览，`write=true` 才落盘 |
+| `quality_upgrade_plan` | 出 Plan V3；默认只回分组概览 + 首组候选（`group=` 取别的组，`detail=full` 要全量），`reuse=true` 同 hash 复用计划 |
+| `quality_upgrade_apply` | 按 `planId + pomHash` 分批落盘（`group` / `packages`），跨线需 `allowCrossLine` |
+| `quality_upgrade_check` | pending / partial / applied / drift，CI 与 AI 收尾都用它 |
+| `quality_upgrade_revert` | 回到计划前快照；pom 被手工改过时拒绝 |
 
 服务端在 stdin/stdout 上收发换行分隔的 JSON-RPC，stdout 只放协议消息；请求串行处理，避免并发拉起多份 mvn/trivy。
 
@@ -191,6 +196,8 @@ code --install-extension dsda56180.quality-center
 
 ```bash
 node <扩展目录>/out/cli.js scan --json --fail-on high   # 六类扫描，JSON 到 stdout
+node <扩展目录>/out/cli.js scan --json --detail summary --top 10   # 只给计数 + Top N
+node <扩展目录>/out/cli.js scan --json --only trivy --delta        # 复扫只看新增/消失
 node <扩展目录>/out/cli.js scan --only trivy,spotbugs   # 只跑指定扫描器
 node <扩展目录>/out/cli.js scan --only qcsec            # 只跑配置层规则（无需 mvn/trivy）
 node <扩展目录>/out/cli.js scan --only astgrep          # 只跑 AST 语义规则（无需 mvn/trivy）

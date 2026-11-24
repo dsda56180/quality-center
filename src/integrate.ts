@@ -63,6 +63,8 @@ const RULE_BODY = [
 const NESTED_GITIGNORE = [
   '# 由 quality-center 生成：本目录只提交策略、启动器与技能，其余是运行产物',
   'issues.json',
+  'scan-digest.json',
+  'build.log',
   'report.md',
   'report.sarif',
   'scans/',

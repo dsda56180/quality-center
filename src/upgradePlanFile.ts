@@ -74,6 +74,8 @@ export interface UpgradePlanFile {
   };
   pomHash: string;
   pomHashAfter: string;
+  /** 生成计划时 issues.json 的哈希：与 pomHash 一起用于判断计划能否复用 */
+  issuesHash?: string;
   candidates: PlanCandidate[];
   /** 分组汇总，按推荐推进顺序排列 */
   groups: { name: PlanGroup; label: string; cveCount: number; candidates: string[] }[];
@@ -90,6 +92,8 @@ export interface CreatePlanResult {
   patch: string;
   /** 策略拒绝的依赖，直接展示给用户 */
   blockedByPolicy: string[];
+  /** pom 与扫描结果都没变，复用了已有计划 */
+  reused?: boolean;
 }
 
 export interface ApplyPlanResult {
@@ -359,12 +363,26 @@ function newPlanId(): string {
 }
 
 /** 生成计划：只读 pom，不写 pom；产物写到 .quality-center/upgrade/<planId>/ */
-export function createUpgradePlan(root: string, issues: Issue[], options?: { planId?: string }): CreatePlanResult {
+export function createUpgradePlan(
+  root: string,
+  issues: Issue[],
+  options?: { planId?: string; reuse?: boolean }
+): CreatePlanResult {
   const pomFile = path.join(root, 'pom.xml');
   if (!fs.existsSync(pomFile)) {
     throw new Error(`未找到 pom.xml：${pomFile}`);
   }
   const original = fs.readFileSync(pomFile, 'utf8');
+  const pomHash = hashText(original);
+  const issuesHash = hashText(JSON.stringify(issues));
+
+  // 复用：pom 与扫描结果都没变、且计划还没落盘时，不新建带时间戳的目录
+  if (options?.reuse && !options?.planId) {
+    const reusable = findReusablePlan(root, pomHash, issuesHash);
+    if (reusable) {
+      return reusable;
+    }
+  }
   const loaded = loadPolicy(root, original);
   const context: UpgradeContext = { frameworkTarget: loaded.frameworkTarget };
   const raw = planUpgrades(root, issues, context);
@@ -455,8 +473,9 @@ export function createUpgradePlan(root: string, issues: Issue[], options?: { pla
       policySources: loaded.sources,
       buildCommand: ['mvn', ...buildCommandArgs(loaded.policy, { skipTests: true })]
     },
-    pomHash: hashText(original),
+    pomHash,
     pomHashAfter: hashText(text),
+    issuesHash,
     candidates,
     groups,
     skipped,
@@ -486,6 +505,44 @@ export function createUpgradePlan(root: string, issues: Issue[], options?: { pla
   fs.writeFileSync(patchPath, patch, 'utf8');
 
   return { plan, planDir: dir, planPath, patchPath, patch, blockedByPolicy };
+}
+
+/** 找到一份与当前 pom / 扫描结果完全一致、且仍未落盘的计划 */
+function findReusablePlan(root: string, pomHash: string, issuesHash: string): CreatePlanResult | undefined {
+  const dir = planRoot(root);
+  if (!fs.existsSync(dir)) {
+    return undefined;
+  }
+  const ids = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()
+    .reverse();
+  for (const id of ids) {
+    const planPath = path.join(dir, id, 'plan.json');
+    const patchPath = path.join(dir, id, 'pom.diff');
+    if (!fs.existsSync(planPath) || !fs.existsSync(patchPath)) {
+      continue;
+    }
+    try {
+      const plan = JSON.parse(fs.readFileSync(planPath, 'utf8')) as UpgradePlanFile;
+      if (plan.pomHash === pomHash && plan.issuesHash === issuesHash) {
+        return {
+          plan,
+          planDir: path.join(dir, id),
+          planPath,
+          patchPath,
+          patch: fs.readFileSync(patchPath, 'utf8'),
+          blockedByPolicy: [],
+          reused: true
+        };
+      }
+    } catch {
+      // 坏文件跳过
+    }
+  }
+  return undefined;
 }
 
 /** 读取计划：显式 planId 或目录下最新的一份 */
