@@ -239,6 +239,8 @@ npm run rules:matrix        # 跑 fixtures/ 下的正例与反例，输出 PASS 
 
 FindSecBugs 只能通过 pom 的 `<build><plugins>` 生效——`spotbugs-maven-plugin` 的 `plugins` 参数没有 userProperty，`-Dspotbugs.plugins` 实际传不进去（0.17.19 及以前就是这样静默失效的）。现在插件会复制一份 `.qc-spotbugs-pom.xml` 注入后再运行、结束即删；项目自己配了 FindSecBugs 时不动原文件；非 Maven 工程降级为核心规则并把原因作为扫描异常上报。多模块工程目前只注入根 pom。
 
+SpotBugs 失败时会给出真正的原因（`Failed to execute goal` 段落或 POM/依赖解析的关键行），完整 Maven 输出写到 `.quality-center/logs/spotbugs.log`；若报告目录写不进去（只读、被杀软/编辑器占用、路径异常），会自动把占位文件挪到 `.bak-<时间戳>` 后重跑，仍失败则把报告改写到 `.quality-center/spotbugs-out`。
+
 ## 隐私与安全
 
 - 所有扫描均在本机执行，不上传任何代码

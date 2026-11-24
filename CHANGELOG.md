@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.27.1
+
+**SpotBugs 失败不再是一句废话，并且能自己从「报告写不进去」里恢复。**
+
+- 错误信息改为提取真正的原因：优先 `Failed to execute goal` 那一段，其次 POM 解析 / 依赖解析 / 文件创建失败的关键行；去掉 `Picked up JAVA_TOOL_OPTIONS`、下载进度、`[Help N]` 链接与重复的 `[ERROR] [ERROR]` 前缀
+- 完整 Maven 输出落盘到 `.quality-center/logs/spotbugs.log`，面板里只给结论 + 日志路径，不再截断成 5 行
+- 报告写失败（`Cannot create file` / `FileResourceCreationException` / 拒绝访问）时自动重试：先把 `target/spotbugsXml.xml` 上的占位目录挪成 `.bak-<时间戳>` 再原路重跑；仍失败则把报告改写到 `.quality-center/spotbugs-out`，成功就正常出结果
+- 报告路径改用 `stat().isFile()` 判断，`target/spotbugsXml.xml` 被误建成目录时不再抛 `EISDIR` 打断整轮扫描
+
 ## 0.27.0
 
 **一次性补齐高危语义规则与配置层规则，并把「能力开关」交到使用者手里。**
