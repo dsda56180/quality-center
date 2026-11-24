@@ -455,7 +455,14 @@ export function getHtml(nonce: string): string {
   </div>
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
-  const SRC_LABEL = { checkstyle: '代码质量', gitleaks: '密钥泄露', trivy: '依赖漏洞', spotbugs: '静态缺陷' };
+  const SRC_LABEL = {
+    checkstyle: '代码质量',
+    gitleaks: '密钥泄露',
+    trivy: '依赖漏洞',
+    spotbugs: '静态缺陷',
+    qcsec: '配置安全',
+    astgrep: '语义规则'
+  };
   const CAT_LABEL = {
     SECURITY: '安全漏洞',
     CORRECTNESS: '逻辑正确性',

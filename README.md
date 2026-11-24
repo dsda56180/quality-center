@@ -79,8 +79,12 @@ npm run release -- --no-wait   # 建完 Release 就返回，不等 Actions
 ```bash
 npm install
 npm run compile
-npm run package
+npm run pack                      # 可复现打包；也可加 --version 0.27.8 指定版本
 ```
+
+`npm run pack` 会在临时目录里只装运行时依赖、补齐各平台 `@ast-grep` 二进制，并在打包后校验 VSIX 里确实带上了
+AST 引擎。不要用 `vsce package --no-dependencies` 出开发包：它会把 `node_modules` 整体排除，装上后
+「语义规则」整类跳过，面板提示 `AST 引擎不可用（Cannot find module '@ast-grep/napi'）`。
 
 然后安装生成的 `.vsix`（文件名里的版本号以当前 `package.json` 为准）：
 
@@ -215,6 +219,7 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 - `apply` 必须带 `pomHash`，哈希不一致直接拒绝；落盘结果还要与计划的 `pomHashAfter` 一致，保证预览即结果。
 - `plan.json` 的候选项带 `crossLine` 标记，跨大版本（如 poi 4.x → 5.x）会明确提示人工确认。
 - `integrate` 生成 `.quality-center/bin/qc.cjs` 启动器，MCP 配置统一指向它，扩展升级后不需要改各编辑器的配置；已适配 Trae / Cursor / VS Code / Copilot 与 Claude 风格 `.mcp.json`，并维护 `AGENTS.md` 托管块。
+- 生成物按“目录集中”原则组织：策略、启动器、Skill、扫描结果与升级计划全在 `.quality-center/` 内，并自带 `.gitignore`（只放行策略/启动器/Skill）；编辑器目录里只留 ≤10 行的指针文件。默认只为检测到的编辑器生成，额外要 `AGENTS.md` 与根 `.mcp.json` 时加 `--fallback`。
 
 约定：stdout 只放结果，进度和日志全部走 stderr；退出码 `0` 通过、`1` 有达到阈值的问题（默认 `high`）、`2` 工具缺失或执行失败、`3` 用法错误。扫描结果同时写 `.quality-center/issues.json` 与 `report.md`。
 

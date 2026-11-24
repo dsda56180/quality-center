@@ -270,7 +270,8 @@
     "rules:matrix": "node scripts/rule-matrix.mjs",
     "release": "node scripts/release.mjs",
     "publish:ovsx": "ovsx publish",
-    "verify:upgrade": "node scripts/verify-upgrade.mjs"
+    "verify:upgrade": "node scripts/verify-upgrade.mjs",
+    "pack": "node scripts/pack.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
