@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.25.0
+
+**继续把「能检出来但不误报」的边界往外推：Druid 面板组合、上传路径穿越、SQL 的 format/append 写法。**
+
+- 新增 `SEC_DRUID_STATVIEW_NO_USERNAME`：`stat-view-servlet.enabled=true` 但没配 `login-username`，账号会回落到内置 admin
+- 新增 `SEC_DRUID_STATVIEW_RESET_ENABLED`：`stat-view-servlet.reset-enable=true`，可被用来重置/清空监控数据
+- 新增 `AST_PATH_TRAVERSAL_UPLOAD`：`getOriginalFilename()` 直接出现在 `new File` / `Files.write` / `transferTo` 等落盘调用里；用 `FilenameUtils.getName` / `Path.getFileName` / `UUID.randomUUID` 收敛的不报
+- `AST_SQL_STRING_CONCAT` 扩展两种常见写法：
+  - `String.format("select ... %s", name)`：SQL 模板字面量 + 非字面量参数
+  - 同方法内 `StringBuilder/StringBuffer` 逐段 `append` 后把整体交给执行调用；只有全字面量 append 的不报
+- 靶场新增 6 个用例（3 正例 + 3 个误报回归集合），矩阵扩到 **51 个用例，PASS 51 / GAP 0 / FAIL 0**
+- 文档：`docs/RULES.md` 补 3 行并更新局限（builder 跨方法/先 append 再 replace 会漏报、路径穿越先存变量会漏报），README/配置项说明同步为 18 条配置 + 2 条 Mapper + 12 条 AST
+
 ## 0.24.0
 
 **补齐「路径从配置注入」的判定，并把 Nacos 密钥与 Gateway 端点纳入配置层。**

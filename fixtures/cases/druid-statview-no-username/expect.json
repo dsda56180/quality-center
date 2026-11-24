@@ -1,0 +1,10 @@
+{
+  "id": "druid-statview-no-username",
+  "title": "Druid 面板开启但只配了口令，账号回落到默认 admin",
+  "layer": "config",
+  "cwe": "CWE-1392",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["SEC_DRUID_STATVIEW_NO_USERNAME"], "mustNotFire": [] },
+  "target": { "rules": ["SEC_DRUID_STATVIEW_NO_USERNAME"], "owner": "qcsec", "status": "covered" }
+}

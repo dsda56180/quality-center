@@ -1,0 +1,10 @@
+{
+  "id": "ast-upload-path-traversal",
+  "title": "getOriginalFilename 直接拼落盘路径并 transferTo",
+  "layer": "code",
+  "cwe": "CWE-22",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_PATH_TRAVERSAL_UPLOAD"], "mustNotFire": [] },
+  "target": { "rules": ["AST_PATH_TRAVERSAL_UPLOAD"], "owner": "astgrep", "status": "covered" }
+}

@@ -1,0 +1,9 @@
+spring:
+  datasource:
+    druid:
+      stat-view-servlet:
+        enabled: true
+        allow: 127.0.0.1
+        login-username: ${DRUID_USER}
+        login-password: ${DRUID_PASSWORD}
+        reset-enable: true

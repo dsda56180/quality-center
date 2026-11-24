@@ -198,6 +198,39 @@ const RULES: RuleDef[] = [
     }
   },
   {
+    id: 'SEC_DRUID_STATVIEW_NO_USERNAME',
+    cwe: 'CWE-1392',
+    match: (index) => {
+      const enabled = index.byKeySuffix(/stat-view-servlet\.enabled$/)[0];
+      const username = index.byKeySuffix(/stat-view-servlet\.login-username$/)[0];
+      if (!enabled || enabled.value.toLowerCase() !== 'true' || username) {
+        return [];
+      }
+      return [
+        {
+          line: enabled.line,
+          severity: 'medium' as Severity,
+          message: 'Druid 面板已开启但未配置 login-username，账号会回落到内置默认的 admin',
+          advice: '显式配置 `login-username`（从环境变量注入）并配合强口令；面板只用内网访问。'
+        }
+      ];
+    }
+  },
+  {
+    id: 'SEC_DRUID_STATVIEW_RESET_ENABLED',
+    cwe: 'CWE-770',
+    match: (index) =>
+      index
+        .byKeySuffix(/stat-view-servlet\.reset-enable$/)
+        .filter((entry) => entry.value.toLowerCase() === 'true')
+        .map((entry) => ({
+          line: entry.line,
+          severity: 'medium' as Severity,
+          message: 'Druid 面板开启了 reset-enable，可被用来重置统计数据/清空监控数据，干扰排障与审计',
+          advice: '生产环境设置 `reset-enable: false`；确需重置时由运维在受控入口操作。'
+        }))
+  },
+  {
     id: 'SEC_DRUID_STATVIEW_PUBLIC_BIND',
     cwe: 'CWE-668',
     match: (index) =>

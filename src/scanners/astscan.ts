@@ -447,6 +447,97 @@ function checkSqlConcat(file: string, root: SgNode): Issue[] {
       )
     );
   }
+
+  // String.format("... where id = %s", id)：格式串里是 SQL、参数来自变量，等价于拼接
+  const SQL_KEYWORD = /select|insert\s+into|update\s+\w+\s+set|delete\s+from|order\s+by|where|from\s+\w+/i;
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    if (name !== 'format') {
+      continue;
+    }
+    const receiver = call.field('object')?.text() ?? '';
+    if (!/^(String|java\.lang\.String)$/.test(receiver)) {
+      continue;
+    }
+    const args = call.field('arguments');
+    if (!args) {
+      continue;
+    }
+    const formatLiteral = args.findAll({ rule: { kind: 'string_literal' } })[0];
+    if (!formatLiteral || !SQL_KEYWORD.test(formatLiteral.text())) {
+      continue;
+    }
+    const risky =
+      args.findAll({ rule: { kind: 'identifier' } }).length > 0 ||
+      args.findAll({ rule: { kind: 'method_invocation' } }).length > 0;
+    if (!risky) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_SQL_STRING_CONCAT',
+        'high',
+        'CWE-89',
+        'String.format 用来拼装 SQL，占位替换后的语句仍由外部输入参与构造（注入）',
+        '改用参数化查询；`String.format` 只适合拼日志与提示，不要拼 SQL。'
+      )
+    );
+  }
+
+  // StringBuilder/StringBuffer 逐段 append，最后把整个对象交给执行调用
+  const literalArgs = (text: string): boolean =>
+    /^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*)["']?\s*\)$/.test(text) ||
+    /^\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*,\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*(?:,\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*)*\)$/.test(
+      text
+    );
+  for (const method of root.findAll({ rule: { kind: 'method_declaration' } })) {
+    const body = method.field('body');
+    if (!body) {
+      continue;
+    }
+    const builders: string[] = [];
+    for (const declaration of body.findAll({ rule: { kind: 'local_variable_declaration' } })) {
+      const type = declaration.field('type')?.text() ?? '';
+      const variable = declaration.field('declarator')?.field('name')?.text();
+      if (variable && /^(StringBuilder|StringBuffer|java\.lang\.(StringBuilder|StringBuffer))$/.test(type)) {
+        builders.push(variable);
+      }
+    }
+    if (builders.length === 0) {
+      continue;
+    }
+    for (const call of body.findAll({ rule: { kind: 'method_invocation' } })) {
+      const name = call.field('name')?.text();
+      if (!name || !SQL_APIS.has(name)) {
+        continue;
+      }
+      const argsText = call.field('arguments')?.text() ?? '';
+      const used = builders.find((item) => new RegExp(`\\b${item}\\b`).test(argsText));
+      if (!used) {
+        continue;
+      }
+      const appends = body
+        .findAll({ rule: { kind: 'method_invocation' } })
+        .filter((item) => item.field('name')?.text() === 'append' && (item.field('object')?.text() ?? '') === used);
+      const risky = appends.some((item) => !literalArgs(item.field('arguments')?.text() ?? ''));
+      if (!risky || appends.length === 0) {
+        continue;
+      }
+      issues.push(
+        makeIssue(
+          file,
+          call,
+          'AST_SQL_STRING_CONCAT',
+          'high',
+          'CWE-89',
+          `${used} 逐段 append 拼出 SQL 后直接执行，拼接进来的变量会改写语句语义（注入）`,
+          '改用 PreparedStatement 占位符；确需动态片段（表名/排序）时用白名单枚举校验，不要 append 外部输入。'
+        )
+      );
+    }
+  }
   return issues;
 }
 
@@ -794,6 +885,55 @@ function checkJspOutput(file: string, text: string): Issue[] {
   return issues;
 }
 
+/** 规则 12：上传文件名直接参与构造落盘路径（路径穿越） */
+const PATH_GUARD = /FilenameUtils\.(getName|getBaseName)|Paths\.get[\s\S]*\.getFileName|getFileName\s*\(\)|UUID\.randomUUID|sanitizeFileName|normalize\s*\(/i;
+
+function checkUploadPathTraversal(file: string, root: SgNode): Issue[] {
+  const issues: Issue[] = [];
+  const candidates: SgNode[] = [];
+  for (const creation of root.findAll({ rule: { kind: 'object_creation_expression' } })) {
+    if (/new\s+(java\.io\.)?(File|FileOutputStream|FileWriter|Paths?)\s*\(/.test(creation.text())) {
+      candidates.push(creation);
+    }
+  }
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text();
+    const receiver = call.field('object')?.text() ?? '';
+    if (!name) {
+      continue;
+    }
+    if (/^(write|writeString|copy|createFile|newOutputStream)$/.test(name) && /Files|Paths/.test(receiver)) {
+      candidates.push(call);
+    } else if (name === 'transferTo') {
+      candidates.push(call);
+    }
+  }
+  const seen = new Set<string>();
+  for (const node of candidates) {
+    const text = node.text();
+    if (!/getOriginalFilename\s*\(/.test(text) || PATH_GUARD.test(text)) {
+      continue;
+    }
+    const key = `${node.range().start.line}:${node.range().start.column}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    issues.push(
+      makeIssue(
+        file,
+        node,
+        'AST_PATH_TRAVERSAL_UPLOAD',
+        'high',
+        'CWE-22',
+        '上传文件的原始文件名（getOriginalFilename）直接用于构造落盘路径，可用 `../` 写到任意目录甚至覆盖文件',
+        '只取文件名部分（`FilenameUtils.getName` / `Path.getFileName`）并做允许字符白名单，落盘目录用服务端固定路径 + 随机文件名。'
+      )
+    );
+  }
+  return issues;
+}
+
 export async function scanAstgrep(root: string): Promise<AstscanResult> {
   const ast = loadEngine();
   if (!ast) {
@@ -838,6 +978,7 @@ export async function scanAstgrep(root: string): Promise<AstscanResult> {
     issues.push(...checkMybatisAnnotationSql(file, treeRoot));
     issues.push(...checkSsrf(file, treeRoot));
     issues.push(...checkXssWriter(file, treeRoot));
+    issues.push(...checkUploadPathTraversal(file, treeRoot));
   }
 
   // 模板层：Thymeleaf 的 th:utext 与 JSP 脚本输出，同样属于「源码可控 + 不转义」

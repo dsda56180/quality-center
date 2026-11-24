@@ -1,0 +1,13 @@
+{
+  "id": "druid-statview-reset-enable",
+  "title": "Druid 面板开启 reset-enable，可被用来清空监控数据",
+  "layer": "config",
+  "cwe": "CWE-770",
+  "scanners": ["qcsec"],
+  "requiresBuild": false,
+  "expect": {
+    "mustFire": ["SEC_DRUID_STATVIEW_RESET_ENABLED"],
+    "mustNotFire": ["SEC_DRUID_STATVIEW_NO_USERNAME", "SEC_DRUID_STATVIEW_DEFAULT_PASSWORD"]
+  },
+  "target": { "rules": ["SEC_DRUID_STATVIEW_RESET_ENABLED"], "owner": "qcsec", "status": "covered" }
+}

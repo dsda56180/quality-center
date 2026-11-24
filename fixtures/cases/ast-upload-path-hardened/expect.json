@@ -1,0 +1,10 @@
+{
+  "id": "ast-upload-path-hardened",
+  "title": "用 FilenameUtils.getName 取文件名后再落盘（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-22",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["AST_PATH_TRAVERSAL_UPLOAD"] },
+  "target": { "rules": [], "owner": "astgrep", "status": "covered" }
+}
