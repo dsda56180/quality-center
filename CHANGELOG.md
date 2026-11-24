@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.2
+
+**修掉面板里两个 `undefined` 标签页。**
+
+- 面板内联脚本的 `SRC_LABEL` 只登记了四个旧来源，0.18 之后新增的 `qcsec`、`astgrep` 没有补上：`updateTabs()` 用 `SRC_LABEL[key] + 计数` 重写标签文字，分组标题也用同一张表，于是出现「undefined 19」「undefined 13」与「UNDEFINED (13)」分组。现补齐为「配置安全」「语义规则」，两处都加了 `|| key` 兜底，后续新增来源不会再渲染成 undefined
+- 顺带更新设置弹窗里 qcsec / astgrep 的能力说明（原描述只列了少量规则）
+
 ## 0.27.1
 
 **SpotBugs 失败不再是一句废话，并且能自己从「报告写不进去」里恢复。**
