@@ -88,6 +88,13 @@ private class DeepFixPreviewDialog(
     private var renderToken = 0
     /** 预处理结果缓存（key = 路径）：统一 / 并排共用同一份行数据，切模式零成本 */
     private val dataCache = LinkedHashMap<String, RenderData>()
+    /** 原生模式的内容缓存（key = 路径）：避免重复读文件、重复套 patch */
+    private val nativeCache = LinkedHashMap<String, NativeTexts>()
+    /**
+     * 点击防抖：连续快速点多个文件时只在最后一次点击 120ms 后真正渲染。
+     * 原生面板每次 setRequest 都会重建编辑器，逐次渲染会把 EDT 排满，表现出来就是"越点越卡"。
+     */
+    private val renderAlarm = com.intellij.util.Alarm(com.intellij.util.Alarm.ThreadToUse.SWING_THREAD, null)
 
     private val unifiedList = DiffRowList()
     private val leftList = DiffRowList()
@@ -237,7 +244,7 @@ private class DeepFixPreviewDialog(
         center.add(modeBar, BorderLayout.SOUTH)
         root.add(center, BorderLayout.CENTER)
 
-        info.files.firstOrNull()?.let { showFile(it) }
+        info.files.firstOrNull()?.let { showFile(it, immediate = true) }
         prebuildAll()
         return root
     }
@@ -261,7 +268,7 @@ private class DeepFixPreviewDialog(
         if (unifiedList.model.size == 0) renderActive()
     }
 
-    private fun showFile(path: String) {
+    private fun showFile(path: String, immediate: Boolean = false) {
         if (selectedPath == path) return
         selectedPath = path
         baseBackground?.let { bg ->
@@ -270,7 +277,12 @@ private class DeepFixPreviewDialog(
                 other.panel.repaint()
             }
         }
-        renderActive()
+        if (immediate) renderActive() else scheduleRender()
+    }
+
+    private fun scheduleRender() {
+        renderAlarm.cancelAllRequests()
+        renderAlarm.addRequest({ renderActive() }, RENDER_DEBOUNCE_MS)
     }
 
     private fun diffLines(path: String): List<String>? = fileDiffs.entries
@@ -317,10 +329,20 @@ private class DeepFixPreviewDialog(
 
     /** 对话框一打开就在后台把所有文件的行数据预处理好，之后点任何条目都是纯内存赋值 */
     private fun prebuildAll() {
-        if (useNative) return
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
+        if (useNative) {
+            val pending = info.files.filter { synchronized(nativeCache) { nativeCache[it] } == null }
+            if (pending.isEmpty()) return
+            app.executeOnPooledThread {
+                pending.forEach { path ->
+                    val texts = runCatching { buildNativeTexts(path, diffLines(path)) }.getOrNull() ?: return@forEach
+                    synchronized(nativeCache) { nativeCache[path] = texts }
+                }
+            }
+            return
+        }
         val pending = info.files.filter { synchronized(dataCache) { dataCache[it] } == null }
         if (pending.isEmpty()) return
-        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
         app.executeOnPooledThread {
             pending.forEach { path ->
                 val data = try {
@@ -368,6 +390,11 @@ private class DeepFixPreviewDialog(
      */
     private fun renderNative(path: String) {
         val token = ++renderToken
+        val cached = synchronized(nativeCache) { nativeCache[path] }
+        if (cached != null) {
+            showNative(path, cached)
+            return
+        }
         val lines = diffLines(path)
         val app = com.intellij.openapi.application.ApplicationManager.getApplication()
         app.executeOnPooledThread {
@@ -376,6 +403,10 @@ private class DeepFixPreviewDialog(
             } catch (_: Throwable) {
                 null
             } ?: return@executeOnPooledThread
+            synchronized(nativeCache) {
+                if (nativeCache.size >= 200) nativeCache.keys.firstOrNull()?.let { nativeCache.remove(it) }
+                nativeCache[path] = texts
+            }
             app.invokeLater({
                 if (token != renderToken) return@invokeLater
                 showNative(path, texts)
@@ -560,6 +591,8 @@ private class DeepFixPreviewDialog(
     }
 
     override fun dispose() {
+        renderAlarm.cancelAllRequests()
+        runCatching { renderAlarm.dispose() }
         runCatching { nativePanel?.dispose() }
         nativePanel = null
         super.dispose()
@@ -768,6 +801,7 @@ private class DeepFixPreviewDialog(
         const val CARD_NATIVE = "native"
         const val MAX_DIFF_LINES = 1200
         const val MAX_LINE_LENGTH = 400
+        const val RENDER_DEBOUNCE_MS = 120
     }
 }
 
