@@ -25,7 +25,7 @@ import {
 } from './agentOps';
 import { AgentScanEvent } from './agentApi';
 import { EXTERNAL_TOOLS, ToolId } from './tools';
-import { applyUpgradePlan, checkUpgradePlan, createUpgradePlan, readIssues } from './upgradePlanFile';
+import { applyUpgradePlan, checkUpgradePlan, createUpgradePlan, readIssues, revertUpgradePlan } from './upgradePlanFile';
 import { integrate } from './integrate';
 
 const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 CI 用的无界面接口
@@ -38,8 +38,9 @@ const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 
   quality-center tools install <id>      自动安装 mvn / gitleaks / trivy
   quality-center report [--json|--md]    复用 .quality-center/issues.json 输出结果
   quality-center upgrade plan [目录]     生成升级计划（plan.json + pom.diff），不改 pom
-  quality-center upgrade apply [目录]    按计划落盘（默认只预览，--write 才写）
+  quality-center upgrade apply [目录]    按计划落盘（默认只预览，--write 才写；--group/--only 分批）
   quality-center upgrade check [目录]    校验当前 pom 是否与计划一致（CI 门禁）
+  quality-center upgrade revert [目录]   回滚到计划生成前的 pom 快照
   quality-center integrate [目录]        写入策略/启动器/Skill 与各编辑器适配器
   quality-center mcp                     以 MCP(stdio) 服务端运行，供 agent 直接调用
   quality-center help | version
@@ -82,7 +83,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const flags: Record<string, string | true> = {};
   const positional: string[] = [];
-  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash']);
+  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group']);
   for (let i = 0; i < argv.length; i += 1) {
     const item = argv[i];
     if (item.startsWith('--')) {
@@ -346,9 +347,12 @@ async function upgradeCommand(args: Args): Promise<number> {
       `升级计划 ${result.plan.planId}（schemaVersion ${result.plan.schemaVersion}）`,
       `Java ${result.plan.project.javaVersion ?? '未识别'} · 框架目标 ${result.plan.project.frameworkTarget ?? '未声明'}`
     ];
+    result.plan.groups.forEach((group) => {
+      lines.push(`分组 ${group.name}（${group.label}）：${group.candidates.length} 项，覆盖 ${group.cveCount} 条`);
+    });
     result.plan.candidates.forEach((item) => {
       lines.push(
-        `  [${item.id}] ${item.packageName} ${item.from} → ${item.to}（${item.mode}，覆盖 ${item.cveCount} 条）` +
+        `  [${item.id}] ${item.packageName} ${item.from} → ${item.to}（${item.mode}，${item.group}，覆盖 ${item.cveCount} 条）` +
           `${item.crossLine ? '  ⚠ 跨大版本，需人工确认' : ''}`
       );
     });
@@ -358,7 +362,7 @@ async function upgradeCommand(args: Args): Promise<number> {
     }
     lines.push(`计划：${path.relative(root, result.planPath)}`);
     lines.push(`补丁：${path.relative(root, result.patchPath)}（${result.patch.split('\n').filter((line) => line.startsWith('+') && !line.startsWith('+++')).length} 行新增）`);
-    lines.push('下一步：upgrade apply --plan <planId> 预览 diff；确认后加 --write 落盘');
+    lines.push('下一步：upgrade apply --group framework --plan <planId> --write 一组一组推进；每组后跑 upgrade check');
     process.stdout.write(`${lines.join('\n')}\n`);
     return 0;
   }
@@ -366,7 +370,22 @@ async function upgradeCommand(args: Args): Promise<number> {
   if (action === 'apply') {
     const write = args.flags['--write'] === true;
     const expectedHash = typeof args.flags['--hash'] === 'string' ? String(args.flags['--hash']) : undefined;
-    const outcome = applyUpgradePlan(root, { planId, write, expectedHash });
+    const group = typeof args.flags['--group'] === 'string' ? (String(args.flags['--group']) as never) : undefined;
+    const packages =
+      typeof args.flags['--only'] === 'string'
+        ? String(args.flags['--only'])
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : undefined;
+    const outcome = applyUpgradePlan(root, {
+      planId,
+      write,
+      expectedHash,
+      packages,
+      group,
+      allowCrossLine: args.flags['--allow-cross-line'] === true
+    });
     if (args.flags['--json'] === true) {
       process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
       return outcome.ok ? 0 : 2;
@@ -382,7 +401,9 @@ async function upgradeCommand(args: Args): Promise<number> {
     }
     process.stdout.write(
       `已按计划 ${outcome.planId} 写回 pom.xml：${outcome.changed.length} 处改动（${outcome.hashAfter}）\n` +
-        '下一步：upgrade check 校验 → 构建门禁 → scan --only trivy 复扫\n'
+        (outcome.partial
+          ? `还有未落盘的分组，下一组：${outcome.nextGroup ?? '无'}（带 --group ${outcome.nextGroup} --hash ${outcome.hashAfter}）\n`
+          : '全部候选已落盘：upgrade check 确认 applied → 构建门禁 → scan --only trivy 复扫\n')
     );
     return 0;
   }
@@ -390,11 +411,28 @@ async function upgradeCommand(args: Args): Promise<number> {
   if (action === 'check') {
     const outcome = checkUpgradePlan(root, planId);
     process.stdout.write(`${outcome.ok ? '✓' : '✗'} ${outcome.state}：${outcome.message}\n`);
+    if (outcome.total !== undefined) {
+      process.stdout.write(`  进度 ${outcome.appliedCount ?? 0}/${outcome.total}${outcome.nextGroup ? `，下一组 ${outcome.nextGroup}` : ''}\n`);
+    }
     process.stdout.write(`  期望 ${outcome.expectedHash}\n  实际 ${outcome.actualHash}\n`);
     return outcome.ok ? 0 : 1;
   }
 
-  progress(`未知子命令：upgrade ${action}（可选 plan / apply / check）`);
+  if (action === 'revert') {
+    const outcome = revertUpgradePlan(root, planId);
+    if (args.flags['--json'] === true) {
+      process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
+      return outcome.ok ? 0 : 2;
+    }
+    if (!outcome.ok) {
+      progress(outcome.reason ?? '回滚失败');
+      return 2;
+    }
+    process.stdout.write(`已回滚计划 ${outcome.planId}：pom.xml 恢复到计划前快照（${outcome.hashAfter}）\n`);
+    return 0;
+  }
+
+  progress(`未知子命令：upgrade ${action}（可选 plan / apply / check / revert）`);
   return 3;
 }
 

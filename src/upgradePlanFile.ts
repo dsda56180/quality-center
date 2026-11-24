@@ -12,6 +12,7 @@ import * as path from 'path';
 import { Issue } from './model';
 import {
   applyUpgrade,
+  isFrameworkManaged,
   planUpgrades,
   UpgradeCandidate,
   UpgradeContext,
@@ -20,6 +21,18 @@ import {
 import { buildCommandArgs, inferFrameworkVersion, loadPolicy } from './upgradePolicy';
 
 export const PLAN_SCHEMA_VERSION = '3';
+
+/** 候选分组：按风险与联动关系排队，AI/CI 一组一组推进，失败可二分 */
+export type PlanGroup = 'framework' | 'family' | 'independent' | 'cross-line';
+
+export const PLAN_GROUP_ORDER: PlanGroup[] = ['framework', 'family', 'independent', 'cross-line'];
+
+export const PLAN_GROUP_LABEL: Record<PlanGroup, string> = {
+  framework: '框架升级',
+  family: '框架族对齐',
+  independent: '独立依赖',
+  'cross-line': '跨大版本（需人工确认）'
+};
 
 export interface PlanCandidate {
   id: string;
@@ -37,6 +50,8 @@ export interface PlanCandidate {
   affects?: string[];
   /** 跨大版本（如 poi 4.x → 5.x）：必须人工确认，不能当同线补丁处理 */
   crossLine: boolean;
+  /** 推进顺序所属分组 */
+  group: PlanGroup;
 }
 
 export interface PlanSkipped {
@@ -60,6 +75,8 @@ export interface UpgradePlanFile {
   pomHash: string;
   pomHashAfter: string;
   candidates: PlanCandidate[];
+  /** 分组汇总，按推荐推进顺序排列 */
+  groups: { name: PlanGroup; label: string; cveCount: number; candidates: string[] }[];
   skipped: PlanSkipped[];
   gates: { name: string; command: string[]; expectation: string }[];
   patchFile: string;
@@ -88,15 +105,34 @@ export interface ApplyPlanResult {
   reason?: string;
   hashBefore: string;
   hashAfter: string;
+  /** 本次实际落盘的包名 */
+  applied?: string[];
+  /** 只应用了部分候选（按组/按包推进） */
+  partial?: boolean;
+  /** 下一个建议推进的分组，已全部应用时为空 */
+  nextGroup?: PlanGroup;
+  /** 本次涉及跨大版本候选，需 allowCrossLine 才允许写 */
+  crossLine?: string[];
+}
+
+export interface RevertPlanResult {
+  ok: boolean;
+  planId: string;
+  hashBefore: string;
+  hashAfter: string;
+  reason?: string;
 }
 
 export interface CheckPlanResult {
   ok: boolean;
   planId: string;
-  state: 'pending' | 'applied' | 'drift';
+  state: 'pending' | 'partial' | 'applied' | 'drift';
   message: string;
   expectedHash: string;
   actualHash: string;
+  appliedCount?: number;
+  total?: number;
+  nextGroup?: PlanGroup;
 }
 
 export function hashText(text: string): string {
@@ -112,6 +148,17 @@ export function isCrossLine(from: string, to: string): boolean {
   const a = majorOf(from);
   const b = majorOf(to);
   return a !== b;
+}
+
+/** 候选分组：框架先走，框架族跟着 BOM 对齐，独立依赖其次，跨大版本最后且需人工确认 */
+function groupOf(candidate: UpgradeCandidate, crossLine: boolean): PlanGroup {
+  if (crossLine) {
+    return 'cross-line';
+  }
+  if (candidate.groupId === 'org.springframework.boot') {
+    return 'framework';
+  }
+  return isFrameworkManaged(candidate.packageName) ? 'family' : 'independent';
 }
 
 /** 读 .quality-center/issues.json；兼容 AgentPayload 形态与其它产出方的字段命名（package/currentVersion） */
@@ -352,6 +399,7 @@ export function createUpgradePlan(root: string, issues: Issue[], options?: { pla
       return;
     }
     text = applied.text;
+    const crossLine = isCrossLine(candidate.from, candidate.to);
     candidates.push({
       id: `c${candidates.length + 1}`,
       packageName: candidate.packageName,
@@ -366,9 +414,27 @@ export function createUpgradePlan(root: string, issues: Issue[], options?: { pla
       note: candidate.note,
       property: candidate.property,
       affects: candidate.affects,
-      crossLine: isCrossLine(candidate.from, candidate.to)
+      crossLine,
+      group: groupOf(candidate, crossLine)
     });
   });
+
+  // 按分组排队：框架 → 框架族 → 独立依赖 → 跨大版本；组内 CVE 多的先来
+  candidates.sort(
+    (a, b) =>
+      PLAN_GROUP_ORDER.indexOf(a.group) - PLAN_GROUP_ORDER.indexOf(b.group) || b.cveCount - a.cveCount
+  );
+  const groups = PLAN_GROUP_ORDER.filter((name) => candidates.some((item) => item.group === name)).map(
+    (name) => {
+      const items = candidates.filter((item) => item.group === name);
+      return {
+        name,
+        label: PLAN_GROUP_LABEL[name],
+        cveCount: items.reduce((sum, item) => sum + item.cveCount, 0),
+        candidates: items.map((item) => item.packageName)
+      };
+    }
+  );
 
   const patch = unifiedDiff(original, text);
   const planId = options?.planId ?? newPlanId();
@@ -392,6 +458,7 @@ export function createUpgradePlan(root: string, issues: Issue[], options?: { pla
     pomHash: hashText(original),
     pomHashAfter: hashText(text),
     candidates,
+    groups,
     skipped,
     gates: [
       {
@@ -461,91 +528,236 @@ function toCandidate(plan: UpgradePlanFile, item: PlanCandidate): UpgradeCandida
   };
 }
 
-/** 应用计划：默认只预览；write=true 时原子写回并校验落盘结果哈希 */
+/** 每一步落盘的记录：按组/按包推进时保留完整轨迹，便于 check 与 revert */
+interface PlanStep {
+  at: string;
+  hashBefore: string;
+  hashAfter: string;
+  packages: string[];
+  group?: PlanGroup;
+}
+
+function stepFile(root: string, planId: string): string {
+  return path.join(planRoot(root), planId, 'steps.json');
+}
+
+function readSteps(root: string, planId: string): PlanStep[] {
+  const file = stepFile(root, planId);
+  if (!fs.existsSync(file)) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as PlanStep[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeJson(file: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+/** 应用计划：默认只预览；write=true 时原子写回。支持按分组 / 按包推进，失败可二分定位 */
 export function applyUpgradePlan(
   root: string,
-  options: { planId?: string; write: boolean; expectedHash?: string }
+  options: {
+    planId?: string;
+    write: boolean;
+    expectedHash?: string;
+    /** 只应用这些包（packageName 或候选 id） */
+    packages?: string[];
+    /** 只应用某个分组 */
+    group?: PlanGroup;
+    /** 跨大版本候选默认拒绝写入，显式确认后才允许 */
+    allowCrossLine?: boolean;
+  }
 ): ApplyPlanResult {
   const plan = readUpgradePlan(root, options.planId);
   const pomFile = path.join(root, 'pom.xml');
   const original = fs.readFileSync(pomFile, 'utf8');
   const hashBefore = hashText(original);
+  const mode: ApplyPlanResult['mode'] = options.write ? 'write' : 'dry-run';
+  const fail = (reason: string, extra?: Partial<ApplyPlanResult>): ApplyPlanResult => ({
+    ok: false,
+    mode,
+    planId: plan.planId,
+    changed: [],
+    patch: '',
+    reason,
+    hashBefore,
+    hashAfter: hashBefore,
+    ...extra
+  });
 
   if (options.expectedHash && options.expectedHash !== hashBefore) {
+    return fail(`pom 已被改动（当前 ${hashBefore}，期望 ${options.expectedHash}）；请重新执行 upgrade plan`);
+  }
+
+  const steps = readSteps(root, plan.planId);
+  const knownHashes = [plan.pomHash, ...steps.map((step) => step.hashAfter)];
+  if (!knownHashes.includes(hashBefore)) {
+    return fail(
+      `当前 pom 与计划的任何已知状态都不一致（${hashBefore}）；可能被手工改过，请重新执行 upgrade plan`
+    );
+  }
+
+  let selected = plan.candidates;
+  if (options.packages && options.packages.length > 0) {
+    const wanted = new Set(options.packages);
+    selected = plan.candidates.filter((item) => wanted.has(item.packageName) || wanted.has(item.id));
+    if (selected.length === 0) {
+      return fail(`指定的包不在这份计划里：${options.packages.join(', ')}`);
+    }
+  }
+  if (options.group) {
+    if (!PLAN_GROUP_ORDER.includes(options.group)) {
+      return fail(`未知分组：${options.group}（可选 ${PLAN_GROUP_ORDER.join(' / ')}）`);
+    }
+    selected = selected.filter((item) => item.group === options.group);
+    if (selected.length === 0) {
+      return fail(`分组 ${options.group} 里没有候选`);
+    }
+  }
+
+  const appliedBefore = new Set(steps.flatMap((step) => step.packages));
+  selected = selected.filter((item) => !appliedBefore.has(item.packageName));
+  const remainingGroups = PLAN_GROUP_ORDER.filter((name) =>
+    plan.candidates.some((item) => item.group === name && !appliedBefore.has(item.packageName))
+  );
+  if (selected.length === 0) {
     return {
-      ok: false,
-      mode: options.write ? 'write' : 'dry-run',
+      ok: true,
+      mode,
       planId: plan.planId,
       changed: [],
       patch: '',
-      reason: `pom 已被改动（当前 ${hashBefore}，期望 ${options.expectedHash}）；请重新执行 upgrade plan`,
+      applied: [],
+      partial: remainingGroups.length > 0,
+      reason: '选中的候选已经在上一步落盘，无需重复写入',
       hashBefore,
-      hashAfter: hashBefore
+      hashAfter: hashBefore,
+      nextGroup: remainingGroups[0]
     };
   }
-  if (hashBefore !== plan.pomHash) {
-    return {
-      ok: false,
-      mode: options.write ? 'write' : 'dry-run',
-      planId: plan.planId,
-      changed: [],
-      patch: '',
-      reason: `计划已过期：pom 当前哈希 ${hashBefore} 与计划 ${plan.pomHash} 不一致`,
-      hashBefore,
-      hashAfter: hashBefore
-    };
+
+  const crossLinePkgs = selected.filter((item) => item.crossLine).map((item) => item.packageName);
+  if (crossLinePkgs.length > 0 && !options.allowCrossLine) {
+    return fail(
+      `包含跨大版本候选：${crossLinePkgs.join(', ')}；确认兼容性后传 allowCrossLine=true 或用计划逐个人工处理`,
+      { crossLine: crossLinePkgs }
+    );
   }
 
   let text = original;
   const changed: ApplyPlanResult['changed'] = [];
-  for (const item of plan.candidates) {
+  for (const item of selected) {
     const applied = applyUpgrade(text, toCandidate(plan, item));
     if (!applied) {
-      return {
-        ok: false,
-        mode: options.write ? 'write' : 'dry-run',
-        planId: plan.planId,
-        changed: [],
-        patch: '',
-        reason: `无法定位 ${item.packageName}，已中止且未改动 pom`,
-        hashBefore,
-        hashAfter: hashBefore
-      };
+      return fail(`无法定位 ${item.packageName}，已中止且未改动 pom`);
     }
     text = applied.text;
     applied.changes.forEach((change) => changed.push({ label: change.label, old: change.old, new: change.new }));
   }
 
   const hashAfter = hashText(text);
-  if (hashAfter !== plan.pomHashAfter) {
-    return {
-      ok: false,
-      mode: options.write ? 'write' : 'dry-run',
-      planId: plan.planId,
-      changed: [],
-      patch: '',
-      reason: `应用结果与计划不一致（${hashAfter} ≠ ${plan.pomHashAfter}）`,
-      hashBefore,
-      hashAfter: hashBefore
-    };
+  const wholePlan = appliedBefore.size === 0 && selected.length === plan.candidates.length;
+  if (wholePlan && hashAfter !== plan.pomHashAfter) {
+    return fail(`应用结果与计划不一致（${hashAfter} ≠ ${plan.pomHashAfter}）`);
   }
 
   const patch = unifiedDiff(original, text);
+  const appliedNames = selected.map((item) => item.packageName);
+  const cumulative = [...appliedBefore, ...appliedNames];
+  const nextGroup = PLAN_GROUP_ORDER.find((name) =>
+    plan.candidates.some((item) => item.group === name && !cumulative.includes(item.packageName))
+  );
+  const partial = !!nextGroup;
+
   if (options.write) {
+    const dir = path.join(planRoot(root), plan.planId);
+    const backup = path.join(dir, 'pom.before.xml');
+    if (!fs.existsSync(backup)) {
+      fs.writeFileSync(backup, original, 'utf8');
+    }
     const tmp = `${pomFile}.quality-center.tmp`;
     fs.writeFileSync(tmp, text, 'utf8');
     fs.renameSync(tmp, pomFile);
-    const record = {
-      planId: plan.planId,
-      appliedAt: new Date().toISOString(),
-      hashBefore,
-      hashAfter,
-      candidates: plan.candidates.map((item) => `${item.packageName} ${item.from} → ${item.to}`)
-    };
-    fs.writeFileSync(path.join(planRoot(root), plan.planId, 'applied.json'), `${JSON.stringify(record, null, 2)}\n`);
+
+    const nextSteps = [
+      ...steps,
+      {
+        at: new Date().toISOString(),
+        hashBefore,
+        hashAfter,
+        packages: appliedNames,
+        group: options.group
+      }
+    ];
+    writeJson(stepFile(root, plan.planId), nextSteps);
+
+    if (!partial) {
+      writeJson(path.join(dir, 'applied.json'), {
+        planId: plan.planId,
+        appliedAt: new Date().toISOString(),
+        hashBefore: plan.pomHash,
+        hashAfter,
+        candidates: plan.candidates.map((item) => `${item.packageName} ${item.from} → ${item.to}`)
+      });
+    }
   }
 
-  return { ok: true, mode: options.write ? 'write' : 'dry-run', planId: plan.planId, changed, patch, hashBefore, hashAfter };
+  return {
+    ok: true,
+    mode,
+    planId: plan.planId,
+    changed,
+    patch,
+    hashBefore,
+    hashAfter,
+    applied: appliedNames,
+    partial,
+    nextGroup,
+    crossLine: crossLinePkgs.length > 0 ? crossLinePkgs : undefined
+  };
+}
+
+/** 回滚：把 pom 恢复到计划生成前的快照；当前内容必须与最后一次落盘一致才允许回滚 */
+export function revertUpgradePlan(root: string, planId?: string): RevertPlanResult {
+  const plan = readUpgradePlan(root, planId);
+  const dir = path.join(planRoot(root), plan.planId);
+  const backupFile = path.join(dir, 'pom.before.xml');
+  const pomFile = path.join(root, 'pom.xml');
+  const current = fs.readFileSync(pomFile, 'utf8');
+  const hashBefore = hashText(current);
+  if (!fs.existsSync(backupFile)) {
+    return { ok: false, planId: plan.planId, hashBefore, hashAfter: hashBefore, reason: '没有可回滚的快照（计划尚未落盘）' };
+  }
+  const steps = readSteps(root, plan.planId);
+  const lastApplied = steps.length > 0 ? steps[steps.length - 1].hashAfter : plan.pomHashAfter;
+  if (hashBefore !== lastApplied) {
+    return {
+      ok: false,
+      planId: plan.planId,
+      hashBefore,
+      hashAfter: hashBefore,
+      reason: `pom 已被手工改动（当前 ${hashBefore}，最后一次落盘 ${lastApplied}）；请先确认改动再回滚`
+    };
+  }
+  const restored = fs.readFileSync(backupFile, 'utf8');
+  const tmp = `${pomFile}.quality-center.tmp`;
+  fs.writeFileSync(tmp, restored, 'utf8');
+  fs.renameSync(tmp, pomFile);
+  writeJson(path.join(dir, 'reverted.json'), {
+    planId: plan.planId,
+    revertedAt: new Date().toISOString(),
+    from: hashBefore,
+    to: hashText(restored)
+  });
+  fs.rmSync(path.join(dir, 'applied.json'), { force: true });
+  writeJson(stepFile(root, plan.planId), []);
+  return { ok: true, planId: plan.planId, hashBefore, hashAfter: hashText(restored) };
 }
 
 /** CI 门禁：计划是否仍然有效、当前 pom 是否与计划一致 */
@@ -554,6 +766,13 @@ export function checkUpgradePlan(root: string, planId?: string): CheckPlanResult
   const pomFile = path.join(root, 'pom.xml');
   const current = fs.readFileSync(pomFile, 'utf8');
   const actualHash = hashText(current);
+  const total = plan.candidates.length;
+  const steps = readSteps(root, plan.planId);
+  const appliedCount = new Set(steps.flatMap((step) => step.packages)).size;
+  const nextGroup = PLAN_GROUP_ORDER.find((name) => {
+    const applied = new Set(steps.flatMap((step) => step.packages));
+    return plan.candidates.some((item) => item.group === name && !applied.has(item.packageName));
+  });
   if (actualHash === plan.pomHash) {
     return {
       ok: false,
@@ -561,17 +780,36 @@ export function checkUpgradePlan(root: string, planId?: string): CheckPlanResult
       state: 'pending',
       message: '计划已生成但尚未落盘（pom 仍是升级前内容）',
       expectedHash: plan.pomHash,
-      actualHash
+      actualHash,
+      appliedCount: 0,
+      total,
+      nextGroup
     };
   }
   if (actualHash !== plan.pomHashAfter) {
+    // 部分应用也是合法中间态：pom 必须等于某一步落盘后的哈希
+    if (steps.some((step) => step.hashAfter === actualHash)) {
+      return {
+        ok: false,
+        planId: plan.planId,
+        state: 'partial',
+        message: `部分应用：已落盘 ${appliedCount}/${total} 个候选，下一组 ${nextGroup ? PLAN_GROUP_LABEL[nextGroup] : '无'}`,
+        expectedHash: plan.pomHashAfter,
+        actualHash,
+        appliedCount,
+        total,
+        nextGroup
+      };
+    }
     return {
       ok: false,
       planId: plan.planId,
       state: 'drift',
       message: 'pom 与计划不一致：可能被手工改动，或需要重新生成计划',
       expectedHash: plan.pomHashAfter,
-      actualHash
+      actualHash,
+      appliedCount,
+      total
     };
   }
   const appliedFile = path.join(planRoot(root), plan.planId, 'applied.json');
@@ -582,7 +820,9 @@ export function checkUpgradePlan(root: string, planId?: string): CheckPlanResult
       state: 'drift',
       message: 'pom 内容与计划一致，但缺少 applied.json 落盘记录（可能被手工写入）',
       expectedHash: plan.pomHashAfter,
-      actualHash
+      actualHash,
+      appliedCount,
+      total
     };
   }
   return {
@@ -591,6 +831,8 @@ export function checkUpgradePlan(root: string, planId?: string): CheckPlanResult
     state: 'applied',
     message: 'pom 与计划一致，落盘记录齐全',
     expectedHash: plan.pomHashAfter,
-    actualHash
+    actualHash,
+    appliedCount,
+    total
   };
 }

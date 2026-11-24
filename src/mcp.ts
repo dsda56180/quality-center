@@ -19,7 +19,7 @@ import {
 } from './agentOps';
 import { ToolId, EXTERNAL_TOOLS } from './tools';
 import { AgentScanEvent } from './agentApi';
-import { applyUpgradePlan, createUpgradePlan, readIssues } from './upgradePlanFile';
+import { applyUpgradePlan, checkUpgradePlan, createUpgradePlan, readIssues, revertUpgradePlan } from './upgradePlanFile';
 
 interface RpcRequest {
   jsonrpc: '2.0';
@@ -160,16 +160,54 @@ const TOOLS: ToolDef[] = [
   {
     name: 'quality_upgrade_apply',
     description:
-      '按计划落盘 pom：必须传 planId 与 pomHash（计划生成时的哈希），哈希不一致会拒绝写入，避免会话中途改过 pom 时误覆盖。默认只返回 diff 预览，write=true 才写回，并校验落盘结果与计划的 pomHashAfter 一致。',
+      '按计划落盘 pom：必须传 planId 与 pomHash（当前 pom 的哈希），不一致会拒绝写入。默认只返回 diff 预览，write=true 才写回。支持按分组（group）或按包（packages）分批推进：一组写完跑一次构建，失败容易定位；跨大版本候选默认拒绝，需显式 allowCrossLine=true。',
     inputSchema: {
       type: 'object',
       properties: {
         path: PATH_PROP,
         planId: { type: 'string', description: '计划 ID' },
-        pomHash: { type: 'string', description: '生成计划时返回的 pomHash（含 sha256: 前缀）' },
-        write: { type: 'boolean', description: '是否真正写回 pom.xml，默认 false（仅预览）' }
+        pomHash: { type: 'string', description: '当前 pom 的哈希（含 sha256: 前缀），由 plan 或上一次 apply 返回' },
+        write: { type: 'boolean', description: '是否真正写回 pom.xml，默认 false（仅预览）' },
+        group: {
+          type: 'string',
+          enum: ['framework', 'family', 'independent', 'cross-line'],
+          description: '只应用该分组，按 framework → family → independent → cross-line 顺序推进'
+        },
+        packages: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '只应用这些包（packageName 或候选 id），与 group 同时给出时取交集'
+        },
+        allowCrossLine: {
+          type: 'boolean',
+          description: '允许写入跨大版本候选，默认 false（会被拒绝并返回包名）'
+        }
       },
       required: ['planId', 'pomHash']
+    }
+  },
+  {
+    name: 'quality_upgrade_check',
+    description:
+      '校验升级计划与 pom 的当前状态：pending（未落盘）/ partial（已落部分分组）/ applied（完整落盘）/ drift（被手工改动或与计划不一致）。CI 门禁与 AI 收尾都应调它，不要凭感觉判断成功。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: PATH_PROP,
+        planId: { type: 'string', description: '计划 ID，缺省取最新一份计划' }
+      }
+    }
+  },
+  {
+    name: 'quality_upgrade_revert',
+    description:
+      '回滚某个计划的落盘：把 pom 恢复到计划生成前的快照（.quality-center/upgrade/<planId>/pom.before.xml）。当前 pom 必须与最后一次落盘一致才允许回滚；手工改过会拒绝并说明原因。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: PATH_PROP,
+        planId: { type: 'string', description: '计划 ID，缺省取最新一份计划' }
+      }
     }
   }
 ];
@@ -179,6 +217,22 @@ function asText(result: unknown, isError = false): Record<string, unknown> {
     content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
     isError
   };
+}
+
+/** 把 Maven 输出里的编译错误拆成结构化条目，AI 不用再从整段尾巴里扒文件和行号 */
+function parseBuildErrors(text: string, limit = 20): { file: string; line: number; column?: number; message: string }[] {
+  const errors: { file: string; line: number; column?: number; message: string }[] = [];
+  const pattern = /\[ERROR\]\s+([^\s\[]+\.java):\[(\d+)(?:,(\d+))?\]\s*(.*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null && errors.length < limit) {
+    errors.push({
+      file: match[1],
+      line: Number.parseInt(match[2], 10),
+      column: match[3] ? Number.parseInt(match[3], 10) : undefined,
+      message: match[4]?.trim() ?? ''
+    });
+  }
+  return errors;
 }
 
 async function callTool(name: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -224,9 +278,10 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         seconds: Number(outcome.seconds.toFixed(1)),
         jars: outcome.jars,
         reason: outcome.tail,
+        errors: parseBuildErrors(outcome.tail),
         nextStep: outcome.ok
           ? '产物已就绪：现在调用 quality_scan 可补齐 SpotBugs 与依赖清单'
-          : '构建失败：先按 reason 修复，或调用 quality_tools_install 装 mvn'
+          : '构建失败：先按 errors 定向修复（文件/行号已解析），或调用 quality_tools_install 装 mvn'
       };
       if (timeoutSec && Date.now() - started > timeoutSec * 1000) {
         (result as Record<string, unknown>).note = '超时设置只作提示，实际超时为 30 分钟';
@@ -302,38 +357,88 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
           mode: item.mode,
           cveCount: item.cveCount,
           crossLine: item.crossLine,
+          group: item.group,
           note: item.note
         })),
+        groups: result.plan.groups,
         skipped: result.plan.skipped,
         blockedByPolicy: result.blockedByPolicy,
         planFile: path.relative(root, result.planPath),
         patchFile: path.relative(root, result.patchPath),
         patchPreview,
-        nextStep: '审阅 diff 后调用 quality_upgrade_apply（带 planId 与 pomHash）；不要手工改 pom'
+        nextStep: '先审阅 diff，再按 groups 顺序一组一组调用 quality_upgrade_apply（带 planId 与当前 pomHash）；每组写完跑 quality_build，不要手工改 pom'
       });
     }
     case 'quality_upgrade_apply': {
       const planId = String(params.planId ?? '');
       const expectedHash = String(params.pomHash ?? '');
       if (!planId || !expectedHash) {
-        return asText({ error: 'planId 与 pomHash 必填（都由 quality_upgrade_plan 返回）' }, true);
+        return asText({ error: 'planId 与 pomHash 必填（pomHash 传当前 pom 的哈希）' }, true);
       }
       const write = Boolean(params.write);
-      const outcome = applyUpgradePlan(root, { planId, write, expectedHash });
+      const packages =
+        Array.isArray(params.packages) && params.packages.length > 0
+          ? (params.packages as string[]).map((item) => String(item))
+          : undefined;
+      const group = typeof params.group === 'string' ? (params.group as never) : undefined;
+      const outcome = applyUpgradePlan(root, {
+        planId,
+        write,
+        expectedHash,
+        packages,
+        group,
+        allowCrossLine: Boolean(params.allowCrossLine)
+      });
       if (!outcome.ok) {
-        return asText({ planId, ok: false, reason: outcome.reason }, true);
+        return asText(
+          { planId, ok: false, reason: outcome.reason, crossLine: outcome.crossLine },
+          true
+        );
       }
       return asText({
         planId: outcome.planId,
         mode: outcome.mode,
         ok: true,
+        applied: outcome.applied,
+        partial: outcome.partial,
+        nextGroup: outcome.nextGroup,
         changed: outcome.changed,
         hashAfter: outcome.hashAfter,
         patch: write ? undefined : outcome.patch,
         nextStep: write
-          ? '已写入 pom：调用 quality_build 跑构建门禁，再 quality_scan --only trivy 复扫并确认目标 CVE 消失'
+          ? outcome.partial
+            ? `本组已落盘：先跑 quality_build 门禁，通过后再应用 ${outcome.nextGroup ?? '剩余'} 组；失败可调用 quality_upgrade_revert 回滚`
+            : '全部候选已落盘：跑 quality_build 后 quality_scan --only trivy 复扫，并用 quality_upgrade_check 确认 applied'
           : '这是预览：确认 diff 无误后传 write=true 落盘'
       });
+    }
+    case 'quality_upgrade_check': {
+      const planId = typeof params.planId === 'string' && params.planId.trim() ? params.planId.trim() : undefined;
+      const outcome = checkUpgradePlan(root, planId);
+      return asText({
+        ...outcome,
+        nextStep:
+          outcome.state === 'applied'
+            ? '已完整落盘：可运行构建与复扫验收'
+            : outcome.state === 'partial'
+              ? `还有 ${(outcome.total ?? 0) - (outcome.appliedCount ?? 0)} 个候选未落盘，下一组 ${outcome.nextGroup ?? ''}`
+              : outcome.state === 'pending'
+                ? '计划尚未落盘：调用 quality_upgrade_apply 应用'
+                : 'pom 已偏离计划：重新执行 quality_upgrade_plan 或人工核对'
+      }, outcome.state === 'drift');
+    }
+    case 'quality_upgrade_revert': {
+      const planId = typeof params.planId === 'string' && params.planId.trim() ? params.planId.trim() : undefined;
+      const outcome = revertUpgradePlan(root, planId);
+      return asText(
+        {
+          ...outcome,
+          nextStep: outcome.ok
+            ? '已恢复到计划前快照：确认代码可编译，再重新规划'
+            : '回滚被拒绝：先确认 pom 的手工改动'
+        },
+        !outcome.ok
+      );
     }
     default:
       return asText({ error: `未知工具：${name}` }, true);

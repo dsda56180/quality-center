@@ -2,14 +2,31 @@
   "name": "quality-center-agent-kit",
   "publisher": "dsda56180",
   "extensionId": "dsda56180.quality-center",
-  "description": "quality-center 的 agent 接口包：MCP 服务端 + 无界面 CLI + 四个可直接加载的 Skill，用于代码质量、密钥泄露、依赖漏洞(CVE)与字节码静态缺陷扫描。",
+  "description": "quality-center 的 agent 接口包：MCP 服务端 + 无界面 CLI + 五个可直接加载的 Skill，用于代码质量、密钥泄露、依赖漏洞(CVE)与字节码静态缺陷扫描。",
   "cli": {
     "runtime": "node",
     "entry": "out/cli.js",
     "invoke": "node <扩展目录>/out/cli.js <command>",
-    "commands": ["scan", "build", "fix", "tools status", "tools install", "report", "upgrade plan", "upgrade apply", "upgrade check", "integrate", "mcp", "version"],
+    "commands": [
+      "scan",
+      "build",
+      "fix",
+      "tools status",
+      "tools install",
+      "report",
+      "upgrade plan",
+      "upgrade apply",
+      "upgrade check",
+      "upgrade revert",
+      "integrate",
+      "mcp",
+      "version"
+    ],
     "payloadSchema": "2",
-    "outputs": [".quality-center/issues.json", ".quality-center/report.md"],
+    "outputs": [
+      ".quality-center/issues.json",
+      ".quality-center/report.md"
+    ],
     "exitCodes": {
       "0": "通过（没有达到 --fail-on 阈值的问题）",
       "1": "有达到阈值的问题",
@@ -20,17 +37,52 @@
   "mcp": {
     "transport": "stdio",
     "command": "node",
-    "args": ["<扩展目录>/out/cli.js", "mcp"],
+    "args": [
+      "<扩展目录>/out/cli.js",
+      "mcp"
+    ],
     "protocolVersion": "2024-11-05",
     "tools": [
-      { "name": "quality_scan", "purpose": "六类扫描（含 qcsec 配置安全与 astgrep 语义规则），返回 AgentPayload(schemaVersion 2) 与 exitCode" },
-      { "name": "quality_build", "purpose": "mvn -B -DskipTests package，返回 jar 列表与失败原因" },
-      { "name": "quality_tools_status", "purpose": "外部工具是否就绪、路径、能否自动安装" },
-      { "name": "quality_tools_install", "purpose": "按当前系统自动安装 mvn / gitleaks / trivy" },
-      { "name": "quality_report", "purpose": "读取已落盘的 issues.json / report.md" },
-      { "name": "quality_fix", "purpose": "确定性修复，默认只预览，write=true 才落盘" },
-      { "name": "quality_upgrade_plan", "purpose": "生成升级计划 Plan V3（候选/skipped/pomHash/pom.diff），只读 pom" },
-      { "name": "quality_upgrade_apply", "purpose": "按 planId + pomHash 落盘补丁，哈希不符即拒绝，write 才写文件" }
+      {
+        "name": "quality_scan",
+        "purpose": "六类扫描（含 qcsec 配置安全与 astgrep 语义规则），返回 AgentPayload(schemaVersion 2) 与 exitCode"
+      },
+      {
+        "name": "quality_build",
+        "purpose": "mvn -B -DskipTests package，返回 jar 列表、失败原因与结构化 errors（文件/行号）"
+      },
+      {
+        "name": "quality_tools_status",
+        "purpose": "外部工具是否就绪、路径、能否自动安装"
+      },
+      {
+        "name": "quality_tools_install",
+        "purpose": "按当前系统自动安装 mvn / gitleaks / trivy"
+      },
+      {
+        "name": "quality_report",
+        "purpose": "读取已落盘的 issues.json / report.md"
+      },
+      {
+        "name": "quality_fix",
+        "purpose": "确定性修复，默认只预览，write=true 才落盘"
+      },
+      {
+        "name": "quality_upgrade_plan",
+        "purpose": "生成升级计划 Plan V3（候选/skipped/pomHash/pom.diff），只读 pom"
+      },
+      {
+        "name": "quality_upgrade_apply",
+        "purpose": "按 planId + pomHash 分批落盘（group/packages），跨线需 allowCrossLine，write 才写文件"
+      },
+      {
+        "name": "quality_upgrade_check",
+        "purpose": "校验计划状态：pending/partial/applied/drift，CI 与 AI 收尾都用它"
+      },
+      {
+        "name": "quality_upgrade_revert",
+        "purpose": "回滚到计划前快照，当前 pom 与最后落盘不一致时拒绝"
+      }
     ]
   },
   "skills": [

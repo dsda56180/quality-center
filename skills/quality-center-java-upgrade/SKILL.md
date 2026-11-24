@@ -55,20 +55,41 @@ node .quality-center/bin/qc.cjs upgrade plan .                 # 只读 pom，�
 只有策略允许（`allowNextFrameworkLine: true`）时才讨论跨大版本。此类改动一律要求：跑全部单测、
 给出破坏性变更清单、单独分支，不与 CVE 修复混在一个提交里。
 
-## 3. 落盘与验收
+## 3. 落盘与验收（按组推进，禁止一次全量）
+
+计划的 `candidates` 带 `group`，按 `framework → family → independent → cross-line` 依次推进，一组一验证：
 
 ```bash
-node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <pomHash>            # 预览 diff
-node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <pomHash> --write    # 落盘
-node .quality-center/bin/qc.cjs upgrade check . --plan <planId>                             # 必须为 0
-node .quality-center/bin/qc.cjs build .                                                     # 构建门禁
-node .quality-center/bin/qc.cjs scan . --only trivy --json --fail-on none                   # 复扫
+# 1) 框架先落地并验证
+node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <当前 pomHash> --group framework --write
+node .quality-center/bin/qc.cjs upgrade check . --plan <planId>        # partial = 还有分组未落盘
+node .quality-center/bin/qc.cjs build .
+
+# 2) 通过后继续下一组；--hash 用上一步返回的 hashAfter
+node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <上一步 hashAfter> --group family --write
+
+# 3) 独立依赖可以精确到包
+node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <hash> --only a:b,c:d --write
+
+# 4) 跨大版本必须显式确认（默认会被拒绝并列出包名）
+node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <hash> --only x:y --allow-cross-line --write
+
+# 5) 失败回滚到计划前快照
+node .quality-center/bin/qc.cjs upgrade revert . --plan <planId>
 ```
 
-MCP 等价：`quality_upgrade_plan` → `quality_upgrade_apply(write=false)` → `write=true` → `quality_build` → `quality_scan`。
+MCP 等价：`quality_upgrade_plan` → `quality_upgrade_apply(group=…, write=false)` → `write=true` → `quality_build`
+（`errors` 已解析出文件/行号）→ `quality_upgrade_check`（`state=applied` 才算完成）→ 失败时 `quality_upgrade_revert`。
 
 验收四条，缺一条不算完成：`upgrade check` 退出码 0；构建成功；目标 CVE 在复扫中消失；`errors` 为空。
 涉及代码级改动时再跑单测（策略 `buildGate: test` 时强制）。
+
+### 3.1 止损规则（硬性）
+
+- 一轮只推进一组；这组没通过构建，不允许开下一组。
+- 同一组连续两次构建失败：停手，回滚到该组之前，说明两次失败差异与判断，**不要继续换版本碰运气**。
+- 构建报错只按 `errors` 里的文件/行号定向修；禁止 `sed` 或批量替换 pom 版本号。
+- 手工改过 pom 会让 `upgrade check` 变成 `drift`；此时必须停下来重新 `upgrade plan`，不得继续 `apply`。
 
 ## 4. 汇报
 

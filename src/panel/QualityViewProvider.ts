@@ -15,6 +15,7 @@ import { mavenMirrorArgs } from '../maven';
 import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, UpgradePreviewEntry } from './deepFixPanel';
 import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '../upgrader';
 import { loadPolicy } from '../upgradePolicy';
+import { buildAgentPrompt } from '../agentPrompt';
 import { indexBomManagement, localRepository, parseBomRefs, parseDependencyTree } from '../dependencies';
 import {
   artifactsForRecipes,
@@ -1449,9 +1450,19 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         this.log(`依赖升级后编译失败，已还原 pom：\n${tail}`);
         const pick = await vscode.window.showErrorMessage(
           `依赖升级后编译失败，已还原 pom.xml：\n${tail}`,
+          '复制给 AI',
           '查看日志'
         );
-        if (pick === '查看日志') {
+        if (pick === '复制给 AI') {
+          await vscode.env.clipboard.writeText(
+            buildAgentPrompt(root, {
+              failure: `依赖升级后编译失败，pom.xml 已还原到升级前。Maven 输出：\n${tail}`
+            })
+          );
+          void vscode.window.showInformationMessage(
+            '已复制给 AI：包含失败日志、当前计划、分组顺序与「一次一组、失败即回滚」的硬性规则。'
+          );
+        } else if (pick === '查看日志') {
           this.output?.show(true);
         }
         return;
@@ -1814,6 +1825,16 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           if (message.type === 'cancel') {
             finish(null);
             panel.dispose();
+            return;
+          }
+          if (message.type === 'copyAgentPrompt') {
+            const root = this.runner.root();
+            if (root) {
+              void vscode.env.clipboard.writeText(buildAgentPrompt(root));
+              void vscode.window.showInformationMessage(
+                '已复制给 AI：当前计划、分组顺序与硬性规则都在里面，粘贴到编辑器 AI 对话框即可继续。'
+              );
+            }
             return;
           }
           if (message.type !== 'apply') {

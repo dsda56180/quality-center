@@ -185,6 +185,14 @@ async function main() {
   );
   check('pom 未被改动', fs.readFileSync(pomFile, 'utf8') === original);
   check('pom.diff 已生成', fs.existsSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff')));
+  check(
+    'plan 带分组与推进顺序',
+    Array.isArray(plan.groups) &&
+      plan.groups.length >= 2 &&
+      plan.groups[0].name === 'framework' &&
+      plan.candidates.every((item) => typeof item.group === 'string'),
+    JSON.stringify(plan.groups?.map((group) => group.name))
+  );
   const patch = fs.existsSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff'))
     ? fs.readFileSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff'), 'utf8')
     : '';
@@ -196,12 +204,22 @@ async function main() {
   check('拒绝后 pom 未变化', fs.readFileSync(pomFile, 'utf8') === original);
 
   console.log('3) apply：预览 → 落盘');
-  const preview = run(['upgrade', 'apply', dir, '--plan', plan.planId, '--hash', plan.pomHash]);
+  const preview = run(['upgrade', 'apply', dir, '--plan', plan.planId, '--hash', plan.pomHash, '--allow-cross-line']);
   check('预览退出码 0', preview.code === 0, preview.err.trim());
   check('预览输出 patch', preview.out.includes('--- a/pom.xml'));
   check('预览不落盘', fs.readFileSync(pomFile, 'utf8') === original);
 
-  const applied = run(['upgrade', 'apply', dir, '--plan', plan.planId, '--hash', plan.pomHash, '--write']);
+  const applied = run([
+    'upgrade',
+    'apply',
+    dir,
+    '--plan',
+    plan.planId,
+    '--hash',
+    plan.pomHash,
+    '--write',
+    '--allow-cross-line'
+  ]);
   check('落盘退出码 0', applied.code === 0, applied.err.trim());
   const after = fs.readFileSync(pomFile, 'utf8');
   check('pom 已变化', after !== original);
@@ -291,12 +309,80 @@ async function main() {
   const names = (list.result?.tools ?? []).map((tool) => tool.name);
   check('tools/list 含 quality_upgrade_plan', names.includes('quality_upgrade_plan'));
   check('tools/list 含 quality_upgrade_apply', names.includes('quality_upgrade_apply'));
+  check('tools/list 含 quality_upgrade_check', names.includes('quality_upgrade_check'));
+  check('tools/list 含 quality_upgrade_revert', names.includes('quality_upgrade_revert'));
   const badCall = await client.request('tools/call', {
     name: 'quality_upgrade_apply',
     arguments: { path: dir, planId: plan.planId, pomHash: 'sha256:deadbeef', write: false }
   });
   check('MCP 错误哈希返回 isError', badCall.result?.isError === true);
+  const checkCall = await client.request('tools/call', {
+    name: 'quality_upgrade_check',
+    arguments: { path: dir, planId: plan.planId }
+  });
+  check('MCP check 返回 applied', checkCall.result?.content?.[0]?.text?.includes('"state": "applied"'));
   client.close();
+
+  console.log('8) 分组推进：跨线拒绝 → 逐组落盘 → 回滚');
+  const dir2 = prepare();
+  const plan2 = JSON.parse(run(['upgrade', 'plan', dir2, '--json']).out);
+  const pom2 = path.join(dir2, 'pom.xml');
+  const original2 = fs.readFileSync(pom2, 'utf8');
+  check('计划里存在跨大版本候选', plan2.candidates.some((item) => item.crossLine));
+  const deny = run([
+    'upgrade',
+    'apply',
+    dir2,
+    '--plan',
+    plan2.planId,
+    '--hash',
+    plan2.pomHash,
+    '--write',
+    '--group',
+    'cross-line'
+  ]);
+  check('跨线组默认被拒绝（退出码 2）', deny.code === 2, deny.out.trim());
+  check('拒绝后 pom 未变化', fs.readFileSync(pom2, 'utf8') === original2);
+
+  const fw = run([
+    'upgrade',
+    'apply',
+    dir2,
+    '--plan',
+    plan2.planId,
+    '--hash',
+    plan2.pomHash,
+    '--write',
+    '--group',
+    'framework',
+    '--json'
+  ]);
+  const fwResult = fw.code === 0 ? JSON.parse(fw.out) : {};
+  check('框架组落盘成功', fw.code === 0, fw.err.trim());
+  check('只落了框架组（partial + nextGroup）', fwResult.partial === true && !!fwResult.nextGroup, JSON.stringify(fwResult.nextGroup));
+  check('框架组后 Spring Boot = 2.7.18', fs.readFileSync(pom2, 'utf8').includes('<version>2.7.18</version>'));
+  const partialCheck = run(['upgrade', 'check', dir2, '--plan', plan2.planId]);
+  check('check 报 partial', partialCheck.code === 1 && partialCheck.out.includes('partial'), partialCheck.out.trim());
+
+  const rev = run(['upgrade', 'revert', dir2, '--plan', plan2.planId]);
+  check('回滚退出码 0', rev.code === 0, rev.err.trim());
+  check('回滚后 pom 与计划前一致', fs.readFileSync(pom2, 'utf8') === original2);
+  const afterRevert = run(['upgrade', 'check', dir2, '--plan', plan2.planId]);
+  check('回滚后 check 回到 pending', afterRevert.out.includes('pending'), afterRevert.out.trim());
+
+  const replay = run([
+    'upgrade',
+    'apply',
+    dir2,
+    '--plan',
+    plan2.planId,
+    '--hash',
+    plan2.pomHash,
+    '--write',
+    '--group',
+    'framework'
+  ]);
+  check('回滚后可重新推进', replay.code === 0, replay.err.trim());
 
   console.log(`\n结果：${passed} 通过，${failures.length} 失败`);
   if (failures.length) {

@@ -90,6 +90,10 @@
       {
         "command": "qualityCenter.integrateAll",
         "title": "质量中心：为所有编辑器生成配置"
+      },
+      {
+        "command": "qualityCenter.copyAgentPrompt",
+        "title": "复制 AI 启动指令（升级）"
       }
     ],
     "configuration": {

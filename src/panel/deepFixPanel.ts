@@ -230,6 +230,7 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
 <main>${cards}${skipped}</main>
 <footer>
   <span class="count" id="count"></span>
+  <button id="toai" class="secondary">复制给 AI 继续</button>
   <button id="cancel" class="secondary">取消</button>
   <button id="apply">升级并校验编译</button>
 </footer>
@@ -260,6 +261,10 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
         target.textContent = select.value;
       }
     });
+  });
+
+  document.getElementById('toai').addEventListener('click', function () {
+    vscode.postMessage({ type: 'copyAgentPrompt', packages: picked() });
   });
 
   document.getElementById('cancel').addEventListener('click', function () {

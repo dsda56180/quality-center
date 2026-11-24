@@ -6,18 +6,18 @@ import { QualityViewProvider, openIssue } from './panel/QualityViewProvider';
 import { ScanRunner } from './scanner';
 import { integrate } from './integrate';
 import { detectSetup } from './setupCheck';
+import { buildAgentPrompt } from './agentPrompt';
 
 /** 只有可能影响扫描结果的文件才触发保存后扫描 */
 const SAVE_SCAN_EXT = /\.(java|xml|properties|ya?ml|toml|json|gradle|kts)$/i;
 const IGNORED_DIRS = new Set(['target', 'node_modules', '.git', 'build', 'out']);
 
-const AGENT_PROMPT = [
-  '按 quality-center 的标准化流程修复本项目质量风险：',
-  '1) 先读 .quality-center/skills/quality-center-java-upgrade/SKILL.md 与 .quality-center/upgrade-policy.json；',
-  '2) 先调 quality_upgrade_plan 生成计划，把 candidates 按覆盖条数排序、skipped 逐条解释，**不要手改 pom**；',
-  '3) 我确认后再 quality_upgrade_apply（先 write=false 看 diff，再 write=true），然后 quality_build，再 quality_scan（only=trivy）复扫；',
-  '4) 最后按「问题 · 组件 当前→目标 · 理由 · 已验证」汇报。'
-].join('\n');
+async function copyAgentPrompt(root: string, failure?: string): Promise<void> {
+  await vscode.env.clipboard.writeText(buildAgentPrompt(root, { failure }));
+  void vscode.window.showInformationMessage(
+    '已复制给 AI 的启动指令：粘贴到编辑器 AI 对话框（或让 CLI 里的 AI 读 .quality-center/ 与 MCP 工具）即可继续。'
+  );
+}
 
 async function runIntegrate(root: string, mode: 'auto' | 'all'): Promise<void> {
   const result = integrate(root, { mode, check: false });
@@ -34,8 +34,7 @@ async function runIntegrate(root: string, mode: 'auto' | 'all'): Promise<void> {
   if (choice === '重载窗口') {
     await vscode.commands.executeCommand('workbench.action.reloadWindow');
   } else if (choice === '复制 AI 启动指令') {
-    await vscode.env.clipboard.writeText(AGENT_PROMPT);
-    void vscode.window.showInformationMessage('已复制启动指令：粘贴到编辑器 AI 对话框即可开始。');
+    await copyAgentPrompt(root);
   }
 }
 
@@ -114,6 +113,14 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       await runIntegrate(root, 'all');
+    }),
+    vscode.commands.registerCommand('qualityCenter.copyAgentPrompt', async () => {
+      const root = projectRoot();
+      if (!root) {
+        void vscode.window.showInformationMessage('请先打开一个项目文件夹。');
+        return;
+      }
+      await copyAgentPrompt(root);
     })
   );
 

@@ -152,6 +152,11 @@ function uniqueVersions(values: string[]): string[] {
   return result;
 }
 
+/** 版本由框架 BOM 统一管理的依赖：升级框架时一起对齐，不应逐个固定 */
+export function isFrameworkManaged(packageName: string): boolean {
+  return isSpringFamily(packageName);
+}
+
 /** Spring 生态组件：版本通常由 Spring Boot BOM 统一管理 */
 function isSpringFamily(packageName: string): boolean {
   const [groupId, artifactId] = packageName.split(':');
