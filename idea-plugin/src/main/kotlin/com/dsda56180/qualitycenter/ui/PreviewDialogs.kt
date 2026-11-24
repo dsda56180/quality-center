@@ -110,6 +110,9 @@ private class DeepFixPreviewDialog(
     /** 原生面板构造失败后置位，后续一律回退内置渲染，避免反复抛异常 */
     private var nativeFailed = false
     private var useNative = info.nativeDiff
+    /** 单飞标记：一次渲染未结束时，后续点击只置 queuedRender，避免把 EDT 队列堆满 */
+    private var renderInFlight = false
+    private var queuedRender = false
     /** 对话框尚未显示时暂存的待渲染请求（此时拿不到 Window，无法创建原生面板） */
     private var pendingNative: Pair<String, NativeTexts>? = null
     private val modeSwitch = ModeSwitch(listOf("统一", "并排")) { index -> applyMode(index == 1) }
@@ -277,6 +280,9 @@ private class DeepFixPreviewDialog(
                 other.panel.repaint()
             }
         }
+        // 立刻给出反馈：即使后面的对比还在生成，也能看到「点到的是哪个文件」
+        val counts = countChanges(diffLines(path))
+        pathLabel.text = "${path}    +${counts.first} / -${counts.second}"
         if (immediate) renderActive() else scheduleRender()
     }
 
@@ -290,20 +296,38 @@ private class DeepFixPreviewDialog(
         ?.value
 
     /**
-     * 切文件时在后台线程把「统一 / 并排」两套行数据一次性准备好（同一份模型，两边内容必然一致），
-     * 回到 EDT 只把行列表塞给 JList。JList 是固定行高、只画可见行，不需要文档排版，
-     * 因此不再出现"点了要等一下"的卡顿。
+     * 单飞（single-flight）：同一时刻只允许一次渲染在跑，中途的点击只记一个"待渲染"标记。
+     * 否则连续快速点击会把 N 次 setRequest 排进 EDT 队列，界面看起来像"点了没反应"，
+     * 过一段时间再一次性跳到最后一个文件。
      */
     private fun renderActive() {
         val path = selectedPath ?: return
-        if (useNative) {
-            renderNative(path)
+        if (renderInFlight) {
+            queuedRender = true
             return
         }
+        renderInFlight = true
+        if (useNative) renderNative(path) else renderBuiltIn(path)
+    }
+
+    private fun finishRender() {
+        renderInFlight = false
+        if (queuedRender) {
+            queuedRender = false
+            scheduleRender()
+        }
+    }
+
+    /** 内置渲染：固定行高列表，只画可见行 */
+    private fun renderBuiltIn(path: String) {
         val token = ++renderToken
         val cached = synchronized(dataCache) { dataCache[path] }
         if (cached != null) {
-            applyRender(path, cached)
+            try {
+                applyRender(path, cached)
+            } finally {
+                finishRender()
+            }
             return
         }
         val lines = diffLines(path)
@@ -321,8 +345,11 @@ private class DeepFixPreviewDialog(
             // 预览是模态对话框：后台线程直接 invokeLater 用的是 NON_MODAL 模态状态，会被挡在队列里，
             // 表现为面板一直空白，必须用 ModalityState.any()
             app.invokeLater({
-                if (token != renderToken) return@invokeLater
-                applyRender(path, data)
+                try {
+                    if (token == renderToken) applyRender(path, data)
+                } finally {
+                    finishRender()
+                }
             }, com.intellij.openapi.application.ModalityState.any())
         }
     }
@@ -392,7 +419,11 @@ private class DeepFixPreviewDialog(
         val token = ++renderToken
         val cached = synchronized(nativeCache) { nativeCache[path] }
         if (cached != null) {
-            showNative(path, cached)
+            try {
+                showNative(path, cached)
+            } finally {
+                finishRender()
+            }
             return
         }
         val lines = diffLines(path)
@@ -402,14 +433,21 @@ private class DeepFixPreviewDialog(
                 buildNativeTexts(path, lines)
             } catch (_: Throwable) {
                 null
-            } ?: return@executeOnPooledThread
+            }
+            if (texts == null) {
+                app.invokeLater({ finishRender() }, com.intellij.openapi.application.ModalityState.any())
+                return@executeOnPooledThread
+            }
             synchronized(nativeCache) {
                 if (nativeCache.size >= 200) nativeCache.keys.firstOrNull()?.let { nativeCache.remove(it) }
                 nativeCache[path] = texts
             }
             app.invokeLater({
-                if (token != renderToken) return@invokeLater
-                showNative(path, texts)
+                try {
+                    if (token == renderToken) showNative(path, texts)
+                } finally {
+                    finishRender()
+                }
             }, com.intellij.openapi.application.ModalityState.any())
         }
     }
@@ -426,11 +464,13 @@ private class DeepFixPreviewDialog(
         }
         val request = try {
             val factory = com.intellij.diff.DiffContentFactory.getInstance()
-            val file = texts.file
-            val before = if (file != null) factory.create(project, texts.before, file)
-            else factory.create(project, texts.before)
-            val after = if (file != null) factory.create(project, texts.after, file)
-            else factory.create(project, texts.after)
+            // 只按文件类型创建轻量内容，不把内容绑到真实 VirtualFile：
+            // 绑真实文件会让编辑器把「改后文本」当成真实文件去建 PSI（整文件重新解析），
+            // 每次点击都会卡住 EDT 数百毫秒，表现为点了没反应。
+            val fileType = texts.file?.fileType
+                ?: com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getFileTypeByFileName(path)
+            val before = factory.create(project, texts.before, fileType)
+            val after = factory.create(project, texts.after, fileType)
             com.intellij.diff.requests.SimpleDiffRequest(path, before, after, "修改前", "修改后")
         } catch (e: Throwable) {
             logWarn("构造 diff 请求失败", e)
@@ -477,9 +517,8 @@ private class DeepFixPreviewDialog(
         useNative = false
         modeSwitch.isVisible = true
         (diffCards.layout as CardLayout).show(diffCards, CARD_UNIFIED)
-        val path = selectedPath ?: return
-        val cached = synchronized(dataCache) { dataCache[path] }
-        if (cached != null) applyRender(path, cached) else renderActive()
+        // 交给 finishRender 用内置渲染把当前文件重跑一遍，避免在渲染过程中递归调用
+        queuedRender = true
     }
 
     private fun logWarn(message: String, error: Throwable) {
