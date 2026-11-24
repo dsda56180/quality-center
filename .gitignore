@@ -4,3 +4,5 @@ out/
 .vscode-test/
 *.log
 .quality-center/
+.qc-spotbugs-pom.xml
+fixtures/**/target/

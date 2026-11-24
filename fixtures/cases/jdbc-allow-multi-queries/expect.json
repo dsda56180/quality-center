@@ -1,0 +1,14 @@
+{
+  "id": "jdbc-allow-multi-queries",
+  "title": "JDBC 打开 allowMultiQueries，注入可升级为堆叠执行",
+  "layer": "config",
+  "cwe": "CWE-89",
+  "scanners": [],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": [] },
+  "target": {
+    "rules": ["SEC_JDBC_ALLOW_MULTI_QUERIES"],
+    "owner": "qcsec",
+    "status": "gap"
+  }
+}

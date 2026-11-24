@@ -3,11 +3,35 @@ import * as path from 'path';
 import { Issue, Severity } from '../model';
 import { isMissingCommand, run, tailMessage } from '../exec';
 import { mavenMirrorArgs } from '../maven';
+import { injectPluginIntoBuild } from '../pomInject';
 import { localizeSpotbugs } from '../zh';
 
 /** SpotBugs 4.7.x 是最后一个可在 JDK 8 运行的分析器版本 */
 const PLUGIN = 'com.github.spotbugs:spotbugs-maven-plugin:4.7.3.0';
-const FINDSECBUGS = 'com.h3xstream.findsecbugs:findsecbugs-plugin:1.12.0';
+const FINDSECBUGS_VERSION = '1.14.0';
+/** 临时 pom 文件名：放在项目根目录，保证 basedir 与 target 路径不变 */
+const TEMP_POM = '.qc-spotbugs-pom.xml';
+
+/**
+ * FindSecBugs 必须写进 pom 的 `<build><plugins>` 才生效：
+ * spotbugs-maven-plugin 的 plugins 参数没有 userProperty，`-Dspotbugs.plugins` 传不进去。
+ */
+const PLUGIN_BLOCK = `<plugin>
+  <groupId>com.github.spotbugs</groupId>
+  <artifactId>spotbugs-maven-plugin</artifactId>
+  <version>${PLUGIN.split(':')[2]}</version>
+  <configuration>
+    <effort>Max</effort>
+    <threshold>Low</threshold>
+    <plugins>
+      <plugin>
+        <groupId>com.h3xstream.findsecbugs</groupId>
+        <artifactId>findsecbugs-plugin</artifactId>
+        <version>${FINDSECBUGS_VERSION}</version>
+      </plugin>
+    </plugins>
+  </configuration>
+</plugin>`;
 
 export interface SpotbugsResult {
   issues: Issue[];
@@ -104,24 +128,58 @@ export async function scanSpotbugs(
     // 删除失败不影响后续执行，插件会覆盖写入
   }
 
-  const result = await run(
-    mvn,
-    [
-      '-B',
-      '-q',
-      ...mavenMirrorArgs(),
-      `${PLUGIN}:spotbugs`,
-      '-Dspotbugs.effort=Max',
-      '-Dspotbugs.threshold=Low',
-      `-Dspotbugs.plugins=${FINDSECBUGS}`,
-      '-Dspotbugs.failOnError=false',
-      '-Dspotbugs.consoleOutput=false',
-      '-Dspotbugs.xmlOutput=true'
-    ],
-    root,
-    240_000,
-    { MAVEN_OPTS: '-Dfile.encoding=UTF-8' }
-  );
+  // 把 FindSecBugs 注入一份临时 pom：项目自己配了就不动，非 Maven 项目只能跑核心规则
+  const pomFile = path.join(root, 'pom.xml');
+  const tempPom = path.join(root, TEMP_POM);
+  let pomArgs: string[] = [];
+  let injectError: string | undefined;
+
+  if (fs.existsSync(pomFile)) {
+    const pomText = fs.readFileSync(pomFile, 'utf8');
+    if (/findsecbugs/i.test(pomText)) {
+      // 用户已自行配置 FindSecBugs，直接用原 pom
+    } else {
+      const injected = injectPluginIntoBuild(pomText, PLUGIN_BLOCK);
+      if (injected.injected) {
+        fs.writeFileSync(tempPom, injected.text, 'utf8');
+        pomArgs = ['-f', TEMP_POM];
+      } else {
+        injectError = `FindSecBugs 注入失败（${injected.reason ?? '未知原因'}），本次只运行 SpotBugs 核心规则`;
+      }
+    }
+  } else {
+    injectError = '项目没有 pom.xml，无法注入 FindSecBugs，本次只运行 SpotBugs 核心规则';
+  }
+
+  let result;
+  try {
+    result = await run(
+      mvn,
+      [
+        '-B',
+        '-q',
+        ...mavenMirrorArgs(),
+        ...pomArgs,
+        `${PLUGIN}:spotbugs`,
+        '-Dspotbugs.effort=Max',
+        '-Dspotbugs.threshold=Low',
+        '-Dspotbugs.failOnError=false',
+        '-Dspotbugs.consoleOutput=false',
+        '-Dspotbugs.xmlOutput=true'
+      ],
+      root,
+      240_000,
+      { MAVEN_OPTS: '-Dfile.encoding=UTF-8' }
+    );
+  } finally {
+    if (fs.existsSync(tempPom)) {
+      try {
+        fs.unlinkSync(tempPom);
+      } catch {
+        // 删除失败不影响扫描结果
+      }
+    }
+  }
 
   if (!fs.existsSync(reportFile)) {
     const raw = `${result.stderr}\n${result.stdout}`;
@@ -190,5 +248,8 @@ export async function scanSpotbugs(
     );
   }
 
-  return { issues, reportFile };
+  // 注入失败且没有告警时，说明结果可能因规则缺失而不完整，需要让调用方知道
+  return injectError && issues.length === 0
+    ? { issues, reportFile, error: injectError }
+    : { issues, reportFile };
 }

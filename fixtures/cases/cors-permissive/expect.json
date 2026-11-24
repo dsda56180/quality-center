@@ -1,0 +1,14 @@
+{
+  "id": "cors-permissive",
+  "title": "CORS 允许任意源并允许携带凭证",
+  "layer": "code",
+  "cwe": "CWE-942",
+  "scanners": ["spotbugs"],
+  "requiresBuild": true,
+  "expect": { "mustFire": ["PERMISSIVE_CORS"], "mustNotFire": [] },
+  "target": {
+    "rules": ["PERMISSIVE_CORS"],
+    "owner": "findsecbugs",
+    "status": "covered"
+  }
+}

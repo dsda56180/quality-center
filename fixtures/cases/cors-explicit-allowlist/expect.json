@@ -1,0 +1,14 @@
+{
+  "id": "cors-explicit-allowlist",
+  "title": "CORS 使用显式白名单（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-942",
+  "scanners": ["spotbugs"],
+  "requiresBuild": true,
+  "expect": { "mustFire": [], "mustNotFire": ["PERMISSIVE_CORS"] },
+  "target": {
+    "rules": [],
+    "owner": "findsecbugs",
+    "status": "covered"
+  }
+}

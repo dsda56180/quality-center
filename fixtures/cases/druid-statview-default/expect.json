@@ -1,0 +1,14 @@
+{
+  "id": "druid-statview-default",
+  "title": "Druid 监控面板暴露且使用默认口令",
+  "layer": "config",
+  "cwe": "CWE-1392",
+  "scanners": [],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": [] },
+  "target": {
+    "rules": ["SEC_DRUID_STATVIEW_DEFAULT_PASSWORD", "SEC_DRUID_STATVIEW_PUBLIC_BIND"],
+    "owner": "qcsec",
+    "status": "gap"
+  }
+}

@@ -30,7 +30,7 @@
 | Checkstyle | JDK 8+、Maven | 项目自带即可 |
 | Gitleaks | `gitleaks` 可执行文件 | `winget install gitleaks.gitleaks` |
 | Trivy | `trivy` 可执行文件 | `winget install aquasecurity.trivy` |
-| SpotBugs | JDK、Maven、已编译的 `target/classes` | 首次运行自动从 Maven 仓库下载分析器与 FindSecBugs 插件 |
+| SpotBugs | JDK、Maven、已编译的 `target/classes` | 首次运行自动从 Maven 仓库下载分析器与 FindSecBugs 插件；FindSecBugs 通过临时 pom 注入（`-Dspotbugs.plugins` 传不进去） |
 
 缺失的工具不会自动下载：扫描结束后会弹窗提示并提供「去安装」，按系统自动选择安装方式——Windows 走 winget → Chocolatey → Scoop → 官方产物便携安装；macOS 走 Homebrew → 官方产物便携安装；Linux 走 Homebrew → 官方产物便携安装（无需 sudo，apt/dnf/pacman 作为备用命令给出）。便携安装落在插件自己的工具目录（Windows `%LOCALAPPDATA%\quality-center\tools`，其余 `~/.quality-center/tools`），不改系统 PATH，卸载后可直接删除。装完自动重新扫描；面板底部也保留带「安装」入口的「已跳过」提示。设 `qualityCenter.notifyMissingTools` 为 `false` 可整体关闭弹窗。
 
@@ -208,6 +208,18 @@ node <扩展目录>/out/cli.js report --md                  # 复用已有结果
 | `quality-center-mcp` | 把插件接成 MCP 服务端，按工具语义编排调用顺序 |
 
 `skills/manifest.json` 声明 CLI 入口、命令、退出码、MCP 工具与 Skill 路径，支持清单式发现；把对应 `SKILL.md` 放进 agent 的 skills 目录即可加载。CLI/MCP 的修复只做确定性改写，依赖升级与语义修复由 agent 按 Skill 指引完成并复扫确认。
+
+## 安全规则覆盖度与缺口
+
+插件维护一份规则清单 [`docs/RULES.md`](docs/RULES.md)：每条风险映射到 CWE、规则 ID、当前状态（已覆盖 / 缺口）和 fixture 用例。覆盖度是可量化口径，不承诺 100%，缺口写在表里：
+
+```bash
+npm run rules:matrix        # 跑 fixtures/ 下的正例与反例，输出 PASS / GAP / FAIL
+```
+
+代码层由 SpotBugs + FindSecBugs 1.14（144 个 pattern）承担，可检出宽松 CORS（`PERMISSIVE_CORS`）、关闭 CSRF（`SPRING_CSRF_PROTECTION_DISABLED`）、硬编码口令、SQL 注入、XXE、反序列化、路径穿越等；配置层（`application.yml` 里的 Druid 默认口令、`0.0.0.0` 绑定、`allowMultiQueries`、Actuator 全暴露）**目前是已知缺口**，计划由后续的 `qcsec` 扫描器补齐。
+
+FindSecBugs 只能通过 pom 的 `<build><plugins>` 生效——`spotbugs-maven-plugin` 的 `plugins` 参数没有 userProperty，`-Dspotbugs.plugins` 实际传不进去（0.17.19 及以前就是这样静默失效的）。现在插件会复制一份 `.qc-spotbugs-pom.xml` 注入后再运行、结束即删；项目自己配了 FindSecBugs 时不动原文件；非 Maven 工程降级为核心规则并把原因作为扫描异常上报。多模块工程目前只注入根 pom。
 
 ## 隐私与安全
 

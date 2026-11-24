@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.20
+
+- **修复 FindSecBugs 从未生效**：`spotbugs-maven-plugin` 的 `plugins` 参数在 plugin.xml 里没有 userProperty，`-Dspotbugs.plugins=...` 传不进去，所以此前只跑了 SpotBugs 核心规则（144 个安全 pattern 全部空转）。实测：MD5 + `new Random()` 的探针只报 `DMI_RANDOM_USED_ONLY_ONCE`/`DM_DEFAULT_ENCODING`，pom 里配了 FindSecBugs 后才出现 `WEAK_MESSAGE_DIGEST_MD5`/`PREDICTABLE_RANDOM`
+- 改为在项目根复制一份 `.qc-spotbugs-pom.xml` 注入 FindSecBugs（basedir 与 target 路径不变），`mvn -f` 运行后删除；项目自己已配 `findsecbugs` 时不改动原 pom；注入失败（非 Maven / 无 pom.xml）会作为扫描异常上报，不再静默降级
+- FindSecBugs 升到 1.14.0（144 个 pattern，含 Spring `CorsRegistry` 的 `PERMISSIVE_CORS`、`SPRING_CSRF_PROTECTION_DISABLED`）
+- 新增 `fixtures/` 规则靶场：7 个最小样例（CORS 正例/反例、CSRF 关闭、Druid 默认口令、Druid 加固、`allowMultiQueries`、Actuator 全暴露），每个带 `expect.json` 声明必须命中与禁止命中的规则
+- 新增 `npm run rules:matrix`：跑真实扫描对比期望，输出 PASS / GAP / FAIL，编译失败也会显式列出；新增 `docs/RULES.md` 规则清单（CWE 映射 + 已覆盖/缺口 + 用例对应）
+- 实测结果：代码层 3 个用例全部 PASS（`PERMISSIVE_CORS`、`SPRING_CSRF_PROTECTION_DISABLED` 均能命中，白名单写法不误报）；配置层 4 个用例为 GAP，确认当前没有任何扫描器覆盖 `application.yml`
+
 ## 0.17.19
 
 - 新增 **MCP 服务端**（`out/cli.js mcp`，`npm run mcp`）：stdio + 换行分隔 JSON-RPC 2.0，零依赖，暴露 `quality_scan` / `quality_build` / `quality_tools_status` / `quality_tools_install` / `quality_report` / `quality_fix` 六个工具，agent 可直接以工具调用方式跑扫描与修复，不必记 CLI 参数

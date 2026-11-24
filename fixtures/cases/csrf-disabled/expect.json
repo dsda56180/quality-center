@@ -1,0 +1,14 @@
+{
+  "id": "csrf-disabled",
+  "title": "Spring Security 关闭 CSRF 保护",
+  "layer": "code",
+  "cwe": "CWE-352",
+  "scanners": ["spotbugs"],
+  "requiresBuild": true,
+  "expect": { "mustFire": ["SPRING_CSRF_PROTECTION_DISABLED"], "mustNotFire": [] },
+  "target": {
+    "rules": ["SPRING_CSRF_PROTECTION_DISABLED"],
+    "owner": "findsecbugs",
+    "status": "covered"
+  }
+}

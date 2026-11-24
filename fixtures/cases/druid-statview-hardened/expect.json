@@ -1,0 +1,14 @@
+{
+  "id": "druid-statview-hardened",
+  "title": "Druid 面板关闭、口令外部化（应不告警）",
+  "layer": "config",
+  "cwe": "CWE-1392",
+  "scanners": [],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": [] },
+  "target": {
+    "rules": [],
+    "owner": "qcsec",
+    "status": "gap"
+  }
+}
