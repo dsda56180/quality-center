@@ -19,6 +19,7 @@ import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, Upgrad
 import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '../upgrader';
 import { loadPolicy } from '../upgradePolicy';
 import { buildAgentPrompt } from '../agentPrompt';
+import { McpStatus, probeMcp } from '../mcpStatus';
 import {
   applyUpgradePlan,
   checkUpgradePlan,
@@ -236,6 +237,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     active: []
   };
   private output?: vscode.OutputChannel;
+  /** MCP 接入状态：面板只显示缓存，真正的检测由按钮/初始化触发 */
+  private mcpStatus: McpStatus = {
+    state: 'checking',
+    label: '检测 MCP…',
+    detail: '正在检查项目 MCP 配置与本地服务。'
+  };
 
   constructor(private readonly runner: ScanRunner) {}
 
@@ -277,6 +284,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       this.view = undefined;
     });
     this.push();
+    void this.refreshMcpStatus();
     this.maybeDiscover();
   }
 
@@ -366,6 +374,15 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'copyDrivePrompt':
         await this.copyDrivePrompt();
+        break;
+      case 'checkMcp':
+        await this.refreshMcpStatus();
+        break;
+      case 'setupMcp':
+        await this.setupMcp();
+        break;
+      case 'openMcpConfig':
+        await this.openMcpConfig();
         break;
       case 'saveSettings':
         await this.saveScanSettings(message.options);
@@ -1903,6 +1920,55 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
+  /** 重新检测 MCP：配置是否存在、启动器是否齐全、服务是否响应 tools/list */
+  private async refreshMcpStatus(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      this.mcpStatus = {
+        state: 'missing',
+        label: 'MCP 未配置',
+        detail: '还没有打开项目，无法检测。'
+      };
+      this.push();
+      return;
+    }
+    this.mcpStatus = { state: 'checking', label: '检测 MCP…', detail: '正在启动 qc.cjs mcp 做协议自检。' };
+    this.push();
+    try {
+      this.mcpStatus = await probeMcp(root);
+    } catch (error) {
+      this.mcpStatus = {
+        state: 'broken',
+        label: 'MCP 检测失败',
+        detail: error instanceof Error ? error.message : String(error)
+      };
+    }
+    this.push();
+  }
+
+  private async setupMcp(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      return;
+    }
+    await vscode.commands.executeCommand('qualityCenter.integrateAll');
+    await this.refreshMcpStatus();
+  }
+
+  private async openMcpConfig(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      return;
+    }
+    const candidates = ['.trae/mcp.json', '.cursor/mcp.json', '.vscode/mcp.json', '.mcp.json'];
+    const file = candidates.map((item) => path.join(root, item)).find((item) => fs.existsSync(item));
+    if (!file) {
+      void vscode.window.showInformationMessage('还没有生成 MCP 配置。先点「接入」生成。');
+      return;
+    }
+    await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: true });
+  }
+
   /** 复制“全权推进”指令：AI 按 qc next 循环执行，而不是每步等用户点按钮 */
   private async copyDrivePrompt(): Promise<void> {
     const root = this.runner.root();
@@ -2573,6 +2639,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           ? mergeRecipeLibrary(this.discoverCache)
           : RECIPE_LIBRARY,
       recipesDiscovering: this.discoverInFlight !== undefined,
+      mcp: this.mcpStatus,
       projectProfile: root ? this.projectProfile(root) : {}
     };
     void this.view.webview.postMessage(snapshot);

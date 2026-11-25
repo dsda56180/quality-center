@@ -101,6 +101,15 @@ export interface Snapshot {
     springBootVersion?: string;
     junit?: 'junit4' | 'junit5';
   };
+  /** MCP 接入状态：配置 + 本地服务自检 */
+  mcp?: {
+    state: 'checking' | 'missing' | 'configured' | 'ready' | 'broken';
+    label: string;
+    detail: string;
+    configFile?: string;
+    editor?: string;
+    tools?: number;
+  };
 }
 
 export function getHtml(nonce: string): string {
@@ -125,6 +134,22 @@ export function getHtml(nonce: string): string {
   #list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
   .toolbar { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
   .toolbar .spacer { flex: 1 1 auto; }
+  .mcpbar {
+    display: flex; align-items: center; gap: 5px; margin: 0 0 6px; padding: 4px 6px;
+    border: 1px solid var(--vscode-panel-border); border-radius: 3px;
+    font-size: 11px; line-height: 1.35; color: var(--vscode-descriptionForeground);
+  }
+  .mcpbar .mcp-dot {
+    flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+    background: #8a8a8a;
+  }
+  .mcpbar.ready .mcp-dot { background: #2ea043; }
+  .mcpbar.configured .mcp-dot { background: #d29922; }
+  .mcpbar.broken .mcp-dot { background: #f85149; }
+  .mcpbar.checking .mcp-dot { background: #58a6ff; }
+  .mcpbar .mcp-text { flex: 1 1 auto; min-width: 0; cursor: default; }
+  .mcpbar .mcp-label { color: var(--vscode-foreground); }
+  .mcpbar button { flex: 0 0 auto; padding: 2px 6px; font-size: 10px; }
   .icon-btn {
     flex: 0 0 auto; width: 28px; height: 26px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
@@ -443,6 +468,15 @@ export function getHtml(nonce: string): string {
     <button id="copy" class="icon-btn secondary" title="复制给 AI"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 1h6l2 2v8H4zM2 4h1.5v9h7v1.5H2z"/></svg></button>
     <button id="save" class="icon-btn secondary" title="导出报告"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M6 1h2v6h2.5L7 12 3.5 7H6zM2 12.5h10V14H2z"/></svg></button>
     <button id="settings" class="icon-btn secondary" title="扫描设置"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M1 3h12v1.5H1zM1 9h12v1.5H1zM4 1.5h2v4.5H4zM8 7.5h2v4.5H8z"/></svg></button>
+  </div>
+  <div id="mcpbar" class="mcpbar checking">
+    <span class="mcp-dot"></span>
+    <span class="mcp-text" id="mcptext">
+      <span class="mcp-label" id="mcplabel">检测 MCP…</span>
+      <span id="mcpdetail"></span>
+    </span>
+    <button id="mcpcheck" class="secondary" title="重新检测 MCP 配置与服务">检测</button>
+    <button id="mcpsetup" class="secondary" title="生成/修复编辑器 MCP 配置">接入</button>
   </div>
   <div id="catbar" class="catbar">
     <div class="cat-stage">
@@ -955,7 +989,40 @@ export function getHtml(nonce: string): string {
     }
   }
 
+  function renderMcp() {
+    var mcp = state.mcp || { state: 'checking', label: '检测 MCP…', detail: '正在检测。' };
+    var bar = document.getElementById('mcpbar');
+    if (!bar) {
+      return;
+    }
+    bar.className = 'mcpbar ' + mcp.state;
+    bar.title = mcp.detail || mcp.label;
+    var label = document.getElementById('mcplabel');
+    if (label) {
+      label.textContent = mcp.label;
+    }
+    var detail = document.getElementById('mcpdetail');
+    if (detail) {
+      detail.textContent =
+        mcp.state === 'ready'
+          ? ''
+          : mcp.state === 'configured'
+            ? ' · 需在 IDE 启用'
+            : mcp.state === 'broken'
+              ? ' · 点修复'
+              : mcp.state === 'missing'
+                ? ' · 点接入'
+                : '';
+    }
+    var setup = document.getElementById('mcpsetup');
+    if (setup) {
+      setup.style.display = mcp.state === 'ready' ? 'none' : '';
+      setup.textContent = mcp.state === 'configured' ? '查看配置' : (mcp.state === 'broken' ? '修复' : '接入');
+    }
+  }
+
   function render() {
+    renderMcp();
     updateTabs();
     renderWizard();
     var upgradeBtn = document.getElementById('upgrade');
@@ -1190,6 +1257,16 @@ export function getHtml(nonce: string): string {
   });
   document.getElementById('scan').addEventListener('click', function () {
     vscode.postMessage({ type: 'scan' });
+  });
+  document.getElementById('mcpcheck').addEventListener('click', function () {
+    vscode.postMessage({ type: 'checkMcp' });
+  });
+  document.getElementById('mcpsetup').addEventListener('click', function () {
+    var mcp = state.mcp || { state: 'missing' };
+    vscode.postMessage({ type: mcp.state === 'configured' ? 'openMcpConfig' : 'setupMcp' });
+  });
+  document.getElementById('mcpbar').addEventListener('dblclick', function () {
+    vscode.postMessage({ type: 'openMcpConfig' });
   });
   document.getElementById('resume').addEventListener('click', function () {
     vscode.postMessage({ type: 'resumeScan' });
