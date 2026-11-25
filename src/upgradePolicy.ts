@@ -29,6 +29,11 @@ export interface UpgradePolicy {
   mavenArgs: string[];
   /** 单测是否在跨大版本升级时强制开启 */
   runTestsOnNextLine: boolean;
+  /**
+   * 是否允许通过新增 <dependencyManagement> 固定传递依赖/CVE 修复版本。
+   * 默认 false：传递依赖的 CVE 只报告，不自动写 pom，避免引入未经验证的版本组合。
+   */
+  allowDependencyManagement: boolean;
 }
 
 export interface LoadedPolicy {
@@ -59,7 +64,8 @@ export const DEFAULT_POLICY: UpgradePolicy = {
   forbiddenPackages: [],
   buildGate: 'package',
   mavenArgs: [],
-  runTestsOnNextLine: true
+  runTestsOnNextLine: true,
+  allowDependencyManagement: false
 };
 
 function readJson(file: string): unknown {
@@ -149,6 +155,9 @@ export function loadPolicy(root: string, pom?: string): LoadedPolicy {
     if (typeof obj.runTestsOnNextLine === 'boolean') {
       policy.runTestsOnNextLine = obj.runTestsOnNextLine;
     }
+    if (typeof obj.allowDependencyManagement === 'boolean') {
+      policy.allowDependencyManagement = obj.allowDependencyManagement;
+    }
     const forbidden = asStringArray(obj.forbiddenPackages);
     if (forbidden.length > 0) {
       policy.forbiddenPackages = forbidden;
@@ -207,7 +216,8 @@ export function defaultPolicyDocument(root: string): UpgradePolicy & { schemaVer
     forbiddenPackages: loaded.policy.forbiddenPackages,
     buildGate: loaded.policy.buildGate,
     mavenArgs: loaded.policy.mavenArgs,
-    runTestsOnNextLine: loaded.policy.runTestsOnNextLine
+    runTestsOnNextLine: loaded.policy.runTestsOnNextLine,
+    allowDependencyManagement: loaded.policy.allowDependencyManagement
   };
 }
 

@@ -2092,7 +2092,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     // 框架目标走统一的策略文件（.quality-center/upgrade-policy.json + Java 版本推导），
     // 面板与 CLI/MCP 必须同一个口径，否则面板会把 spring-* 逐个推到 7.x。
     const loaded = loadPolicy(root, pom);
-    const context: UpgradeContext = { frameworkTarget: loaded.frameworkTarget };
+    const context: UpgradeContext = {
+      frameworkTarget: loaded.frameworkTarget,
+      currentJavaVersion: loaded.javaVersion,
+      targetJavaVersion: loaded.targetJavaVersion,
+      allowDependencyManagement: loaded.policy.allowDependencyManagement
+    };
     if (loaded.frameworkTarget) {
       this.log(`框架目标版本 ${loaded.frameworkTarget}（${loaded.sources[0] ?? '策略推导'}）`);
     }

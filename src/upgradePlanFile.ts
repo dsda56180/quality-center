@@ -409,7 +409,8 @@ export function createUpgradePlan(
   const context: UpgradeContext = {
     frameworkTarget: loaded.frameworkTarget,
     currentJavaVersion: loaded.javaVersion,
-    targetJavaVersion: loaded.targetJavaVersion
+    targetJavaVersion: loaded.targetJavaVersion,
+    allowDependencyManagement: loaded.policy.allowDependencyManagement
   };
   const raw = planUpgrades(root, issues, context);
 

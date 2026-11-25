@@ -258,7 +258,12 @@ const TOOLS: ToolDef[] = [
           description: '只返回该分组的候选，缺省返回首组（framework）'
         },
         detail: { type: 'string', enum: ['summary', 'full'], description: 'full 才返回全部候选与完整补丁预览' },
-        reuse: { type: 'boolean', description: 'pomHash 与 issuesHash 都没变时复用已有计划，默认 true' }
+        reuse: { type: 'boolean', description: 'pomHash 与 issuesHash 都没变时复用已有计划，默认 true' },
+        replace: {
+          type: 'boolean',
+          description:
+            '明确允许在已有「进行中」计划上生成第二个计划；默认 false。autopilot 收尾阶段不应传 true；只有策略变更导致确实需要换计划时才用。'
+        }
       }
     }
   },
@@ -480,6 +485,22 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       const issuesFile = path.join(root, '.quality-center', 'issues.json');
       if (!fs.existsSync(issuesFile)) {
         return asText({ error: '还没有扫描结果：先调用 quality_scan（可只跑 trivy）' }, true);
+      }
+      if (params.replace !== true) {
+        try {
+          const active = checkUpgradePlan(root);
+          if (active.state === 'pending' || active.state === 'partial') {
+            return asText(
+              {
+                error: `已有进行中的升级计划 ${active.planId}（${active.appliedCount ?? 0}/${active.total ?? '?'}，下一组 ${active.nextGroup ?? '无'}）。先继续 apply 该计划或 revert，再考虑新计划；确需替换请传 replace=true。`,
+                activePlan: active
+              },
+              true
+            );
+          }
+        } catch {
+          // 没有旧计划：继续正常生成
+        }
       }
       const issues = readIssues(root);
       const customId = typeof params.planId === 'string' && params.planId.trim() ? params.planId.trim() : undefined;

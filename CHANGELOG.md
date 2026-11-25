@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.36
+
+- 修复 Trae 等不展开 `${workspaceFolder}` 的客户端：MCP 配置改为项目内 `qc.cjs` 绝对路径并带 `cwd`；面板检测到配置里残留字面量变量时显示 `broken`（“MCP 配置未展开变量”）
+- 升级策略新增 `allowDependencyManagement`，默认 `false`：需要新增 `dependencyManagement` 才能固定的传递依赖 CVE 直接跳过并写明原因，不再把 AI 引向手改 pom
+- `upgrade plan` / `quality_upgrade_plan` 增加“单活动计划”门禁：已有 `pending/partial` 计划时拒绝再生成第二个（CLI 需显式 `--replace`，MCP 需 `replace=true`），避免一组只落一部分又开新计划
+- autopilot 提示词补充：阶段 5/6 不再新建计划；半组落盘视为缺陷并回滚整组；复扫按来源对比，SpotBugs 首次可见不算回归
+
 ## 0.27.35
 
 - `quality_agent_brief` 新增 `mode=autopilot`：先做一次目标确认（范围、JDK/框架边界、门禁），确认后一次执行到收尾，不再每步停下等用户

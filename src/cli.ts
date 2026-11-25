@@ -47,7 +47,7 @@ const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 
   quality-center tools status [--json]   查看外部工具安装状态
   quality-center tools install <id>      自动安装 mvn / gitleaks / trivy
   quality-center report [--json|--md]    复用 .quality-center/issues.json 输出结果
-  quality-center upgrade plan [目录]     生成升级计划（plan.json + pom.diff），不改 pom；--reuse 复用同 hash 的计划
+  quality-center upgrade plan [目录]     生成升级计划（plan.json + pom.diff），不改 pom；--reuse 复用同 hash 的计划，--replace 覆盖进行中计划
   quality-center upgrade apply [目录]    按计划落盘（默认只预览，--write 才写；--group/--only 分批）
   quality-center upgrade check [目录]    校验当前 pom 是否与计划一致（CI 门禁）
   quality-center upgrade revert [目录]   回滚到计划生成前的 pom 快照
@@ -448,6 +448,20 @@ async function upgradeCommand(args: Args): Promise<number> {
     if (!fs.existsSync(issuesFile)) {
       progress('还没有扫描结果：先执行 scan（或 scan --only trivy），再生成升级计划');
       return 2;
+    }
+    if (args.flags['--reuse'] !== true && args.flags['--replace'] !== true) {
+      try {
+        const active = checkUpgradePlan(root);
+        if (active.state === 'pending' || active.state === 'partial') {
+          progress(
+            `已有进行中的升级计划 ${active.planId}（${active.appliedCount ?? 0}/${active.total ?? '?'}）。` +
+              '先继续 apply / check，确需替换再加 --replace。'
+          );
+          return 2;
+        }
+      } catch {
+        // 没有旧计划：正常生成
+      }
     }
     const issues = readIssues(root);
     const result = createUpgradePlan(root, issues, { planId, reuse: args.flags['--reuse'] === true });

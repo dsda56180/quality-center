@@ -186,6 +186,13 @@ async function main() {
   const reuseRun = run(['upgrade', 'plan', dir, '--reuse', '--json']);
   check('plan --reuse 复用同 hash 的计划', JSON.parse(reuseRun.out).planId === plan.planId);
 
+  const duplicateRun = run(['upgrade', 'plan', dir, '--json']);
+  check(
+    '已有进行中计划时拒绝再生成第二个',
+    duplicateRun.code === 2 && /已有进行中的升级计划/.test(`${duplicateRun.out}${duplicateRun.err}`),
+    `${duplicateRun.out}${duplicateRun.err}`.trim()
+  );
+
   // 同一批问题、只是扫描时间变了：仍应命中复用（issuesHash 不含 generatedAt）
   const issuesFile = path.join(dir, '.quality-center', 'issues.json');
   const repayload = JSON.parse(fs.readFileSync(issuesFile, 'utf8'));
@@ -341,9 +348,12 @@ async function main() {
   }
   check('数据目录自带忽略清单', fs.readFileSync(path.join(dir, '.quality-center/.gitignore'), 'utf8').includes('upgrade/'));
   const traeMcp = JSON.parse(fs.readFileSync(path.join(dir, '.trae/mcp.json'), 'utf8'));
+  const traeEntry = traeMcp.mcpServers?.['quality-center'];
   check(
-    'Trae MCP 指向启动器而非版本目录',
-    traeMcp.mcpServers?.['quality-center']?.args?.[0] === '${workspaceFolder}/.quality-center/bin/qc.cjs'
+    'Trae MCP 使用项目内绝对启动器路径',
+    traeEntry?.args?.[0] === path.join(dir, '.quality-center', 'bin', 'qc.cjs') &&
+      traeEntry?.cwd === path.resolve(dir) &&
+      !JSON.stringify(traeEntry).includes('${workspaceFolder}')
   );
   const vscodeMcp = JSON.parse(fs.readFileSync(path.join(dir, '.vscode/mcp.json'), 'utf8'));
   check('VS Code 用 servers + type=stdio', vscodeMcp.servers?.['quality-center']?.type === 'stdio');
@@ -427,14 +437,22 @@ async function main() {
     arguments: { path: dir, group: 'framework', reuse: true, top: 1 }
   });
   const groupedPlan = JSON.parse(grouped.result?.content?.[0]?.text ?? '{}');
-  check(
-    'MCP plan 默认按组返回',
-    groupedPlan.groupShown === 'framework' &&
-      Array.isArray(groupedPlan.candidates) &&
-      groupedPlan.candidates.every((item) => item.group === 'framework') &&
-      groupedPlan.patchPreview === undefined,
-    JSON.stringify({ group: groupedPlan.groupShown, n: groupedPlan.candidates?.length })
-  );
+  if (groupedPlan.empty) {
+    check(
+      'MCP plan 无可升级项时返回 empty（不生成第二个计划）',
+      groupedPlan.candidateCount === 0 && typeof groupedPlan.hint === 'string',
+      JSON.stringify(groupedPlan)
+    );
+  } else {
+    check(
+      'MCP plan 默认按组返回',
+      groupedPlan.groupShown === 'framework' &&
+        Array.isArray(groupedPlan.candidates) &&
+        groupedPlan.candidates.every((item) => item.group === 'framework') &&
+        groupedPlan.patchPreview === undefined,
+      JSON.stringify({ group: groupedPlan.groupShown, n: groupedPlan.candidates?.length })
+    );
+  }
   client.close();
 
   console.log('8) 分组推进：跨线拒绝 → 逐组落盘 → 回滚');

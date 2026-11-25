@@ -145,10 +145,17 @@ const LAUNCHER_CJS = [
 const LAUNCHER_CMD = ['@echo off', 'node "%~dp0qc.cjs" %*', ''].join('\n');
 const LAUNCHER_SH = ['#!/bin/sh', 'exec node "$(dirname "$0")/qc.cjs" "$@"', ''].join('\n');
 
-const MCP_SERVER = {
-  command: 'node',
-  args: ['${workspaceFolder}/.quality-center/bin/qc.cjs', 'mcp']
-};
+/**
+ * Trae 不会展开 MCP 配置里的 ${workspaceFolder}，会把字面量直接传给 node。
+ * 因此这里写项目内的绝对启动器路径和 cwd；每个仓库的配置本来由本仓库生成，可移植性由重新接入保证。
+ */
+function mcpServer(root: string) {
+  return {
+    command: 'node',
+    args: [path.join(root, '.quality-center', 'bin', 'qc.cjs'), 'mcp'],
+    cwd: path.resolve(root)
+  };
+}
 
 function ruleDocument(): string {
   return ['---', 'description: 质量中心：按 quality-center 标准做依赖与配置安全整改（先出计划再改文件）',
@@ -224,12 +231,14 @@ function upsertBlock(file: string, block: string, check: boolean): IntegrateFile
 function upsertMcpJson(
   file: string,
   shape: 'mcpServers' | 'servers',
+  root: string,
   check: boolean
 ): IntegrateFile['action'] {
+  const server = mcpServer(root);
   const entry =
     shape === 'servers'
-      ? { type: 'stdio', ...MCP_SERVER }
-      : { ...MCP_SERVER };
+      ? { type: 'stdio', ...server }
+      : { ...server };
   let doc: Record<string, unknown> = {};
   const existed = fs.existsSync(file);
   if (existed) {
@@ -329,15 +338,15 @@ export function integrate(root: string, options: IntegrateOptions): IntegrateRes
   const rule = ruleDocument();
   if (targets.has('trae')) {
     record(path.join(root, '.trae', 'rules', 'quality-center.md'), writeManaged(path.join(root, '.trae', 'rules', 'quality-center.md'), rule, check));
-    record(path.join(root, '.trae', 'mcp.json'), upsertMcpJson(path.join(root, '.trae', 'mcp.json'), 'mcpServers', check));
+    record(path.join(root, '.trae', 'mcp.json'), upsertMcpJson(path.join(root, '.trae', 'mcp.json'), 'mcpServers', root, check));
     notes.push('Trae：项目级 MCP 需在 设置 > MCP 打开「启用项目级 MCP」并确认信任');
   }
   if (targets.has('cursor')) {
     record(path.join(root, '.cursor', 'rules', 'quality-center.mdc'), writeManaged(path.join(root, '.cursor', 'rules', 'quality-center.mdc'), rule, check));
-    record(path.join(root, '.cursor', 'mcp.json'), upsertMcpJson(path.join(root, '.cursor', 'mcp.json'), 'mcpServers', check));
+    record(path.join(root, '.cursor', 'mcp.json'), upsertMcpJson(path.join(root, '.cursor', 'mcp.json'), 'mcpServers', root, check));
   }
   if (targets.has('vscode')) {
-    record(path.join(root, '.vscode', 'mcp.json'), upsertMcpJson(path.join(root, '.vscode', 'mcp.json'), 'servers', check));
+    record(path.join(root, '.vscode', 'mcp.json'), upsertMcpJson(path.join(root, '.vscode', 'mcp.json'), 'servers', root, check));
   }
   if (targets.has('github')) {
     record(
@@ -348,7 +357,7 @@ export function integrate(root: string, options: IntegrateOptions): IntegrateRes
 
   // 3. 兜底文件：仅当显式要求时生成，避免在仓库根多出 AGENTS.md / .mcp.json
   if (options.fallback) {
-    record(path.join(root, '.mcp.json'), upsertMcpJson(path.join(root, '.mcp.json'), 'mcpServers', check));
+    record(path.join(root, '.mcp.json'), upsertMcpJson(path.join(root, '.mcp.json'), 'mcpServers', root, check));
     record(path.join(root, 'AGENTS.md'), upsertBlock(path.join(root, 'AGENTS.md'), agentsBlock(), check));
   } else {
     notes.push('未写 AGENTS.md / 根 .mcp.json（兜底文件默认关闭）；需要时加 --fallback');

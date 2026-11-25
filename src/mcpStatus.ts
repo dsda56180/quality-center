@@ -29,6 +29,8 @@ interface ConfigHit {
   file: string;
   editor: string;
   registered: boolean;
+  /** 配置里仍使用 ${workspaceFolder}；Trae 不会展开这个变量，服务无法启动 */
+  literalPlaceholder: boolean;
 }
 
 interface ClientHeartbeat {
@@ -69,6 +71,7 @@ function inspectConfig(root: string): ConfigHit | undefined {
       continue;
     }
     let registered = false;
+    let literalPlaceholder = false;
     try {
       const doc = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
       const servers = (doc[candidate.key] ?? doc.mcpServers ?? doc.servers) as Record<string, unknown> | undefined;
@@ -76,13 +79,14 @@ function inspectConfig(root: string): ConfigHit | undefined {
         const text = JSON.stringify(value);
         if (name.toLowerCase().includes('quality-center') || /qc\.c?js/.test(text)) {
           registered = true;
+          literalPlaceholder = text.includes('${workspaceFolder}');
           break;
         }
       }
     } catch {
       registered = false;
     }
-    return { file: candidate.file, editor: candidate.editor, registered };
+    return { file: candidate.file, editor: candidate.editor, registered, literalPlaceholder };
   }
   return undefined;
 }
@@ -178,6 +182,15 @@ export async function probeMcp(root: string): Promise<McpStatus> {
       state: 'broken',
       label: 'MCP 配置异常',
       detail: `${hit.file} 存在，但没有注册 quality-center 服务。点「修复」重新生成。`,
+      configFile: hit.file,
+      editor: hit.editor
+    };
+  }
+  if (hit.literalPlaceholder && hit.editor === 'Trae') {
+    return {
+      state: 'broken',
+      label: 'MCP 配置未展开变量',
+      detail: `${hit.file} 里仍是字面量 \${workspaceFolder}；Trae 不会展开它，MCP 进程会启动失败。点「修复」改成项目内绝对启动器路径。`,
       configFile: hit.file,
       editor: hit.editor
     };

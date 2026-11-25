@@ -71,6 +71,8 @@ export interface UpgradeContext {
   currentJavaVersion?: string;
   /** 计划要迁移到的 Java 版本；与 currentJavaVersion 不一致时生成 java.version 候选 */
   targetJavaVersion?: string;
+  /** 是否允许新增 dependencyManagement 固定传递依赖；默认不允许 */
+  allowDependencyManagement?: boolean;
 }
 
 export interface UpgradeChange {
@@ -447,6 +449,13 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
       note = '该依赖由 BOM 统一管理，单独固定版本可能与同源组件不一致；建议优先升级 BOM。';
     } else {
       sourceKind = 'transitive';
+      if (!context?.allowDependencyManagement) {
+        skipped.push({
+          packageName,
+          reason: '传递依赖需新增 dependencyManagement 固定版本，当前策略未授权（allowDependencyManagement=false）'
+        });
+        continue;
+      }
       from = installed;
       mode = 'manage';
       source = managedEntry
