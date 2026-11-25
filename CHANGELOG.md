@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.34
+
+- 打开工具面板时检测 MCP：未配置或异常会弹一次提示，可直接「生成/修复 MCP 配置」
+- 新增 `qualityCenter.mcp.notifyMissing`（默认开启），不想被提醒可关闭
+- 提醒只在每个面板会话触发一次，不随扫描/刷新反复弹窗
+- 状态条同步区分：未配置 → 已配置 → 已接入（真实客户端心跳），配置缺失/服务异常提供对应动作
+
 ## 0.27.33
 
 - MCP 服务在真实客户端 `initialize / tools/list / tools/call` 时写 `.quality-center/mcp-client.json` 心跳（客户端名、版本、pid、时间、工具数）

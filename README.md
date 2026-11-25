@@ -267,6 +267,7 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 - 升级向导卡：**「复制给 AI 全权推进」**（现在只复制一句 MCP 入口；AI 先调 `quality_agent_brief`，由插件返回完整驱动指令与状态，不再手工粘贴长 prompt）
 - MCP：`quality_agent_brief` 是“全权推进”的唯一入口，返回 `prompt + next`；没有 MCP 时才退回 `qc prompt --drive`
 - 工具面板顶部有 MCP 状态条：检测 `.trae/.cursor/.vscode/.mcp.json` 配置，并启动 `qc.cjs mcp` 做 `initialize + tools/list` 自检；Trae 已启用并连上后，MCP 服务写 `.quality-center/mcp-client.json` 心跳，面板校验 pid 后显示“MCP 已接入 · Trae”，否则只显示“已配置 · 需在 IDE 启用”
+- 首次打开面板若发现 MCP 未配置/异常，会弹一次安装提示，可直接生成/修复；可用 `qualityCenter.mcp.notifyMissing=false` 关闭
 - 编译失败弹窗：**「复制给 AI」**（附带 Maven 尾部与「已还原 pom」的事实）
 - 命令面板：`quality-center: 复制 AI 启动指令（升级）`（协助模式）、`quality-center: 复制 AI 全权推进指令（升级）`（全权模式）
 

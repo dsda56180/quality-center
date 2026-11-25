@@ -243,6 +243,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     label: '检测 MCP…',
     detail: '正在检查项目 MCP 配置与本地服务。'
   };
+  /** 本次面板会话只提醒一次，避免每次 push 都弹 */
+  private mcpPrompted = false;
 
   constructor(private readonly runner: ScanRunner) {}
 
@@ -1944,6 +1946,29 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       };
     }
     this.push();
+    await this.maybePromptMcpInstall();
+  }
+
+  /** 面板首次发现 MCP 未配置/异常时提示安装；设置里可关闭 */
+  private async maybePromptMcpInstall(): Promise<void> {
+    if (this.mcpPrompted) {
+      return;
+    }
+    if (this.mcpStatus.state !== 'missing' && this.mcpStatus.state !== 'broken') {
+      return;
+    }
+    if (!vscode.workspace.getConfiguration('qualityCenter').get<boolean>('mcp.notifyMissing', true)) {
+      return;
+    }
+    this.mcpPrompted = true;
+    const pick = await vscode.window.showWarningMessage(
+      `质量中心：${this.mcpStatus.label}。${this.mcpStatus.detail}`,
+      '生成/修复 MCP 配置',
+      '稍后'
+    );
+    if (pick === '生成/修复 MCP 配置') {
+      await this.setupMcp();
+    }
   }
 
   private async setupMcp(): Promise<void> {
