@@ -266,6 +266,8 @@ export function patchRun(
 
 export function beginTool(root: string, tool: string, args?: Record<string, unknown>): RunState {
   const state = ensureRun(root);
+  const terminal = ['done', 'blocked', 'needs_confirm', 'idle'].includes(state.phase);
+  const resumedPhase = terminal ? phaseForTool(tool, state) : undefined;
   return (
     patchRun(
       root,
@@ -275,13 +277,39 @@ export function beginTool(root: string, tool: string, args?: Record<string, unkn
         lastTool: tool,
         lastToolStartedAt: nowIso(),
         lastToolOk: undefined,
-        lastToolError: undefined
+        lastToolError: undefined,
+        ...(resumedPhase ? { phase: resumedPhase } : {})
       },
       'tool.start',
       { tool, args: summarizeArgs(args) },
       { tool }
     ) ?? state
   );
+}
+
+/** 运行态停在终止阶段后，新的工具调用要立即把阶段拉回工作阶段，面板才不会出现“执行中但所有阶段都灰掉” */
+function phaseForTool(tool: string, state: RunState): RunPhase | undefined {
+  switch (tool) {
+    case 'quality_agent_brief':
+      return 'baseline_build';
+    case 'quality_build':
+      return state.baselineTotal === undefined ? 'baseline_build' : state.planId ? 'apply' : 'static_fix';
+    case 'quality_scan':
+      return state.baselineTotal === undefined ? 'baseline_scan' : 'rescan';
+    case 'quality_fix':
+    case 'cli:fix':
+      return 'fix';
+    case 'quality_upgrade_plan':
+      return 'plan';
+    case 'quality_upgrade_apply':
+    case 'quality_upgrade_check':
+    case 'quality_upgrade_revert':
+      return 'apply';
+    case 'quality_finalize':
+      return 'finalize';
+    default:
+      return undefined;
+  }
 }
 
 export function endTool(
@@ -292,7 +320,7 @@ export function endTool(
   const patch: Partial<RunState> = {
     lastTool: tool,
     lastToolOk: result.ok,
-    lastToolError: result.error,
+    lastToolError: result.ok ? undefined : summarizeToolError(result.error),
     lastToolStartedAt: undefined
   };
   if (result.errorCode === 'blocked') {
@@ -301,6 +329,69 @@ export function endTool(
     patch.status = 'needs_confirm';
   }
   return patchRun(root, patch, 'tool.end', result, { tool });
+}
+
+/** 工具错误经常是嵌套的 MCP JSON；面板只展示人能读的那一层，不把整段 JSON 塞进 UI */
+function summarizeToolError(raw?: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  let value: unknown = raw;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+        try {
+          value = JSON.parse(text);
+          continue;
+        } catch {
+          return truncate(text);
+        }
+      }
+      return truncate(text);
+    }
+    if (Array.isArray(value)) {
+      value = value
+        .map((item) => (item && typeof item === 'object' && 'text' in item ? (item as { text: unknown }).text : item))
+        .filter(Boolean)
+        .join('\n');
+      continue;
+    }
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      if (typeof record.error === 'string' && record.error.trim()) {
+        return truncate(record.error.trim());
+      }
+      if (record.ok === false) {
+        const tests = record.tests as { total?: number; failures?: number; errors?: number; state?: string } | undefined;
+        const parts = ['执行失败'];
+        if (typeof record.exitCode === 'number') {
+          parts.push(`exitCode ${record.exitCode}`);
+        }
+        if (typeof record.gate === 'string') {
+          parts.push(`gate ${record.gate}`);
+        }
+        if (tests && typeof tests.total === 'number') {
+          parts.push(`测试 ${tests.state ?? 'unknown'}：${tests.total} 个，失败 ${tests.failures ?? 0}，错误 ${tests.errors ?? 0}`);
+        }
+        return truncate(parts.join(' · '));
+      }
+      if ('content' in record) {
+        value = record.content;
+        continue;
+      }
+      if (typeof record.message === 'string') {
+        return truncate(record.message);
+      }
+      return truncate(JSON.stringify(record));
+    }
+    break;
+  }
+  return truncate(String(value));
+}
+
+function truncate(text: string, max = 260): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 export function setPhase(
@@ -323,6 +414,20 @@ export function markBlocked(root: string, item: RunBlockingItem): RunState | und
 }
 
 export function finishRun(root: string, status: RunStatus = 'done', data?: Record<string, unknown>): RunState | undefined {
+  const state = readRunState(root);
+  if (!state) {
+    return undefined;
+  }
+  // AI 驱动（autopilot）的运行由 MCP 自己收尾；CLI/面板的临时命令不能把整轮 AI 标成 done，
+  // 否则面板会瞬间收起 AI 状态，下一次工具调用再把 phase 停在 done，所有阶段都变成灰色。
+  if (state.mode !== 'manual' && currentActor.kind !== 'mcp') {
+    return patchRun(
+      root,
+      { status: state.status === 'paused' ? 'paused' : 'running' },
+      'run.delegated',
+      { ...data, delegated: true, actor: currentActor.kind }
+    );
+  }
   return patchRun(root, { status, phase: status === 'done' ? 'done' : 'finalize' }, 'run.finished', data);
 }
 

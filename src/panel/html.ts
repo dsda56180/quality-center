@@ -182,7 +182,7 @@ export function getHtml(nonce: string): string {
   .toolbar { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
   .toolbar .spacer { flex: 1 1 auto; }
   .mcpbar {
-    display: flex; align-items: center; gap: 5px; margin: 0 0 6px; padding: 4px 6px;
+    display: none; align-items: center; gap: 5px; margin: 0 0 6px; padding: 4px 6px;
     border: 1px solid var(--vscode-panel-border); border-radius: 3px;
     font-size: 11px; line-height: 1.35; color: var(--vscode-descriptionForeground);
   }
@@ -190,10 +190,17 @@ export function getHtml(nonce: string): string {
     flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
     background: #8a8a8a;
   }
-  .mcpbar.ready .mcp-dot { background: #2ea043; }
-  .mcpbar.configured .mcp-dot { background: #d29922; }
-  .mcpbar.broken .mcp-dot { background: #f85149; }
-  .mcpbar.checking .mcp-dot { background: #58a6ff; }
+  .mcpbar.ready .mcp-dot,
+  #mcpdot.ready .mcp-dot { background: #2ea043; }
+  .mcpbar.configured .mcp-dot,
+  #mcpdot.configured .mcp-dot { background: #d29922; }
+  .mcpbar.broken .mcp-dot,
+  #mcpdot.broken .mcp-dot { background: #f85149; }
+  .mcpbar.checking .mcp-dot,
+  #mcpdot.checking .mcp-dot { background: #58a6ff; }
+  #mcpdot.missing .mcp-dot { background: #8a8a8a; }
+  #mcpdot { width: 22px; height: 22px; margin-right: 2px; border: 0; background: transparent; }
+  #mcpdot .mcp-dot { width: 8px; height: 8px; }
   .mcpbar .mcp-text { flex: 1 1 auto; min-width: 0; cursor: default; }
   .mcpbar .mcp-label { color: var(--vscode-foreground); }
   .mcpbar button { flex: 0 0 auto; padding: 2px 6px; font-size: 10px; }
@@ -238,7 +245,7 @@ export function getHtml(nonce: string): string {
     background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.1));
   }
   /* AI 执行时用状态卡替换所有写操作入口，避免“面板按钮”和“AI 动作”同时可点 */
-  body.ai-busy .toolbar button,
+  body.ai-busy .toolbar button:not(.mcp-dot-btn),
   body.ai-busy #fixbar,
   body.ai-busy #buildbar,
   body.ai-busy #wizard,
@@ -537,6 +544,7 @@ export function getHtml(nonce: string): string {
     <button id="resume" class="icon-btn" title="继续扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 2l8 5-8 5z"/></svg></button>
     <button id="pause" class="icon-btn secondary" title="暂停扫描：当前扫描器结束后不再启动新的扫描器" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 2h3v10H3zM8 2h3v10H8z"/></svg></button>
     <button id="stop" class="icon-btn secondary" title="终止扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 3h8v8H3z"/></svg></button>
+    <button id="mcpdot" class="icon-btn mcp-dot-btn checking" title="MCP 检测中"><span class="mcp-dot"></span></button>
     <span class="spacer"></span>
     <button id="deepfix" class="icon-btn secondary" title="深度修复"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg></button>
     <button id="upgrade" class="icon-btn secondary" title="升级依赖"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M5 4v2h14V4H5zm0 10h4v6h6v-6h4l-7-7-7 7z"/></svg></button>
@@ -560,8 +568,8 @@ export function getHtml(nonce: string): string {
     </div>
     <span class="cat-tip" id="cattip">猫咪正在奔跑检查代码</span>
   </div>
-  <div id="summary" class="summary"><span class="hint">尚未扫描</span></div>
   <div id="aistatus" class="aistatus"></div>
+  <div id="summary" class="summary"><span class="hint">尚未扫描</span></div>
   <div class="tabs" id="tabs">
     <button class="tab active" data-tab="all">全部</button>
     <button class="tab" data-tab="checkstyle">代码质量</button>
@@ -931,6 +939,18 @@ export function getHtml(nonce: string): string {
     ['finalize', '收尾']
   ];
 
+  function uiPhaseForTool(tool, run) {
+    if (!tool) return run.phase;
+    if (tool === 'quality_build') return run.baselineTotal === undefined ? 'baseline_build' : (run.planId ? 'apply' : 'static_fix');
+    if (tool === 'quality_scan') return run.baselineTotal === undefined ? 'baseline_scan' : 'rescan';
+    if (tool === 'quality_fix' || tool === 'cli:fix') return 'fix';
+    if (tool === 'quality_upgrade_plan') return 'plan';
+    if (tool === 'quality_upgrade_apply' || tool === 'quality_upgrade_check' || tool === 'quality_upgrade_revert') return 'apply';
+    if (tool === 'quality_finalize') return 'finalize';
+    if (tool === 'quality_agent_brief') return 'baseline_build';
+    return run.phase;
+  }
+
   /** AI 运行态只读投影：执行中隐藏所有人工操作，只展示 AI 当前阶段 */
   function renderAiStatus() {
     var el = document.getElementById('aistatus');
@@ -938,22 +958,27 @@ export function getHtml(nonce: string): string {
     var run = state.run;
     var actor = (run && run.actor) || {};
     var age = run && run.updatedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(run.updatedAt)) / 1000)) : 0;
-    var active = !!(run && run.status === 'running' && run.active && age < 1800);
+    var working = !!(run && run.status === 'running' && age < 1800);
     var blocked = !!(run && run.status === 'blocked');
+    var confirm = !!(run && run.status === 'needs_confirm');
     var done = !!(run && run.status === 'done' && actor.kind === 'mcp' && age < 600);
-    if (!run || (!active && !blocked && !done)) {
+    if (!run || (!working && !blocked && !confirm && !done)) {
       el.className = 'aistatus';
       el.innerHTML = '';
       return;
     }
+    // CLI 临时命令曾把 phase 标成 done；面板按最近工具恢复可读阶段，不让所有阶段一起变灰
+    var phase = run.phase === 'done' && (working || blocked || confirm)
+      ? uiPhaseForTool(run.lastTool, run)
+      : run.phase;
     var phaseLabel = ({
       baseline_build: '基线构建', baseline_scan: '基线扫描', fix: '确定性修复', plan: '依赖计划',
       apply: '依赖落盘', static_fix: '静态修复', rescan: '复扫', finalize: '收尾',
       done: '已完成', blocked: '已阻塞', needs_confirm: '待确认', paused: '已暂停', idle: '空闲'
-    })[run.phase] || run.phase || '执行中';
+    })[phase] || phase || '执行中';
     var who = actor.kind === 'mcp' ? 'AI（' + (actor.client || 'MCP') + '）' : actor.kind === 'cli' ? 'CLI' : '外部';
-    var title = blocked ? '⛔ AI 已阻塞' : done ? '✅ AI 已完成' : '🤖 ' + who + '正在执行';
-    var current = AI_PHASES.findIndex(function (p) { return p[0] === run.phase; });
+    var title = blocked ? '⛔ AI 已阻塞' : confirm ? '⏸ 等待你确认' : done ? '✅ AI 已完成' : '🤖 ' + who + '正在执行';
+    var current = AI_PHASES.findIndex(function (p) { return p[0] === phase; });
     var steps = AI_PHASES.map(function (p, i) {
       var cls = 'ai-step';
       if (done || (current >= 0 && i < current)) cls += ' done';
@@ -961,10 +986,11 @@ export function getHtml(nonce: string): string {
       return '<span class="' + cls + '">' + p[1] + '</span>';
     }).join('');
     var meta = phaseLabel + ' · ' + age + ' 秒前更新';
+    if (run.phase === 'done' && working) meta += ' · 阶段未更新';
     if (run.lastTool) meta += ' · 最近工具 ' + esc(run.lastTool);
     var warnings = '';
-    if (run.stalled && active) warnings += '<div class="ai-warn">⚠ 已较长时间没有工具活动，AI 可能卡住。</div>';
-    if (run.lastToolError) warnings += '<div class="ai-warn">⚠ 最近一次工具失败：' + esc(run.lastToolError) + '</div>';
+    if (run.stalled && working) warnings += '<div class="ai-warn">⚠ 已较长时间没有工具活动，AI 可能卡住。</div>';
+    if (run.lastToolError) warnings += '<div class="ai-warn">⚠ 最近一次工具失败：' + esc(shortError(run.lastToolError)) + '</div>';
     (run.blocked || []).slice(0, 3).forEach(function (b) {
       warnings += '<div class="ai-block">⛔ ' + esc(b.message) + (b.suggestion ? '（' + esc(b.suggestion) + '）' : '') + '</div>';
     });
@@ -989,8 +1015,13 @@ export function getHtml(nonce: string): string {
     el.innerHTML =
       '<div class="ai-head"><span class="ai-dot"></span>' + esc(title) + '</div>' +
       '<div class="ai-meta">' + esc(meta) + '</div>' +
-      (active ? '<div class="ai-steps">' + steps + '</div>' : '') +
+      ((working || blocked || confirm) ? '<div class="ai-steps">' + steps + '</div>' : '') +
       warnings;
+  }
+
+  function shortError(text) {
+    var value = String(text || '');
+    return value.length > 260 ? value.slice(0, 260) + '…' : value;
   }
 
   /** 面板顶部的提示行：进行中的长任务 + 扫描异常 + 已跳过的扫描器 */
@@ -1181,6 +1212,11 @@ export function getHtml(nonce: string): string {
     if (setup) {
       setup.style.display = mcp.state === 'ready' ? 'none' : '';
       setup.textContent = mcp.state === 'configured' ? '查看配置' : (mcp.state === 'broken' ? '修复' : '接入');
+    }
+    var dot = document.getElementById('mcpdot');
+    if (dot) {
+      dot.className = 'icon-btn mcp-dot-btn ' + mcp.state;
+      dot.title = 'MCP：' + mcp.label + (mcp.detail ? ' · ' + mcp.detail : '');
     }
   }
 
@@ -1429,6 +1465,14 @@ export function getHtml(nonce: string): string {
   });
   document.getElementById('mcpcheck').addEventListener('click', function () {
     vscode.postMessage({ type: 'checkMcp' });
+  });
+  document.getElementById('mcpdot').addEventListener('click', function () {
+    var mcp = state.mcp || { state: 'missing' };
+    if (mcp.state === 'ready') {
+      document.getElementById('mcpcheck').click();
+    } else {
+      document.getElementById('mcpsetup').click();
+    }
   });
   document.getElementById('mcpsetup').addEventListener('click', function () {
     var mcp = state.mcp || { state: 'missing' };

@@ -688,6 +688,10 @@ export async function fixProject(
   let skipped = 0;
   const fixId = `fix-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}`;
   const fixDir = path.join(root, '.quality-center', 'fix', fixId);
+  if (write) {
+    // 之前只建 before 目录；patches 目录不存在时 writeFileSync 直接 ENOENT，整次确定性修复回滚
+    fs.mkdirSync(path.join(fixDir, 'patches'), { recursive: true });
+  }
 
   for (const [file, list] of byFile) {
     if (!fs.existsSync(file)) {
