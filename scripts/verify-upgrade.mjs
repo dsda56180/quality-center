@@ -697,6 +697,14 @@ async function main() {
       drivePrompt.includes('未回答不得执行 apply'),
     drivePrompt.slice(0, 300)
   );
+  check(
+    '回答冲突时调整策略并重新生成计划',
+    drivePrompt.includes('用户回答与当前计划冲突') &&
+      drivePrompt.includes('upgrade-policy.json') &&
+      drivePrompt.includes('qc upgrade plan .') &&
+      drivePrompt.includes('不要 `--reuse`'),
+    drivePrompt.slice(0, 900)
+  );
 
   console.log(`\n结果：${passed} 通过，${failures.length} 失败`);
   if (failures.length) {

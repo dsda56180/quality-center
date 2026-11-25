@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.27.29
+
+- 启动前确认遇到回答冲突时，不再只“停在 plan”：要求 AI 按用户回答调整 `upgrade-policy.json`（JDK 映射、buildGate、allowNextFrameworkLine），再用 `qc upgrade plan` 生成新计划并对比差异
+- 明确 JDK 冲突的两种语义：只换运行 JDK 时计划可不变；源码/框架跨到 Boot 3.x 时必须新建计划单独评估
+- 新增冲突调整断言，自检 104 通过 / 0 失败
+
 ## 0.27.28
 
 - `prompt --drive` 增加“第 0 步：启动前确认”：先问 JDK、buildGate、跨大版本、属性覆盖与最小编译修复权限，用户回答前禁止 `apply`

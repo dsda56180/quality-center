@@ -49,7 +49,14 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
       '2. 门禁：是否接受策略里的 buildGate（默认 package，会跑测试）？是否允许跳过测试？默认不允许。',
       '3. 跨大版本：计划里的 cross-line 项是否本次处理？默认先不动，推进到该组再人工确认。',
       '4. 属性与代码修复：mysql、okhttp 等项目属性是否允许随框架 BOM 对齐？是否允许按 explain 做最小编译修复（例如删除无用 import）？',
-      '若用户没有回答，或回答与计划冲突：停在 plan，不落盘，并说明冲突点。',
+      '若用户没有回答：停在 plan，不落盘，等用户补充。',
+      '若用户回答与当前计划冲突：不要执行旧计划，也不要只回一句“冲突”；按下面的方式调整并给出新计划：',
+      '   - JDK：先区分“运行环境换 JDK，但源码仍按 Java 8 编”与“源码也升到新 JDK/Boot 3.x”。前者确认 Boot 2.7.18 可在该 JDK 运行即可，计划不变；后者会引入 Jakarta 迁移，必须新建计划单独评估。',
+      '   - 门禁：按用户回答改 `.quality-center/upgrade-policy.json` 的 `buildGate`（compile / package / test），不要用命令行临时绕过。',
+      '   - 框架目标：按用户目标改 `frameworkTargets`；只有明确要跨到 Boot 3.x 时才设 `allowNextFrameworkLine=true`。',
+      '   - 跨大版本：把用户“本次做/不做”的结论记下来；不做就保留在计划里但停在 needs-confirm，不得自行加 `--allow-cross-line`。',
+      '   - 改完策略后运行 `qc upgrade plan .` 生成新计划（不要 `--reuse`），对比旧/新计划的目标版本、分组与 pom.diff，把差异告诉用户；旧计划保留，不删除。',
+      '   - 新计划生成后仍不要直接 apply：先让用户确认关键变化，再按 `qc next` 执行。',
       ''
     );
   }
