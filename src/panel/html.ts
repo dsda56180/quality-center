@@ -262,7 +262,6 @@ export function getHtml(nonce: string): string {
   body.ai-busy .d-actions,
   body.ai-busy .sug-actions,
   body.ai-busy .tool-link,
-  body.ai-busy .ai-link,
   body.ai-busy #mcpcheck,
   body.ai-busy #mcpsetup { display: none !important; }
   .aistatus { display: none; margin: 0 0 10px; padding: 8px 10px; border-radius: 4px;
@@ -338,13 +337,6 @@ export function getHtml(nonce: string): string {
   @keyframes catDots {
     0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; }
   }
-  .ai-link {
-    margin-left: auto; flex: none; padding: 1px 8px;
-    font-size: 10px; border-radius: 10px;
-    background: transparent; color: var(--vscode-textLink-foreground);
-    border: 1px solid var(--vscode-panel-border); cursor: pointer;
-  }
-  .ai-link:hover { background: var(--vscode-list-hoverBackground); }
   .chip { padding: 2px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
   .chip[data-sev], .chip[data-clear] { cursor: pointer; user-select: none; }
   .chip[data-sev]:hover, .chip[data-clear]:hover { filter: brightness(1.15); }
@@ -1436,16 +1428,12 @@ export function getHtml(nonce: string): string {
       const totalText = severityFilter.length === 0
         ? '共 ' + issues.length + ' 项'
         : '共 ' + visible + ' / ' + issues.length + ' 项';
-      const aiButton = state.agentFile
-        ? '<button class="ai-link" title="AI agent 可直接读取 ' + esc(state.agentFile) + '">AI 数据</button>'
-        : '';
       const clearChip = severityFilter.length > 0
         ? '<span class="chip c-info" data-clear="1" title="清除等级筛选">✕ 清除等级</span>'
         : '';
       sum.innerHTML = (issues.length ? chips : '<span class="chip c-info">未发现问题</span>')
         + '<span class="chip">' + totalText + ' · ' + time + '</span>'
-        + clearChip
-        + aiButton;
+        + clearChip;
     }
 
     const list = document.getElementById('list');
@@ -1546,9 +1534,6 @@ export function getHtml(nonce: string): string {
       }
       render();
       return;
-    }
-    if (e.target.classList && e.target.classList.contains('ai-link')) {
-      vscode.postMessage({ type: 'openAgent' });
     }
   });
   document.getElementById('scan').addEventListener('click', function () {

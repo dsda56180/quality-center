@@ -1,5 +1,8 @@
+const fs = require('fs');
+const path = require('path');
 const { getHtml } = require('../out/panel/html.js');
 const h = getHtml({ cspSource: 'x', nonce: 'n' });
+const provider = fs.readFileSync(path.join(__dirname, '..', 'src', 'panel', 'QualityViewProvider.ts'), 'utf8');
 const checks = {
   aiBusy: h.includes('body.ai-busy'),
   aiStatus: h.includes('id="aistatus"'),
@@ -12,6 +15,8 @@ const checks = {
   msgBarActions: h.includes("wizard('生成升级计划'") || h.includes("wizard('确认并执行'"),
   msgBarCopyAi: h.includes("action('复制给 AI', 'copyDrivePrompt'"),
   mcpReadyHidden: !h.includes("if (mcp.state === 'ready')"),
+  noAiDataButton: !h.includes('AI 数据'),
+  planUsesNormalizedIssues: (provider.match(/createUpgradePlan\(root, readIssues\(root\)/g) || []).length >= 3,
   progressSeparated: h.includes('progressBusy'),
   catFallback: h.includes('猫咪正在准备扫描'),
   finalReport: h.includes('最终验收')

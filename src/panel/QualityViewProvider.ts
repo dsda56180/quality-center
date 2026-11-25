@@ -28,6 +28,7 @@ import {
   hashText,
   PLAN_GROUP_LABEL,
   planCandidateToUpgrade,
+  readIssues,
   readUpgradePlan,
   revertUpgradePlan
 } from '../upgradePlanFile';
@@ -516,9 +517,6 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'copyIssue':
         await this.copyIssue(message.id ?? 0);
-        break;
-      case 'openAgent':
-        await this.openAgentFile();
         break;
       case 'fixAll':
         await this.fixAll();
@@ -1565,7 +1563,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     // 面板与 CLI/MCP 走同一条路：先出 Plan V3（plan.json + pom.diff），再按 planId + pomHash 落盘。
     let plan: ReturnType<typeof createUpgradePlan>;
     try {
-      plan = createUpgradePlan(root, result.issues);
+      plan = createUpgradePlan(root, readIssues(root));
     } catch (error) {
       void vscode.window.showErrorMessage(
         `生成升级计划失败：${error instanceof Error ? error.message : String(error)}`
@@ -1774,7 +1772,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
     try {
-      const plan = createUpgradePlan(root, result.issues, { reuse: true }).plan;
+      const plan = createUpgradePlan(root, readIssues(root), { reuse: true }).plan;
       if (plan.candidates.length === 0) {
         const detail = plan.skipped.slice(0, 5).map((item) => `· ${item.packageName}：${item.reason}`).join('\n');
         void vscode.window.showInformationMessage(`没有可直接升级的依赖${detail ? `：\n${detail}` : ''}`);
@@ -1832,7 +1830,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     let planFile: ReturnType<typeof createUpgradePlan>['plan'];
     try {
-      planFile = createUpgradePlan(root, result.issues, { reuse: true }).plan;
+      planFile = createUpgradePlan(root, readIssues(root), { reuse: true }).plan;
     } catch (error) {
       void vscode.window.showErrorMessage(
         `生成升级计划失败：${error instanceof Error ? error.message : String(error)}`
@@ -2713,16 +2711,6 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     ].join('\n');
     await vscode.env.clipboard.writeText(text);
     void vscode.window.showInformationMessage('已复制修复建议，可直接粘贴给 AI。');
-  }
-
-  private async openAgentFile(): Promise<void> {
-    const root = this.runner.root();
-    if (!root || !this.agentFile) {
-      void vscode.window.showInformationMessage('尚未生成 AI 数据文件，请先执行扫描。');
-      return;
-    }
-    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(root, this.agentFile)));
-    await vscode.window.showTextDocument(document, { preview: true });
   }
 
   async fixAll(): Promise<void> {
