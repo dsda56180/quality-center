@@ -1912,7 +1912,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     await vscode.env.clipboard.writeText(buildAgentPrompt(root, { mode: 'drive' }));
     const pick = await vscode.window.showInformationMessage(
-      '已复制「AI 全权推进」指令：包含循环、退出条件与禁止动作，粘贴到编辑器 AI 对话框即可。',
+      '已复制「AI 全权推进」指令：启动后会先问 JDK、构建门禁与跨大版本，确认后才执行；粘贴到编辑器 AI 对话框即可。',
       '打开交接'
     );
     if (pick === '打开交接') {

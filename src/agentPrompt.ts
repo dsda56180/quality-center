@@ -28,14 +28,38 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
   const drive = options.mode === 'drive';
   const lines: string[] = [
     drive
-      ? '你已被授权驱动整个依赖升级与 CVE 整改流程，不需要每一步等用户确认；但仍必须服从插件的状态机和止损规则。'
+      ? '你已被授权驱动整个依赖升级与 CVE 整改流程；但启动前必须先完成一次“开始前确认”，之后不需要每一步等用户确认，且始终服从插件的状态机和止损规则。'
       : '按 quality-center 的标准化流程完成本项目依赖升级与 CVE 整改。',
-    '',
+    ''
+  ];
+
+  let planContext = '';
+  try {
+    const plan = readUpgradePlan(root, options.planId);
+    planContext = ` Java ${plan.project.javaVersion ?? '未知'} / 框架 ${plan.project.frameworkVersion ?? '未知'} → ${plan.project.frameworkTarget ?? '未声明'}`;
+  } catch {
+    // 没有计划时，启动前确认里只用通用说法
+  }
+
+  if (drive) {
+    lines.push(
+      '启动前确认（第 0 步，必须先问用户并等待回答；未回答不得执行 apply）：',
+      '先发一条简短的「开始前确认」，一次问清下面 4 项，不要逐项反复追问：',
+      '1. JDK：计划按' + (planContext || '当前计划的 Java 版本') + '。生产/目标运行环境是否也是这个 JDK？若不是，先停，不要套用这份计划。',
+      '2. 门禁：是否接受策略里的 buildGate（默认 package，会跑测试）？是否允许跳过测试？默认不允许。',
+      '3. 跨大版本：计划里的 cross-line 项是否本次处理？默认先不动，推进到该组再人工确认。',
+      '4. 属性与代码修复：mysql、okhttp 等项目属性是否允许随框架 BOM 对齐？是否允许按 explain 做最小编译修复（例如删除无用 import）？',
+      '若用户没有回答，或回答与计划冲突：停在 plan，不落盘，并说明冲突点。',
+      ''
+    );
+  }
+
+  lines.push(
     '第一步：执行 `node .quality-center/bin/qc.cjs next .`（MCP: quality_next），读它返回的',
     'state / action / command / why / blockers，以及 `.quality-center/handoff.md`。',
     '它是唯一状态机：不要自己推断流程，也不要在已有 issues.json 时重新全量扫描。',
     '编辑器内 AI 优先用已配置的 quality_* MCP 工具；没有 MCP 时再用上面的 CLI。'
-  ];
+  );
 
   lines.push(
     '',

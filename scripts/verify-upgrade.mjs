@@ -689,6 +689,14 @@ async function main() {
   check('全权推进包含循环与退出条件', drivePrompt.includes('执行循环') && drivePrompt.includes('退出条件'));
   check('全权推进要求逐轮重取状态', drivePrompt.includes('每轮都重新 qc next') && drivePrompt.includes('原样执行 next 返回的 command'));
   check('全权推进禁止手改 pom 与跳测试', drivePrompt.includes('禁止手改') && drivePrompt.includes('跳过测试'));
+  check(
+    '全权推进启动前先确认 JDK 与门禁',
+    drivePrompt.includes('启动前确认') &&
+      drivePrompt.includes('JDK') &&
+      drivePrompt.includes('buildGate') &&
+      drivePrompt.includes('未回答不得执行 apply'),
+    drivePrompt.slice(0, 300)
+  );
 
   console.log(`\n结果：${passed} 通过，${failures.length} 失败`);
   if (failures.length) {
