@@ -451,7 +451,8 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         ? (params?.scope as AgentScope)
         : 'all';
       let scopes: AgentScope[] = picked.length ? picked : [singleScope];
-      if (scopes.includes('all')) {
+      const fullScopes: AgentScope[] = ['upgrade', 'consolidation', 'code', 'secrets', 'static'];
+      if (scopes.includes('all') || fullScopes.every((item) => scopes.includes(item))) {
         scopes = ['all'];
       }
       const upgradeScope = scopes.includes('all') || scopes.includes('upgrade');

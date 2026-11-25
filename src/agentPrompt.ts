@@ -46,7 +46,7 @@ const ALL_SCOPES: Exclude<AgentScope, 'all'>[] = ['upgrade', 'consolidation', 'c
 
 function normalizeScopes(options: AgentPromptOptions): AgentScope[] {
   const raw = options.scopes && options.scopes.length ? options.scopes : [options.scope ?? 'all'];
-  if (raw.includes('all')) {
+  if (raw.includes('all') || ALL_SCOPES.every((scope) => raw.includes(scope))) {
     return ['all'];
   }
   const picked = ALL_SCOPES.filter((scope) => raw.includes(scope));

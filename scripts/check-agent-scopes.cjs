@@ -16,6 +16,10 @@ const texts = {
 
 const combo = buildAgentPrompt(root, { ...base, scopes: ['consolidation', 'code'] });
 const comboAll = buildAgentPrompt(root, { ...base, scopes: ['all', 'code'] });
+const comboFive = buildAgentPrompt(root, {
+  ...base,
+  scopes: ['upgrade', 'consolidation', 'code', 'secrets', 'static']
+});
 const checks = {
   allRunsFullFlow: texts.all.includes('一次性执行流程'),
   allIncludesConsolidation: texts.all.includes('阶段 3.5 依赖收敛'),
@@ -38,7 +42,8 @@ const checks = {
     combo.includes('确定性代码修复（Checkstyle / astgrep）') &&
     combo.includes('处理顺序'),
   combinedExcludesUnpick: !combo.includes('硬编码密钥处置（gitleaks）'),
-  combinedAllWins: comboAll.includes('一次性执行流程')
+  combinedAllWins: comboAll.includes('一次性执行流程'),
+  fiveEqualsAll: comboFive.includes('一次性执行流程') && !comboFive.includes('你本次处理以下范围')
 };
 console.log(checks);
 fs.rmSync(root, { recursive: true, force: true });

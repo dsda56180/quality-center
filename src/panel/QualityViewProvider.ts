@@ -2194,7 +2194,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       .filter((item): item is AgentScope => validScopes.includes(item as AgentScope));
     const single = validScopes.includes(rawScope as AgentScope) ? (rawScope as AgentScope) : 'all';
     let scopes: AgentScope[] = picked.length ? picked : [single];
-    if (scopes.includes('all')) {
+    const allScopes: AgentScope[] = ['upgrade', 'consolidation', 'code', 'secrets', 'static'];
+    if (scopes.includes('all') || allScopes.every((scope) => scopes.includes(scope))) {
       scopes = ['all'];
     }
     const label: Record<AgentScope, string> = {

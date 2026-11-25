@@ -665,6 +665,10 @@ async function promptCommand(args: Args): Promise<number> {
   const pickedScopes = rawScope.split(',').map((item) => item.trim() as AgentScope)
     .filter((item) => validScopes.includes(item));
   const scopes: AgentScope[] = pickedScopes.length ? pickedScopes : ['all'];
+  const fullScopes: AgentScope[] = ['upgrade', 'consolidation', 'code', 'secrets', 'static'];
+  const effectiveScopes: AgentScope[] = scopes.includes('all') || fullScopes.every((item) => scopes.includes(item))
+    ? ['all']
+    : scopes;
   const planId = typeof args.flags['--plan'] === 'string' ? String(args.flags['--plan']) : undefined;
   let failure: string | undefined;
   const failureFile = typeof args.flags['--failure'] === 'string' ? String(args.flags['--failure']) : '';
@@ -676,9 +680,9 @@ async function promptCommand(args: Args): Promise<number> {
       progress(`失败日志不存在：${file}`);
     }
   }
-  const prompt = buildAgentPrompt(root, { mode, planId, failure, scopes });
+  const prompt = buildAgentPrompt(root, { mode, planId, failure, scopes: effectiveScopes });
   if (args.flags['--json'] === true) {
-    process.stdout.write(`${JSON.stringify({ mode, scopes, planId: planId ?? null, root, prompt }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ mode, scopes: effectiveScopes, planId: planId ?? null, root, prompt }, null, 2)}\n`);
   } else {
     process.stdout.write(`${prompt}\n`);
   }
