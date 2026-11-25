@@ -51,6 +51,43 @@ function summaryOf(summary: Record<string, unknown> | undefined, total: number):
   return result;
 }
 
+/** 取源码与构建清单的最新修改时间；跳过 target/.git/.quality-center，避免把构建产物算成“改动” */
+function latestSourceMtime(root: string): number {
+  const skip = new Set(['target', '.git', '.quality-center', 'node_modules', '.idea', '.mvn']);
+  let latest = 0;
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (skip.has(entry.name)) {
+        continue;
+      }
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && /\.(java|kt|xml|properties|yml|yaml)$/i.test(entry.name)) {
+        try {
+          latest = Math.max(latest, fs.statSync(full).mtimeMs);
+        } catch {
+          // 文件在遍历时消失：忽略
+        }
+      }
+    }
+  };
+  const pom = path.join(root, 'pom.xml');
+  try {
+    latest = fs.statSync(pom).mtimeMs;
+  } catch {
+    // 非 Maven 项目：只按源码判断
+  }
+  walk(path.join(root, 'src'));
+  return latest;
+}
+
 export function finalizeRun(root: string): FinalizeResult {
   const issuesFile = path.join(root, '.quality-center', 'issues.json');
   const currentRaw = readJson<{
@@ -66,6 +103,18 @@ export function finalizeRun(root: string): FinalizeResult {
     total: currentRaw.issues.length,
     bySource: summaryOf(currentRaw.summary, currentRaw.issues.length)
   };
+  // 收尾必须基于“改动之后的复扫”：AI 经常做完修复直接 finalize，面板于是永远看不到新结果。
+  // 用事实文件的 mtime 兜底，和 AI 自己怎么说无关。
+  const currentMs = Date.parse(current.at) || fs.statSync(issuesFile).mtimeMs;
+  const latestChange = latestSourceMtime(root);
+  if (latestChange && currentMs + 2000 < latestChange) {
+    return {
+      ok: false,
+      reason:
+        `当前扫描结果早于源码/依赖变更（扫描 ${new Date(currentMs).toISOString()}，` +
+        `最新变更 ${new Date(latestChange).toISOString()}）：先完成改动，再 quality_scan 复扫，最后 quality_finalize。`
+    };
+  }
   const baselineDigest = readScanBaseline(root);
   const baseline = baselineDigest
     ? {

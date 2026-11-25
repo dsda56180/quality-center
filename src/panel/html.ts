@@ -74,6 +74,8 @@ export interface Snapshot {
     planId?: string;
     blocked: { code: string; message: string; suggestion?: string }[];
     lastScan?: { at?: string; total: number; bySource: Record<string, number> };
+    baselineTotal?: number;
+    baselineAt?: string;
     build?: {
       at: string;
       ok: boolean;
@@ -87,6 +89,22 @@ export interface Snapshot {
     revision: string;
   };
   scanning: boolean;
+  /** 插件口径的最终验收（由 quality_finalize 写 final-report.json，面板只读） */
+  final?: {
+    baselineTotal: number;
+    currentTotal: number;
+    baselineAt: string;
+    currentAt: string;
+    added: number;
+    removed: number;
+    totalChange: number;
+    planId?: string;
+    planApplied?: number;
+    planTotal?: number;
+    buildOk?: boolean;
+    tests?: string;
+    reportFile?: string;
+  };
   /** 唯一状态机：现在到哪、下一步只做什么 */
   next?: SnapshotNext;
   deepFix?: { stage: string; startedAt: number; total?: number; done?: number } | null;
@@ -219,6 +237,32 @@ export function getHtml(nonce: string): string {
     border-radius: 4px;
     background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.1));
   }
+  /* AI 执行时用状态卡替换所有写操作入口，避免“面板按钮”和“AI 动作”同时可点 */
+  body.ai-busy .toolbar button,
+  body.ai-busy #fixbar,
+  body.ai-busy #buildbar,
+  body.ai-busy #wizard,
+  body.ai-busy .item .actions,
+  body.ai-busy .d-actions,
+  body.ai-busy .sug-actions,
+  body.ai-busy .tool-link,
+  body.ai-busy #mcpsetup { display: none !important; }
+  .aistatus { display: none; margin: 0 0 10px; padding: 8px 10px; border-radius: 4px;
+    border: 1px solid var(--vscode-panel-border); background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.1)); }
+  .aistatus.on { display: block; }
+  .aistatus.blocked { border-color: var(--vscode-errorForeground, #f48771); }
+  .ai-head { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+  .ai-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-progressBar-background, #3794ff); animation: aiPulse 1.1s ease-in-out infinite; }
+  .aistatus.blocked .ai-dot { background: var(--vscode-errorForeground, #f48771); animation: none; }
+  .ai-meta { margin-top: 4px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .ai-steps { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 7px; }
+  .ai-step { padding: 2px 6px; border-radius: 8px; font-size: 10px; color: var(--vscode-descriptionForeground);
+    border: 1px solid var(--vscode-panel-border); }
+  .ai-step.current { color: var(--vscode-button-foreground, #fff); background: var(--vscode-button-background, #0e639c); border-color: transparent; }
+  .ai-step.done { opacity: .65; }
+  .ai-warn { margin-top: 6px; font-size: 11px; color: var(--vscode-editorWarning-foreground, #cca700); }
+  .ai-block { margin-top: 4px; font-size: 11px; color: var(--vscode-errorForeground, #f48771); }
+  @keyframes aiPulse { 0%,100% { opacity: .35; transform: scale(.85); } 50% { opacity: 1; transform: scale(1.15); } }
   .catbar { display: none; margin: 0 0 10px; }
   .catbar.on { display: block; }
   .cat-stage { position: relative; height: 40px; overflow: hidden; }
@@ -515,6 +559,7 @@ export function getHtml(nonce: string): string {
     <span class="cat-tip" id="cattip">猫咪正在奔跑检查代码</span>
   </div>
   <div id="summary" class="summary"><span class="hint">尚未扫描</span></div>
+  <div id="aistatus" class="aistatus"></div>
   <div class="tabs" id="tabs">
     <button class="tab active" data-tab="all">全部</button>
     <button class="tab" data-tab="checkstyle">代码质量</button>
@@ -733,7 +778,7 @@ export function getHtml(nonce: string): string {
       var label = state.paused ? '猫咪暂停中，等待当前扫描器结束' : '猫咪正在奔跑检查代码';
       return label + (progress ? '（' + progress + '）' : '');
     }
-    return '';
+    return '猫咪正在准备扫描';
   }
 
   // 每只猫对应一个待执行项目：用内联 SVG 画出不同品种，避免 emoji 风格不统一
@@ -873,34 +918,92 @@ export function getHtml(nonce: string): string {
     });
   }
 
+  var AI_PHASES = [
+    ['baseline_build', '基线构建'],
+    ['baseline_scan', '基线扫描'],
+    ['fix', '确定性修复'],
+    ['plan', '依赖计划'],
+    ['apply', '依赖落盘'],
+    ['static_fix', '静态修复'],
+    ['rescan', '复扫'],
+    ['finalize', '收尾']
+  ];
+
+  /** AI 运行态只读投影：执行中隐藏所有人工操作，只展示 AI 当前阶段 */
+  function renderAiStatus() {
+    var el = document.getElementById('aistatus');
+    if (!el) return;
+    var run = state.run;
+    var actor = (run && run.actor) || {};
+    var age = run && run.updatedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(run.updatedAt)) / 1000)) : 0;
+    var active = !!(run && run.status === 'running' && run.active && age < 1800);
+    var blocked = !!(run && run.status === 'blocked');
+    var done = !!(run && run.status === 'done' && actor.kind === 'mcp' && age < 600);
+    if (!run || (!active && !blocked && !done)) {
+      el.className = 'aistatus';
+      el.innerHTML = '';
+      return;
+    }
+    var phaseLabel = ({
+      baseline_build: '基线构建', baseline_scan: '基线扫描', fix: '确定性修复', plan: '依赖计划',
+      apply: '依赖落盘', static_fix: '静态修复', rescan: '复扫', finalize: '收尾',
+      done: '已完成', blocked: '已阻塞', needs_confirm: '待确认', paused: '已暂停', idle: '空闲'
+    })[run.phase] || run.phase || '执行中';
+    var who = actor.kind === 'mcp' ? 'AI（' + (actor.client || 'MCP') + '）' : actor.kind === 'cli' ? 'CLI' : '外部';
+    var title = blocked ? '⛔ AI 已阻塞' : done ? '✅ AI 已完成' : '🤖 ' + who + '正在执行';
+    var current = AI_PHASES.findIndex(function (p) { return p[0] === run.phase; });
+    var steps = AI_PHASES.map(function (p, i) {
+      var cls = 'ai-step';
+      if (done || (current >= 0 && i < current)) cls += ' done';
+      if (!done && i === current) cls += ' current';
+      return '<span class="' + cls + '">' + p[1] + '</span>';
+    }).join('');
+    var meta = phaseLabel + ' · ' + age + ' 秒前更新';
+    if (run.lastTool) meta += ' · 最近工具 ' + esc(run.lastTool);
+    var warnings = '';
+    if (run.stalled && active) warnings += '<div class="ai-warn">⚠ 已较长时间没有工具活动，AI 可能卡住。</div>';
+    if (run.lastToolError) warnings += '<div class="ai-warn">⚠ 最近一次工具失败：' + esc(run.lastToolError) + '</div>';
+    (run.blocked || []).slice(0, 3).forEach(function (b) {
+      warnings += '<div class="ai-block">⛔ ' + esc(b.message) + (b.suggestion ? '（' + esc(b.suggestion) + '）' : '') + '</div>';
+    });
+    if (run.build && run.build.tests === 'skipped') warnings += '<div class="ai-warn">⚠ 最近构建跳过了测试：构建成功不等于测试通过。</div>';
+    if (run.build && run.build.drift) warnings += '<div class="ai-block">⛔ 构建发现 pom 已偏离活动计划，结果不可作为验收证据。</div>';
+    if (done) {
+      var last = run.lastScan;
+      var final = state.final;
+      if (final) {
+        warnings += '<div class="ai-meta">最终验收：' + final.baselineTotal + ' → ' + final.currentTotal +
+          ' 项（' + (final.totalChange >= 0 ? '+' : '') + final.totalChange +
+          '，新增 ' + final.added + ' / 消失 ' + final.removed + '）' +
+          (final.planId ? ' · 计划 ' + final.planApplied + '/' + final.planTotal : '') + '</div>';
+      } else if (last && last.total >= 0) {
+        warnings += '<div class="ai-meta">复扫结果：' + last.total + ' 项' +
+          (run.baselineTotal !== undefined ? ' · 基线 ' + run.baselineTotal + ' 项' : '') + '</div>';
+      } else {
+        warnings += '<div class="ai-block">⛔ AI 已结束，但没有可用的复扫结果；面板将自动补一次扫描。</div>';
+      }
+    }
+    el.className = 'aistatus on' + (blocked ? ' blocked' : '');
+    el.innerHTML =
+      '<div class="ai-head"><span class="ai-dot"></span>' + esc(title) + '</div>' +
+      '<div class="ai-meta">' + esc(meta) + '</div>' +
+      (active ? '<div class="ai-steps">' + steps + '</div>' : '') +
+      warnings;
+  }
+
   /** 面板顶部的提示行：进行中的长任务 + 扫描异常 + 已跳过的扫描器 */
   function renderNotice() {
     const notes = [];
-    if (state.run && (state.run.active || state.run.status === 'blocked' || state.run.status === 'needs_confirm')) {
-      var phaseLabel = ({
-        baseline_build: '基线构建', baseline_scan: '基线扫描', fix: '确定性修复', plan: '依赖计划',
-        apply: '依赖落盘', static_fix: '静态修复', rescan: '复扫', finalize: '收尾',
-        done: '已完成', blocked: '已阻塞', needs_confirm: '待确认', paused: '已暂停', idle: '空闲'
-      })[state.run.phase] || state.run.phase;
-      var actor = state.run.actor || {};
-      var who = actor.kind === 'mcp' ? 'AI（' + (actor.client || 'MCP') + '）' : actor.kind === 'panel' ? '面板' : actor.kind === 'cli' ? 'CLI' : '外部';
-      var age = state.run.updatedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(state.run.updatedAt)) / 1000)) : Math.max(0, Number(state.run.ageSeconds || 0));
-      var stalled = state.run.stalled || (state.run.status === 'running' && age > (/^(quality_build|quality_scan|quality_fix|quality_upgrade_apply|quality_upgrade_plan)$/.test(state.run.lastTool || '') ? 600 : 90));
-      notes.push('🤖 ' + who + '执行中 · ' + phaseLabel + ' · ' + age + ' 秒前更新' +
-        (state.run.lastTool ? ' · 最近工具 ' + esc(state.run.lastTool) : ''));
-      if (stalled) notes.push('⚠ 已较长时间没有工具活动，可能卡住；可在 AI 窗口继续或接管。');
-      if (state.run.lastToolError) notes.push('⚠ 最近一次工具失败：' + esc(state.run.lastToolError));
-      (state.run.blocked || []).slice(0, 3).forEach(function (b) { notes.push('⛔ ' + esc(b.message)); });
-      if (state.run.build && state.run.build.tests === 'skipped') {
-        notes.push('⚠ 最近构建跳过了测试：构建成功不等于测试通过。');
-      }
-      if (state.run.build && state.run.build.drift) {
-        notes.push('⛔ 最近构建发现 pom 已偏离活动计划，结果不可作为验收证据。');
-      }
-    }
     if (state.task) {
       var sec = Math.max(0, Math.floor((Date.now() - state.task.startedAt) / 1000));
       notes.push('⏳ ' + esc(state.task.label) + '：' + esc(state.task.stage) + ' · 已用 ' + sec + ' 秒');
+    }
+    if (state.final) {
+      var f = state.final;
+      notes.push('🧾 最终验收：' + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
+        (f.totalChange >= 0 ? '+' : '') + f.totalChange + '，新增 ' + f.added + ' / 消失 ' + f.removed + '）' +
+        (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
+        (f.tests === 'skipped' ? ' · ⚠ 构建跳过测试' : ''));
     }
     (state.errors || []).forEach(function (e) { notes.push('⚠ ' + (SRC_LABEL[e.source] || e.source) + ' 扫描异常：' + esc(e.message)); });
     (state.skipped || []).forEach(function (s) {
@@ -939,6 +1042,9 @@ export function getHtml(nonce: string): string {
     var title = n.title;
     if ((n.action === 'apply' || n.action === 'confirm') && n.plan) {
       title = n.plan.state === 'partial' ? '升级建议执行中' : '升级建议已生成';
+      if (state.final) {
+        title = n.plan.state === 'partial' ? '本次 AI 修复已收尾 · 剩余组需人工确认' : '本次 AI 修复已收尾';
+      }
     }
     var purpose = '';
     if (n.action === 'apply' || n.action === 'confirm') {
@@ -949,6 +1055,10 @@ export function getHtml(nonce: string): string {
         (n.action === 'confirm'
           ? '这一组含跨大版本，执行前需要你确认。'
           : '你可以直接执行，或复制给 AI 驱动整个流程。');
+      if (state.final) {
+        purpose = '本次 AI 修复已生成最终验收（' + state.final.baselineTotal + ' → ' + state.final.currentTotal +
+          ' 项）。剩下的组需要你确认后才进入下一轮，不代表 AI 还在执行。';
+      }
     } else if (n.action === 'plan') {
       purpose = '根据扫描结果生成升级计划，先看分组和版本，不会直接改 pom。';
     } else if (n.action === 'build') {
@@ -1074,6 +1184,7 @@ export function getHtml(nonce: string): string {
 
   function render() {
     renderMcp();
+    renderAiStatus();
     updateTabs();
     renderWizard();
     var upgradeBtn = document.getElementById('upgrade');
@@ -1083,7 +1194,10 @@ export function getHtml(nonce: string): string {
     var deep = state.deepFix;
     var runBusy = !!state.run && state.run.status === 'running' &&
       (!state.run.updatedAt || Date.now() - Date.parse(state.run.updatedAt) < 30 * 60 * 1000);
-    var busy = !!state.scanning || !!deep || runBusy;
+    // AI 执行只锁操作，不驱动猫咪进度条：进度条只跟随面板扫描/深度修复，避免 run-state 抖动导致面板闪烁
+    var progressBusy = !!state.scanning || !!deep;
+    var busy = progressBusy || runBusy;
+    document.body.classList.toggle('ai-busy', runBusy);
     ['scan', 'deepfix', 'upgrade'].forEach(function (id) {
       var button = document.getElementById(id);
       if (button) {
@@ -1102,7 +1216,7 @@ export function getHtml(nonce: string): string {
     }
     // 任务结束时让进度条先补满 100%，停留片刻再收起
     var catbar = document.getElementById('catbar');
-    if (busy) {
+    if (progressBusy) {
       clearTimeout(catDoneTimer);
       catDoneTimer = null;
       if (!catbarVisible) {
@@ -1145,7 +1259,7 @@ export function getHtml(nonce: string): string {
       catTotal = deep.total;
       catDone = deep.done || 0;
     }
-    if (busy) {
+    if (progressBusy) {
       renderCats(catTotal, catDone);
     }
     var stage = document.querySelector('.cat-stage');
@@ -1155,7 +1269,7 @@ export function getHtml(nonce: string): string {
     const sum = document.getElementById('summary');
     if (!state.finishedAt) {
       // 进度只在顶部猫咪进度条展示，这里保持安静，避免同一组数字重复三遍
-      sum.style.display = busy ? 'none' : '';
+      sum.style.display = progressBusy ? 'none' : '';
       sum.innerHTML = '<span class="hint">尚未扫描</span>';
     } else {
       sum.style.display = '';
@@ -1644,6 +1758,9 @@ export function getHtml(nonce: string): string {
     }
   });
   setInterval(function () {
+    if (state.run) {
+      renderAiStatus();
+    }
     if (state.task || (state.run && ['running', 'blocked', 'needs_confirm'].indexOf(state.run.status) >= 0)) {
       renderNotice();
     }

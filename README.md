@@ -271,8 +271,8 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 - 升级预览面板：**「复制给 AI 继续」**（含当前计划、分组顺序、pomHash 与硬性规则）
 - 升级向导卡：**「复制给 AI 全权推进」**（现在只复制一句 MCP 入口；AI 先调 `quality_agent_brief`，由插件返回完整驱动指令与状态，不再手工粘贴长 prompt）
 - MCP：`quality_agent_brief` 是“全权推进”的唯一入口，返回 `prompt + next`；`mode=autopilot` 会先做一次目标确认（范围/JDK 边界/门禁），确认后连续执行到收尾，只有 JDK 11/17/21、Boot 3 等硬阻塞再询问，最后强制复扫
-- **AI 在 MCP 里做的事会实时投影到面板**：MCP/CLI 每次工具调用写 `.quality-center/run-state.json` 与 `events.jsonl`，面板监听这些事实文件重建台账并显示“AI 执行中 / 阶段 / 最近工具 / 多久前更新”；AI 运行中面板写操作锁定，避免面板与 AI 各维护一份状态
-- 收尾必须调 `quality_finalize`：修复前/后、按来源变化、首次可见、计划进度、构建/测试与阻塞都由插件从基线快照和事实文件算，AI 只转述，不再自己数
+- **AI 在 MCP 里做的事会实时投影到面板**：MCP/CLI 每次工具调用写 `.quality-center/run-state.json` 与 `events.jsonl`，面板监听这些事实文件重建台账并显示“AI 执行中 / 阶段 / 最近工具 / 多久前更新”；AI 运行中面板进入只读态，隐藏所有人工写操作（扫描/修复/升级向导/问题级操作），只展示 AI 阶段；AI 不再驱动猫咪进度条，避免 run-state 抖动导致面板闪烁
+- 收尾必须调 `quality_finalize`：修复前/后、按来源变化、首次可见、计划进度、构建/测试与阻塞都由插件从基线快照和事实文件算，AI 只转述，不再自己数；`quality_finalize` 会拒绝早于源码/pom 变更的旧扫描，面板同时展示最终验收，AI 没写最终报告时面板自动补一次完整复扫
 - 工具面板顶部有 MCP 状态条：检测 `.trae/.cursor/.vscode/.mcp.json` 配置，并启动 `qc.cjs mcp` 做 `initialize + tools/list` 自检；Trae 已启用并连上后，MCP 服务写 `.quality-center/mcp-client.json` 心跳，面板校验 pid 后显示“MCP 已接入 · Trae”，否则只显示“已配置 · 需在 IDE 启用”
 - 首次打开面板若发现 MCP 未配置/异常，会弹一次安装提示，可直接生成/修复；可用 `qualityCenter.mcp.notifyMissing=false` 关闭
 - 编译失败弹窗：**「复制给 AI」**（附带 Maven 尾部与「已还原 pom」的事实）

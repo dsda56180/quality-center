@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.27.38
+
+- 修复面板顶部抖动：AI 运行态不再驱动猫咪进度条和结果摘要显隐，进度条只跟随“面板扫描 / 深度修复”，并去掉空文案导致的孤立 `...`
+- AI 执行期间面板进入只读态：隐藏顶部所有操作按钮、升级向导、修复/构建条、问题级“修复/复制”和建议操作，改为展示独立 AI 状态卡：当前阶段、阶段进度、最近工具、更新时间、失败/阻塞、测试跳过与 pom drift
+- AI 结束后面板展示 `quality_finalize` 的插件口径验收：基线 → 当前、按来源变化、计划进度、构建/测试；不再把旧计划进度伪装成“AI 还在执行”
+- 收尾门禁：`quality_finalize` 拒绝早于源码/pom 变更的旧扫描，强制“改完 → 复扫 → 收尾”，避免 AI 声称完成但面板仍是旧结果
+- AI 运行结束后面板自动回到同一份账本；若 AI 没写最终报告，面板自动补一次完整复扫并在完成后刷新
+- 新增 `npm run verify:panel` 与 `npm run verify:all`；自检 120 通过 / 0 失败
+
 ## 0.27.37
 
 - 新增运行状态层：`.quality-center/run-state.json` + `events.jsonl`，MCP/CLI 每次工具调用都写 `tool.start/tool.end`，固定阶段机 `baseline_build → baseline_scan → fix → plan → apply → static_fix → rescan → finalize`；面板只读投影，不再维护第二份状态

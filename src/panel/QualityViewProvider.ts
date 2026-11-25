@@ -222,6 +222,60 @@ function createNonce(): string {
   return text;
 }
 
+/** 读 quality_finalize 的插件口径报告：面板不自己算，避免出现第二套数字 */
+function readFinalSummary(
+  root: string,
+  run?: ReturnType<typeof runSnapshot>
+): Snapshot['final'] | undefined {
+  const file = path.join(root, '.quality-center', 'final-report.json');
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, any>;
+    const baseline = raw.baseline as { total?: number; at?: string } | undefined;
+    const current = raw.current as { total?: number; at?: string } | undefined;
+    if (!baseline || !current) {
+      return undefined;
+    }
+    // 新一轮 AI 已经开始：上一轮的验收报告不再代表当前账本
+    if (run && run.startedAt && current.at && Date.parse(run.startedAt) > Date.parse(String(current.at))) {
+      return undefined;
+    }
+    const delta = (raw.delta as Record<string, any> | undefined) ?? {};
+    const plan = (raw.plan as Record<string, any> | undefined) ?? {};
+    const build = (raw.build as Record<string, any> | undefined) ?? {};
+    const tests = build.tests as { state?: string } | string | undefined;
+    let issuesAt = '';
+    try {
+      const issues = JSON.parse(
+        fs.readFileSync(path.join(root, '.quality-center', 'issues.json'), 'utf8')
+      ) as { generatedAt?: string };
+      issuesAt = issues.generatedAt ?? '';
+    } catch {
+      issuesAt = '';
+    }
+    // 收尾后又手动扫了一次：旧报告不再代表当前账本，面板不展示过期验收
+    if (issuesAt && String(current.at ?? '') && Date.parse(issuesAt) > Date.parse(String(current.at ?? '')) + 2000) {
+      return undefined;
+    }
+    return {
+      baselineTotal: Number(baseline.total ?? 0),
+      currentTotal: Number(current.total ?? 0),
+      baselineAt: String(baseline.at ?? ''),
+      currentAt: String(current.at ?? ''),
+      added: Number(delta.added ?? 0),
+      removed: Number(delta.removed ?? 0),
+      totalChange: Number(delta.totalChange ?? Number(current.total ?? 0) - Number(baseline.total ?? 0)),
+      planId: plan.planId ? String(plan.planId) : undefined,
+      planApplied: plan.applied !== undefined ? Number(plan.applied) : undefined,
+      planTotal: plan.total !== undefined ? Number(plan.total) : undefined,
+      buildOk: build.ok === undefined ? undefined : build.ok === true,
+      tests: typeof tests === 'string' ? tests : tests?.state,
+      reportFile: raw.reportFile ? String(raw.reportFile) : '.quality-center/final-report.json'
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewId = 'qualityCenter.main';
 
@@ -243,6 +297,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   private watchRoot = '';
   private watchTimer?: NodeJS.Timeout;
   private lastRunRevision = '';
+  /** 观察 AI 运行态反转：running → done，只自动补扫一次，避免 AI 收尾后仍显示旧结果 */
+  private lastRunObserved?: { runId: string; status: string };
+  private autoRescannedRuns = new Set<string>();
   /** MCP 接入状态：面板只显示缓存，真正的检测由按钮/初始化触发 */
   private mcpStatus: McpStatus = {
     state: 'checking',
@@ -288,6 +345,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       '.quality-center/scan-digest.json',
       '.quality-center/scan-baseline.json',
       '.quality-center/build-result.json',
+      '.quality-center/final-report.json',
       '.quality-center/handoff.md',
       '.quality-center/upgrade/**/plan.json',
       '.quality-center/upgrade/**/steps.json',
@@ -2722,9 +2780,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         next = undefined;
       }
     }
+    const run = root ? runSnapshot(root) : undefined;
+    const final = root ? readFinalSummary(root, run) : undefined;
     const snapshot: Snapshot = {
       type: 'state',
-      run: root ? runSnapshot(root) : undefined,
+      run,
+      final,
       scanning: override ? override.scanning : this.runner.isRunning,
       paused: this.runner.isPaused,
       deepFix: this.deepFixState,
@@ -2775,6 +2836,55 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       projectProfile: root ? this.projectProfile(root) : {}
     };
     void this.view.webview.postMessage(snapshot);
+    this.maybeRescanAfterAiRun(root, run);
+  }
+
+  /**
+   * AI 运行结束是面板最容易“停在旧数据”的时刻：
+   * - 正常收尾：finalize 已强制复扫，只需要重新读账本；
+   * - AI 只改文件、没调 quality_finalize：面板自动补一次完整扫描，保证用户看到真实结果；
+   * - 只对 running → done 且非 manual 的 MCP 运行触发，同一 runId 只补一次。
+   */
+  private maybeRescanAfterAiRun(
+    root: string,
+    run: ReturnType<typeof runSnapshot> | undefined
+  ): void {
+    const previous = this.lastRunObserved;
+    this.lastRunObserved = run ? { runId: run.runId, status: run.status } : undefined;
+    if (!root || !run || !previous || previous.runId !== run.runId) {
+      return;
+    }
+    if (previous.status !== 'running' || run.status !== 'done') {
+      return;
+    }
+    if (run.mode === 'manual' || run.actor.kind !== 'mcp') {
+      return;
+    }
+    if (this.autoRescannedRuns.has(run.runId)) {
+      return;
+    }
+    this.autoRescannedRuns.add(run.runId);
+    const report = path.join(root, '.quality-center', 'final-report.json');
+    let reportIsCurrent = false;
+    try {
+      reportIsCurrent = fs.statSync(report).mtimeMs >= Date.parse(run.startedAt || '');
+    } catch {
+      reportIsCurrent = false;
+    }
+    if (reportIsCurrent) {
+      this.runner.reloadLedger();
+      this.push();
+      return;
+    }
+    if (this.runner.isRunning || this.deepFixState) {
+      return;
+    }
+    void vscode.window.showInformationMessage('AI 已结束但没有收尾报告：面板现在补一次完整复扫。');
+    setTimeout(() => {
+      if (!this.runner.isRunning && !this.deepFixState) {
+        void this.scanAndPush();
+      }
+    }, 600);
   }
 
   markdown(): string | undefined {

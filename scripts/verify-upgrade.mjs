@@ -464,6 +464,16 @@ async function main() {
       fs.existsSync(path.join(dir, '.quality-center', 'final-report.md'))
   );
 
+  // 旧扫描结果不得收尾：否则 AI 改完文件直接 finalize，面板永远看不到复扫
+  const issuesPath = path.join(dir, '.quality-center', 'issues.json');
+  const staleIssues = JSON.parse(fs.readFileSync(issuesPath, 'utf8'));
+  staleIssues.generatedAt = '2020-01-01T00:00:00.000Z';
+  fs.writeFileSync(issuesPath, JSON.stringify(staleIssues, null, 2), 'utf8');
+  const staleFinalize = await client.request('tools/call', { name: 'quality_finalize', arguments: { path: dir } });
+  const staleResult = JSON.parse(staleFinalize.result?.content?.[0]?.text ?? '{}');
+  check('finalize 拒绝早于源码变更的旧扫描', staleResult.ok === false && String(staleResult.reason).includes('扫描结果早于源码'));
+  fs.writeFileSync(issuesPath, JSON.stringify(ISSUES, null, 2), 'utf8');
+
   const grouped = await client.request('tools/call', {
     name: 'quality_upgrade_plan',
     arguments: { path: dir, group: 'framework', reuse: true, top: 1 }

@@ -87,6 +87,8 @@ export interface RunSnapshot {
   planId?: string;
   blocked: RunBlockingItem[];
   lastScan?: RunState['lastScan'];
+  baselineScanAt?: string;
+  baselineTotal?: number;
   build?: RunState['build'];
   active: boolean;
   revision: string;
@@ -394,6 +396,8 @@ export function runSnapshot(root: string): RunSnapshot | undefined {
     planId: state.planId,
     blocked: state.blocked,
     lastScan: state.lastScan,
+    baselineScanAt: state.baselineScanAt,
+    baselineTotal: state.baselineTotal,
     build: state.build,
     active,
     revision: state.revision
