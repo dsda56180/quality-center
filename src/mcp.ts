@@ -220,6 +220,11 @@ const TOOLS: ToolDef[] = [
           type: 'string',
           enum: ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'],
           description: '修复范围。all=全面修复；upgrade=仅依赖版本/CVE；consolidation=依赖收敛；code=确定性代码修复；secrets=硬编码密钥；static=静态缺陷。缺省 all。'
+        },
+        scopes: {
+          type: 'array',
+          items: { type: 'string', enum: ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'] },
+          description: '多选修复范围；优先于 scope。包含 all 等价于全选。面板多选下拉使用。'
         }
       }
     }
@@ -439,18 +444,24 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         return asText({ error: `目录不存在：${root}` }, true);
       }
       const mode = params?.mode === 'autopilot' ? 'autopilot' : 'drive';
-      const scopes: AgentScope[] = ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'];
-      const scope: AgentScope = scopes.includes(params?.scope as AgentScope)
+      const scopesList: AgentScope[] = ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'];
+      const rawScopes = Array.isArray(params?.scopes) ? params.scopes : [];
+      const picked = rawScopes.filter((item): item is AgentScope => scopesList.includes(item as AgentScope));
+      const singleScope: AgentScope = scopesList.includes(params?.scope as AgentScope)
         ? (params?.scope as AgentScope)
         : 'all';
-      const upgradeScope = scope === 'all' || scope === 'upgrade';
+      let scopes: AgentScope[] = picked.length ? picked : [singleScope];
+      if (scopes.includes('all')) {
+        scopes = ['all'];
+      }
+      const upgradeScope = scopes.includes('all') || scopes.includes('upgrade');
       const next = upgradeScope ? buildNextAction(root, { writeHandoff: true }) : undefined;
       beginRun(root, mode as RunMode, {
         phase: (upgradeScope ? 'baseline_build' : 'static_fix') as RunPhase
       });
       return asText({
-        scope,
-        prompt: buildAgentPrompt(root, { mode, scope }),
+        scopes,
+        prompt: buildAgentPrompt(root, { mode, scopes }),
         next: next ?? null
       });
     }

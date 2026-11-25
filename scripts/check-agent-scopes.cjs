@@ -14,6 +14,8 @@ const texts = {
   static: buildAgentPrompt(root, { ...base, scope: 'static' })
 };
 
+const combo = buildAgentPrompt(root, { ...base, scopes: ['consolidation', 'code'] });
+const comboAll = buildAgentPrompt(root, { ...base, scopes: ['all', 'code'] });
 const checks = {
   allRunsFullFlow: texts.all.includes('一次性执行流程'),
   allIncludesConsolidation: texts.all.includes('阶段 3.5 依赖收敛'),
@@ -31,7 +33,12 @@ const checks = {
   noUpgradeFlowInScoped: ['consolidation', 'code', 'secrets', 'static'].every(
     (key) => !texts[key].includes('阶段 2 确定性修复') && !texts[key].includes('quality_upgrade_apply')
   ),
-  switchKeepsScope: texts.code.includes('必须带同一个 scope')
+  switchKeepsScope: texts.code.includes('必须带同一个 scope'),
+  combinedScope: combo.includes('依赖收敛（JSON / 日志 / HTTP / BOM）') &&
+    combo.includes('确定性代码修复（Checkstyle / astgrep）') &&
+    combo.includes('处理顺序'),
+  combinedExcludesUnpick: !combo.includes('硬编码密钥处置（gitleaks）'),
+  combinedAllWins: comboAll.includes('一次性执行流程')
 };
 console.log(checks);
 fs.rmSync(root, { recursive: true, force: true });

@@ -474,11 +474,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     pkg?: string;
     tool?: string;
     scope?: string;
+    scopes?: string[];
     options?: ScanSettingsInput;
   }): Promise<void> {
     const readOnly = new Set([
       'copy', 'copyIssue', 'openAgent', 'copySuggestion', 'explainBuild', 'openHandoff',
-      'copyDrivePrompt', 'copyScope', 'checkMcp', 'openMcpConfig', 'open', 'openLink', 'saveSettings',
+      'copyDrivePrompt', 'copyScope', 'copyScopes', 'checkMcp', 'openMcpConfig', 'open', 'openLink', 'saveSettings',
       'pauseScan', 'stopScan'
     ]);
     if (message.type && !readOnly.has(message.type) && this.runLocked()) {
@@ -563,6 +564,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'copyScope':
         await this.copyScopePrompt(message.scope);
+        break;
+      case 'copyScopes':
+        await this.copyScopePrompt(undefined, message.scopes);
         break;
       case 'checkMcp':
         await this.refreshMcpStatus();
@@ -2178,15 +2182,21 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     await this.copyScopePrompt('all');
   }
 
-  /** 按范围复制给 AI：全面 / 只升级 / 收敛 / 代码 / 密钥 / 静态，避免 AI 把“全面”理解成可以顺手改 pom */
-  private async copyScopePrompt(rawScope: unknown): Promise<void> {
+  /** 按范围复制给 AI：全面 / 只升级 / 收敛 / 代码 / 密钥 / 静态；scopes 支持多选组合 */
+  private async copyScopePrompt(rawScope: unknown, rawScopes?: unknown): Promise<void> {
     const root = this.runner.root();
     if (!root) {
       void vscode.window.showInformationMessage('还没有打开项目。');
       return;
     }
-    const scopes: AgentScope[] = ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'];
-    const scope = scopes.includes(rawScope as AgentScope) ? (rawScope as AgentScope) : 'all';
+    const validScopes: AgentScope[] = ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'];
+    const picked = (Array.isArray(rawScopes) ? rawScopes : [])
+      .filter((item): item is AgentScope => validScopes.includes(item as AgentScope));
+    const single = validScopes.includes(rawScope as AgentScope) ? (rawScope as AgentScope) : 'all';
+    let scopes: AgentScope[] = picked.length ? picked : [single];
+    if (scopes.includes('all')) {
+      scopes = ['all'];
+    }
     const label: Record<AgentScope, string> = {
       all: '全面修复',
       upgrade: '仅升级依赖',
@@ -2195,9 +2205,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       secrets: '硬编码密钥',
       static: '静态缺陷'
     };
-    await vscode.env.clipboard.writeText(buildAgentPrompt(root, { mode: 'autopilot', scope }));
+    await vscode.env.clipboard.writeText(buildAgentPrompt(root, { mode: 'autopilot', scopes }));
+    const labelText = scopes.map((scope) => label[scope]).join(' + ');
     void vscode.window.showInformationMessage(
-      `已复制「${label[scope]}」指令：AI 只会改这个范围，其他类别只报告。`
+      `已复制「${labelText}」指令：AI 只会改所选范围，其他类别只报告。`
     );
   }
 

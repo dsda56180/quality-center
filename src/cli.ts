@@ -85,7 +85,7 @@ explain 选项:
 
 prompt 选项:
   --drive               输出「全权推进」循环（默认协助模式）
-  --scope <scope>       all|upgrade|consolidation|code|secrets|static，默认 all
+  --scope <scope>       all|upgrade|consolidation|code|secrets|static，逗号分隔可多选，默认 all
   --plan <planId>       指定计划，缺省用最新一份
   --failure <文件>      附上失败日志尾部，供 AI 从现场开始判断
   --json                以 JSON 输出 { mode, scope, planId, prompt }
@@ -660,10 +660,11 @@ async function promptCommand(args: Args): Promise<number> {
     return 2;
   }
   const mode = args.flags['--drive'] === true ? ('drive' as const) : ('assist' as const);
-  const scopes: AgentScope[] = ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'];
-  const scope: AgentScope = scopes.includes(args.flags['--scope'] as AgentScope)
-    ? (args.flags['--scope'] as AgentScope)
-    : 'all';
+  const validScopes: AgentScope[] = ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'];
+  const rawScope = typeof args.flags['--scope'] === 'string' ? String(args.flags['--scope']) : 'all';
+  const pickedScopes = rawScope.split(',').map((item) => item.trim() as AgentScope)
+    .filter((item) => validScopes.includes(item));
+  const scopes: AgentScope[] = pickedScopes.length ? pickedScopes : ['all'];
   const planId = typeof args.flags['--plan'] === 'string' ? String(args.flags['--plan']) : undefined;
   let failure: string | undefined;
   const failureFile = typeof args.flags['--failure'] === 'string' ? String(args.flags['--failure']) : '';
@@ -675,9 +676,9 @@ async function promptCommand(args: Args): Promise<number> {
       progress(`失败日志不存在：${file}`);
     }
   }
-  const prompt = buildAgentPrompt(root, { mode, planId, failure, scope });
+  const prompt = buildAgentPrompt(root, { mode, planId, failure, scopes });
   if (args.flags['--json'] === true) {
-    process.stdout.write(`${JSON.stringify({ mode, scope, planId: planId ?? null, root, prompt }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ mode, scopes, planId: planId ?? null, root, prompt }, null, 2)}\n`);
   } else {
     process.stdout.write(`${prompt}\n`);
   }

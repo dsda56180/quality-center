@@ -186,11 +186,11 @@ export function getHtml(nonce: string): string {
     font-size: 12px;
     color: var(--vscode-foreground);
     background: var(--vscode-editor-background);
-    display: flex; flex-direction: column;
-    overflow: hidden;
+    overflow-y: auto; overflow-x: hidden;
+    scrollbar-width: thin;
   }
   .head { flex: 0 0 auto; }
-  #list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+  #list { overflow: visible; }
   .toolbar { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
   .toolbar .spacer { flex: 1 1 auto; }
   .mcpbar {
@@ -500,7 +500,7 @@ export function getHtml(nonce: string): string {
     color: var(--vscode-textLink-foreground); font-size: 10px;
   }
   .wz-plan-toggle:hover { text-decoration: underline; }
-  .wz-plan-list { margin-top: 5px; max-height: 210px; overflow-y: auto; }
+  .wz-plan-list { margin-top: 5px; }
   .wz-plan-group { margin-bottom: 5px; }
   .wz-plan-group-title {
     font-size: 10px; font-weight: 600; color: var(--vscode-foreground);
@@ -530,33 +530,51 @@ export function getHtml(nonce: string): string {
   .wz-fixrow .fix-impact { flex: none; font-size: 9px; color: var(--vscode-descriptionForeground); }
   .wz-fixnote { margin-top: 4px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
   .wz-scopebar {
-    margin-top: 8px; padding: 7px 8px; border-radius: 8px;
+    margin-top: 7px; padding: 6px 7px; border-radius: 7px;
     border: 1px solid var(--vscode-panel-border);
     background: var(--vscode-sideBar-background, rgba(128,128,128,.05));
   }
-  .wz-scope-title { font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 5px; }
-  .wz-scope-actions { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-  .wz-scope-btn {
-    padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px;
+  .wz-scope-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+  .wz-scope-picker { flex: 1 1 auto; min-width: 0; }
+  .wz-scope-picker summary {
+    cursor: pointer; list-style: none; padding: 3px 7px;
     border: 1px solid var(--vscode-button-secondaryBackground, rgba(128,128,128,.25));
-    background: var(--vscode-button-secondaryBackground, transparent);
+    border-radius: 4px; font-size: 10px;
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
   }
-  .wz-scope-btn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.16)); }
-  .wz-scope-btn.primary {
+  .wz-scope-picker summary::-webkit-details-marker { display: none; }
+  .wz-scope-picker summary::after { content: ' ▾'; color: var(--vscode-descriptionForeground); }
+  .wz-scope-picker[open] summary::after { content: ' ▴'; }
+  .wz-scope-picker summary .pick-label { color: var(--vscode-descriptionForeground); margin-right: 4px; }
+  .wz-scope-menu {
+    margin-top: 4px; padding: 5px 6px; border-radius: 5px;
+    border: 1px solid var(--vscode-panel-border);
+    background: var(--vscode-editor-background);
+  }
+  .wz-scope-option {
+    display: flex; align-items: center; gap: 4px; line-height: 1.8;
+    font-size: 10px; cursor: pointer; white-space: nowrap;
+  }
+  .wz-scope-option input { margin: 0; width: 12px; height: 12px; }
+  .wz-scope-run {
+    flex: none; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px;
+    border: 1px solid var(--vscode-button-background);
     background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-    border-color: var(--vscode-button-background); font-weight: 600;
+    font-weight: 600;
   }
-  .wz-scope-more { margin-top: 5px; }
-  .wz-scope-more summary {
-    cursor: pointer; font-size: 10px; color: var(--vscode-textLink-foreground);
-    list-style: none;
+  .wz-scope-run:disabled { opacity: .45; cursor: not-allowed; }
+  .wz-scope-plan {
+    flex: none; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 9px;
+    border: 1px solid var(--vscode-panel-border);
+    background: transparent; color: var(--vscode-textLink-foreground);
   }
-  .wz-scope-more summary::-webkit-details-marker { display: none; }
-  .wz-scope-more summary::before { content: '▸ '; }
-  .wz-scope-more[open] summary::before { content: '▾ '; }
-  .wz-scope-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
   .wz-scope-note { margin-top: 5px; font-size: 9px; line-height: 1.4; color: var(--vscode-descriptionForeground); }
+  .wz-plan > summary, .wz-fixplan > summary {
+    cursor: pointer; list-style: none; user-select: none;
+  }
+  .wz-plan > summary::-webkit-details-marker, .wz-fixplan > summary::-webkit-details-marker { display: none; }
+  .wz-plan > summary::before, .wz-fixplan > summary::before { content: '▸ '; color: var(--vscode-descriptionForeground); }
+  .wz-plan[open] > summary::before, .wz-fixplan[open] > summary::before { content: '▾ '; }
   .msg.clamp {
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
     overflow: hidden;
@@ -731,6 +749,8 @@ export function getHtml(nonce: string): string {
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
   let state = { run: null, scanning: false, paused: false, deepFix: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, qcsec: true, astgrep: true, scanOnSave: true, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
   let activeTab = 'all';
+  /** 修复范围多选；跨渲染保留，默认全选（等同于“全面修复”） */
+  let scopePick = ['upgrade', 'consolidation', 'code', 'secrets', 'static'];
   /** 各来源分组的折叠状态，跨渲染保留 */
   let collapsed = {};
   let severityFilter = [];
@@ -1308,12 +1328,12 @@ export function getHtml(nonce: string): string {
         });
         rows += '</div>';
       });
-      planDetail = '<div class="wz-plan"><div class="wz-plan-head"><span>计划明细</span><span>' +
-        n.plan.total + ' 个依赖</span></div><div class="wz-plan-list">' + rows + '</div>' +
+      planDetail = '<details class="wz-plan"><summary class="wz-plan-head"><span>计划明细</span><span>' +
+        n.plan.total + ' 个依赖</span></summary><div class="wz-plan-list">' + rows + '</div>' +
         (n.plan.skippedCount
           ? '<div class="wz-plan-note">另有 ' + n.plan.skippedCount +
             ' 项未纳入：策略未授权或需人工处理，已记录在计划文件。</div>'
-          : '') + '</div>';
+          : '') + '</details>';
     }
     // 全面修复方案：升级只是其中一类，收敛/密钥/代码/静态问题也要在同一张卡里可见
     var fixPlan = '';
@@ -1329,7 +1349,7 @@ export function getHtml(nonce: string): string {
       allSuggestions.forEach(function (s) {
         if (picked.length < 4 && picked.indexOf(s) < 0) picked.push(s);
       });
-      fixPlan = '<div class="wz-fixplan"><div class="wz-fixplan-head"><strong>全面修复方案</strong><span>不只依赖升级</span></div>' +
+      fixPlan = '<details class="wz-fixplan"><summary class="wz-fixplan-head"><strong>全面修复方案</strong><span>不只依赖升级</span></summary>' +
         picked.map(function (s) {
           return '<div class="wz-fixrow"><span class="fix-tag">' + esc(SUG_LABEL[s.category] || s.category) + '</span>' +
             '<span class="fix-title">' + esc(s.title) + '</span>' +
@@ -1337,44 +1357,42 @@ export function getHtml(nonce: string): string {
               ? s.impact + ' ' + s.impactLabel
               : s.impact + ' 项') + '</span></div>';
         }).join('') +
-        '<div class="wz-fixnote">自动执行仍只写依赖升级；收敛、密钥、静态缺陷需要 AI 或人工确认后处理，全部建议见「修复建议」。</div></div>';
+        '<div class="wz-fixnote">自动执行仍只写依赖升级；收敛、密钥、静态缺陷需要 AI 或人工确认后处理，全部建议见「修复建议」。</div></details>';
     }
     function btn(key, text, primary) {
       return '<button class="' + (primary ? 'wz-primary' : 'secondary') + '" data-wz="' + key + '">' + esc(text) + '</button>';
     }
-    function scopeBtn(key, text) {
-      return '<button class="wz-scope-btn" data-wz="copyScope:' + key + '" title="只复制这个范围的 AI 指令">' +
-        esc(text) + '</button>';
-    }
     var scopeBar = '';
     if (hasData) {
-      var scopeMain = '';
-      if (!n.plan) {
-        scopeMain += '<button class="wz-scope-btn" data-wz="createPlan">生成升级计划</button>';
-      }
-      scopeMain += '<button class="wz-scope-btn primary" data-wz="copyScope:all">全面修复</button>';
-      scopeMain += scopeBtn('upgrade', '仅升级依赖');
-      var scopeMore = '';
-      if (dupSuggestions.length) {
-        scopeMore += scopeBtn('consolidation', '依赖收敛 ' + dupSuggestions.length + ' 类');
-      }
-      if (fixableCount) {
-        scopeMore += scopeBtn('code', '代码质量 ' + fixableCount + ' 项');
-      }
-      if (secretCount) {
-        scopeMore += scopeBtn('secrets', '密钥 ' + secretCount + ' 处');
-      }
-      if (staticCount) {
-        scopeMore += scopeBtn('static', '静态缺陷 ' + staticCount + ' 项');
-      }
-      scopeBar = '<div class="wz-scopebar"><div class="wz-scope-title">选择修复范围</div>' +
-        '<div class="wz-scope-actions">' + scopeMain + '</div>' +
-        '<div class="wz-scope-note">按钮只复制对应范围的 AI 指令，不会直接改文件；依赖升级的手动执行仍在下方计划里。</div>' +
-        (scopeMore
-          ? '<details class="wz-scope-more"><summary>修复某一块</summary><div class="wz-scope-list">' +
-            scopeMore + '</div><div class="wz-scope-note">AI 只会改这一类，其他类别只报告。</div></details>'
+      var scopeOptions = [
+        { key: 'upgrade', label: '依赖升级', count: n.plan ? n.plan.total : (depCount ? 1 : 0), note: n.plan ? n.plan.total : '计划' },
+        { key: 'consolidation', label: '依赖收敛', count: dupSuggestions.length, note: dupSuggestions.length },
+        { key: 'code', label: '代码质量', count: fixableCount, note: fixableCount },
+        { key: 'secrets', label: '密钥', count: secretCount, note: secretCount },
+        { key: 'static', label: '静态缺陷', count: staticCount, note: staticCount }
+      ];
+      var validPick = scopeOptions.filter(function (o) { return o.count > 0 && scopePick.indexOf(o.key) >= 0; });
+      var availableCount = scopeOptions.filter(function (o) { return o.count > 0; }).length;
+      var pickText = validPick.length === availableCount
+        ? '全部 ' + availableCount + ' 项'
+        : validPick.length ? '已选 ' + validPick.length + ' 项' : '未选择';
+      var checks = scopeOptions.map(function (o) {
+        return '<label class="wz-scope-option"><input type="checkbox" data-scope-pick="' + o.key + '"' +
+          (scopePick.indexOf(o.key) >= 0 && o.count > 0 ? ' checked' : '') +
+          (o.count ? '' : ' disabled') + '>' +
+          esc(o.label) + '<span class="fix-impact">' + esc(String(o.note || '0')) + '</span></label>';
+      }).join('');
+      scopeBar = '<div class="wz-scopebar"><div class="wz-scope-row">' +
+        '<details class="wz-scope-picker"><summary><span class="pick-label">修复范围</span>' +
+        '<span id="scopePickSummary">' + pickText + '</span></summary>' +
+        '<div class="wz-scope-menu">' + checks + '</div></details>' +
+        '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
+        (validPick.length ? '' : ' disabled') + '>复制给 AI</button>' +
+        (!n.plan && depCount
+          ? '<button id="scopePlanBtn" class="wz-scope-plan" data-wz="createPlan"' +
+            (scopePick.indexOf('upgrade') >= 0 ? '' : ' style="display:none"') + '>仅生成依赖计划</button>'
           : '') +
-        '</div>';
+        '</div><div class="wz-scope-note">只复制所选范围的指令；未选类别只报告。依赖计划的手动执行仍在下方。</div></div>';
     }
     var actions = '';
     switch (n.action) {
@@ -1424,10 +1442,34 @@ export function getHtml(nonce: string): string {
     });
   }
 
+  function updateScopePickerUI() {
+    var el = document.getElementById('wizard');
+    if (!el) return;
+    var boxes = Array.prototype.slice.call(el.querySelectorAll('[data-scope-pick]'));
+    var available = boxes.filter(function (box) { return !box.disabled; });
+    var picked = available.filter(function (box) { return box.checked; }).map(function (box) {
+      return box.getAttribute('data-scope-pick');
+    });
+    scopePick = picked;
+    var summary = document.getElementById('scopePickSummary');
+    if (summary) {
+      summary.textContent = picked.length === available.length
+        ? '全部 ' + available.length + ' 项'
+        : picked.length ? '已选 ' + picked.length + ' 项' : '未选择';
+    }
+    var copyBtn = document.getElementById('scopeCopyBtn');
+    if (copyBtn) copyBtn.disabled = picked.length === 0;
+    var planBtn = document.getElementById('scopePlanBtn');
+    if (planBtn) planBtn.style.display = picked.indexOf('upgrade') >= 0 ? '' : 'none';
+  }
+
   function handleWizardAction(key) {
     if (!key) return;
     if (key === 'scan') {
       vscode.postMessage({ type: 'scan' });
+    } else if (key === 'copyScopes') {
+      updateScopePickerUI();
+      vscode.postMessage({ type: 'copyScopes', scopes: scopePick.slice() });
     } else if (key.indexOf('copyScope:') === 0) {
       vscode.postMessage({ type: 'copyScope', scope: key.slice('copyScope:'.length) });
     } else if (key === 'createPlan') {
@@ -1740,6 +1782,11 @@ export function getHtml(nonce: string): string {
       var target = e.target && e.target.closest ? e.target.closest('[data-wz]') : null;
       if (!target) return;
       handleWizardAction(target.getAttribute('data-wz'));
+    });
+    wizardEl.addEventListener('change', function (e) {
+      if (e.target && e.target.getAttribute && e.target.getAttribute('data-scope-pick')) {
+        updateScopePickerUI();
+      }
     });
   }
 

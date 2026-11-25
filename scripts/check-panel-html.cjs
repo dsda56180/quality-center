@@ -13,17 +13,22 @@ const checks = {
   msgBarBeforeAi: h.indexOf('id="msgbar"') >= 0 && h.indexOf('id="msgbar"') < h.indexOf('id="aistatus"'),
   noFixBar: !h.includes('id="fixbar"') && !h.includes('id="buildbar"'),
   msgBarActions: h.includes("wizard('生成计划'") || h.includes("wizard('开始扫描'"),
-  scopeCopyAi: h.includes('data-wz="copyScope:all"') && h.includes('wz-scope-btn primary'),
+  scopeCopyAi: h.includes('data-wz="copyScopes"') && h.includes('wz-scope-run'),
   msgBarDedupesPlan: h.includes('var planPending') && h.includes('fixable > 0 && !planPending'),
   onePlanActionCenter: !h.includes('升级计划待执行') && h.indexOf('id="wizard"') < h.indexOf('id="tabs"'),
   planDetail: h.includes('计划明细') && h.includes('n.plan.cveTotal') && h.includes('n.plan.candidates'),
   fullRepairPlan: h.includes('全面修复方案') && h.includes('不只依赖升级') && h.includes("duplicate: '收敛'"),
   noHandoffCtaAfterPlan: !provider.includes('升级第一组'),
-  aiFirstInPlanCard: h.includes('data-wz="copyScope:all"') && h.includes('全面修复'),
-  scopeChooser: h.includes('选择修复范围') && h.includes("data-wz=\"createPlan\"") && h.includes('修复某一块'),
-  scopeDistinct: ['consolidation', 'code', 'secrets', 'static'].every((s) =>
-    h.includes(`data-wz="copyScope:${s}"`) || h.includes(`scopeBtn('${s}'`)
+  aiFirstInPlanCard: h.includes('data-wz="copyScopes"') && h.includes('全面修复'),
+  scopeChooser: h.includes('wz-scope-picker') && h.includes('scopePickSummary') && h.includes('data-scope-pick="'),
+  scopeDistinct: ['upgrade', 'consolidation', 'code', 'secrets', 'static'].every((s) =>
+    h.includes(`key: '${s}', label:`)
   ),
+  scopeCheckboxWiring: h.includes('updateScopePickerUI') && h.includes("type: 'copyScopes'") &&
+    provider.includes("case 'copyScopes'"),
+  pageScroll: h.includes('overflow-y: auto') && h.includes('#list { overflow: visible; }'),
+  planFolded: h.includes('<details class="wz-plan">'),
+  fixPlanFolded: h.includes('<details class="wz-fixplan">'),
   mcpReadyHidden: !h.includes("if (mcp.state === 'ready')"),
   noAiDataButton: !h.includes('AI 数据'),
   planUsesNormalizedIssues: (provider.match(/createUpgradePlan\(root, readIssues\(root\)/g) || []).length >= 3,

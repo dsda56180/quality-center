@@ -30,6 +30,8 @@ export interface AgentPromptOptions {
    * AI 必须先知道自己被授权改哪一类，否则会把“全面”理解成可以顺手改 pom。
    */
   scope?: AgentScope;
+  /** 多选范围；与 scope 同时存在时以 scopes 为准。包含 all 等价于全选 */
+  scopes?: AgentScope[];
 }
 
 const SCOPE_LABEL: Record<Exclude<AgentScope, 'all'>, string> = {
@@ -39,6 +41,60 @@ const SCOPE_LABEL: Record<Exclude<AgentScope, 'all'>, string> = {
   secrets: '硬编码密钥处置（gitleaks）',
   static: '静态缺陷（SpotBugs / qcsec）'
 };
+
+const ALL_SCOPES: Exclude<AgentScope, 'all'>[] = ['upgrade', 'consolidation', 'code', 'secrets', 'static'];
+
+function normalizeScopes(options: AgentPromptOptions): AgentScope[] {
+  const raw = options.scopes && options.scopes.length ? options.scopes : [options.scope ?? 'all'];
+  if (raw.includes('all')) {
+    return ['all'];
+  }
+  const picked = ALL_SCOPES.filter((scope) => raw.includes(scope));
+  return picked.length ? picked : ['all'];
+}
+
+/** 多选范围：只列被选中的边界，避免 AI 把未选类别也一起改 */
+function buildCombinedAgentPrompt(root: string, scopes: Exclude<AgentScope, 'all'>[], options: AgentPromptOptions): string {
+  const labels = scopes.map((scope) => SCOPE_LABEL[scope]).join('、');
+  const ordered = ALL_SCOPES.filter((scope) => scopes.includes(scope));
+  const boundaries: Record<Exclude<AgentScope, 'all'>, string> = {
+    upgrade:
+      '依赖升级：只通过 quality_upgrade_plan/apply 写 pom，按组 apply → build，失败先 explain；cross-line 默认不动；不调用 quality_fix。',
+    consolidation:
+      '依赖收敛：先列重复库、引用文件与迁移顺序；先改代码、编译通过、最后删依赖；不自动删依赖，不改版本（版本属于 upgrade）。',
+    code:
+      '代码质量：只做 quality_fix 能处理的无用导入/冗余导入/ModifierOrder/SimplifiedBoolean；不改 pom、测试、配置。',
+    secrets:
+      '密钥：绝不打印原值；先让用户轮换，再迁移环境变量/配置中心；不能确认轮换时只报告。',
+    static:
+      '静态缺陷：只处理 SpotBugs/qcsec；局部改动，每 20 条或每 10 分钟 build；安全设计/架构问题只报告。'
+  };
+  const lines = [
+    `你本次处理以下范围：${labels}。未列出的类别只报告、不修改；不要用“全面修复”默认扩大授权。`,
+    `处理顺序：${ordered.map((scope) => SCOPE_LABEL[scope]).join(' → ')}。`,
+    '每个范围完成后执行 quality_build + quality_scan；失败先 quality_explain，同一类连续两次失败就停手。',
+    '',
+    '范围边界：'
+  ];
+  for (const scope of ordered) {
+    lines.push(`- ${boundaries[scope]}`);
+  }
+  lines.push(
+    '',
+    '事实源：.quality-center/issues.json（issues + suggestions）与 report.md；不要凭记忆推断数量。',
+    '编辑器内优先用 quality_* MCP，没有 MCP 时用 .quality-center/bin/qc.cjs。',
+    '换会话或状态不确定时，调用 quality_agent_brief 必须带同一组 scopes，不要退回默认 all。',
+    '',
+    '通用硬性规则：',
+    '1. 不读、不打印、不提交密钥原值。',
+    '2. 不跳过测试、不降低 buildGate、不改测试来换通过。',
+    '3. 最终汇报：范围、处理前/后数量、改动文件、构建与复扫结果、剩余人工项。'
+  );
+  if (options.failure && options.failure.trim()) {
+    lines.push('', '失败现场（从这里开始判断）：', '```', options.failure.trim().slice(-3000), '```');
+  }
+  return lines.join('\n');
+}
 
 /**
  * 单一范围的执行指令。范围和“全面修复”共用同一套事实源，但授权边界不同：
@@ -123,7 +179,11 @@ function buildScopedAgentPrompt(root: string, scope: Exclude<AgentScope, 'all'>,
 }
 
 export function buildAgentPrompt(root: string, options: AgentPromptOptions = {}): string {
-  const scope = options.scope ?? 'all';
+  const scopes = normalizeScopes(options);
+  if (scopes.length > 1) {
+    return buildCombinedAgentPrompt(root, scopes as Exclude<AgentScope, 'all'>[], options);
+  }
+  const scope = scopes[0] ?? 'all';
   if (scope !== 'all') {
     return buildScopedAgentPrompt(root, scope, options);
   }
