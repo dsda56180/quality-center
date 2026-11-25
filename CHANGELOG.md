@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.31
+
+- MCP 新增 `quality_agent_brief`：一次返回完整驱动指令 + 当前状态机快照，AI 不再需要用户粘贴长 prompt
+- MCP `initialize.instructions` 明确“用户要求全权推进时先调 quality_agent_brief”；面板复制改为一句 MCP 入口指令，CLI 作为无 MCP 的兜底
+- JDK 8 路径真实回归：AI 从 Boot 3 冲突回到 Java 8 / 2.7.18，framework 构建成功 15.4 秒，independent 落盘后停在 cross-line（8/11）
+- 新增 `quality_agent_brief` 协议断言，自检 113 通过 / 0 失败
+
 ## 0.27.30
 
 - 策略新增 `targetJavaVersion`：回答“源码也升 JDK”时，计划会真正包含 `<java.version>` 从旧值到目标值的迁移，而不是只改 Boot 父 POM

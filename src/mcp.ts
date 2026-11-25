@@ -30,6 +30,7 @@ import {
 import { digestScan } from './scanDigest';
 import { projectStatus } from './status';
 import { buildNextAction } from './nextAction';
+import { buildAgentPrompt } from './agentPrompt';
 import { explainBuildFailure } from './explain';
 
 interface RpcRequest {
@@ -130,6 +131,15 @@ const TOOLS: ToolDef[] = [
         path: PATH_PROP,
         writeHandoff: { type: 'boolean', description: '是否刷新 .quality-center/handoff.md，默认 true' }
       }
+    }
+  },
+  {
+    name: 'quality_agent_brief',
+    description:
+      '全权推进的唯一入口：返回当前项目的完整执行指令（含启动前确认、冲突调整、逐组落盘与止损规则）+ 当前状态机快照。用户说“按质量中心推进 / 全权升级 / 继续升级”时先调它，不要要求用户手工粘贴长 prompt，也不要自己推断流程。',
+    inputSchema: {
+      type: 'object',
+      properties: { path: PATH_PROP }
     }
   },
   {
@@ -292,6 +302,16 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         return asText({ error: `目录不存在：${root}` }, true);
       }
       return asText(projectStatus(root));
+    }
+    case 'quality_agent_brief': {
+      if (!fs.existsSync(root)) {
+        return asText({ error: `目录不存在：${root}` }, true);
+      }
+      const next = buildNextAction(root, { writeHandoff: true });
+      return asText({
+        prompt: buildAgentPrompt(root, { mode: 'drive' }),
+        next
+      });
     }
     case 'quality_next': {
       if (!fs.existsSync(root)) {
@@ -576,7 +596,7 @@ async function handle(request: RpcRequest): Promise<void> {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: SERVER_NAME, version: VERSION },
         instructions:
-          'quality-center 提供六类扫描、Maven 构建、外部工具安装、确定性修复与依赖升级计划。开始或换会话时先调 quality_next 拿唯一状态与下一步命令（同时刷新 .quality-center/handoff.md）；构建失败先调 quality_explain；不要自己推断流程或手改 pom。用户明确授权全权推进时，按 quality_next 返回的 action 连续执行到 done / needs-confirm / blocked；每次 apply 后必须 build，失败先 explain，同一组两次失败就停手。'
+          'quality-center 提供六类扫描、Maven 构建、外部工具安装、确定性修复与依赖升级计划。用户要求“按质量中心推进 / 全权升级”时，先调 quality_agent_brief 获取完整执行指令与状态快照，再按其中的 next 执行；换会话或状态不确定时先调 quality_next。构建失败先调 quality_explain；不要自己推断流程、手改 pom 或要求用户粘贴长 prompt。用户明确授权全权推进时，按 action 连续执行到 done / needs-confirm / blocked；每次 apply 后必须 build，失败先 explain，同一组两次失败就停手。'
       });
       return;
     case 'notifications/initialized':

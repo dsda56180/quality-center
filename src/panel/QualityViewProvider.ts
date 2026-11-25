@@ -1910,9 +1910,13 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       void vscode.window.showInformationMessage('还没有打开项目。');
       return;
     }
-    await vscode.env.clipboard.writeText(buildAgentPrompt(root, { mode: 'drive' }));
+    await vscode.env.clipboard.writeText(
+      '使用 quality-center MCP：先调用 quality_agent_brief，按返回的 prompt 与 next 执行；' +
+        '启动前先确认 JDK、构建门禁、跨大版本与修复权限。' +
+        '没有 MCP 时运行 node .quality-center/bin/qc.cjs prompt . --drive 后照它执行。'
+    );
     const pick = await vscode.window.showInformationMessage(
-      '已复制「AI 全权推进」指令：启动后会先问 JDK、构建门禁与跨大版本，确认后才执行；粘贴到编辑器 AI 对话框即可。',
+      '已复制 MCP 入口：AI 会先调 quality_agent_brief，再按插件状态机执行；不再需要粘贴长 prompt。',
       '打开交接'
     );
     if (pick === '打开交接') {

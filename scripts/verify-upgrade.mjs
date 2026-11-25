@@ -380,7 +380,18 @@ async function main() {
   check('tools/list 含 quality_upgrade_check', names.includes('quality_upgrade_check'));
   check('tools/list 含 quality_upgrade_revert', names.includes('quality_upgrade_revert'));
   check('tools/list 含 quality_next', names.includes('quality_next'));
+  check('tools/list 含 quality_agent_brief', names.includes('quality_agent_brief'));
   check('tools/list 含 quality_explain', names.includes('quality_explain'));
+  const briefCall = await client.request('tools/call', {
+    name: 'quality_agent_brief',
+    arguments: { path: dir }
+  });
+  const brief = JSON.parse(briefCall.result?.content?.[0]?.text ?? '{}');
+  check(
+    'MCP brief 返回完整驱动指令与状态',
+    brief.prompt?.includes('启动前确认') && typeof brief.next?.state === 'string',
+    JSON.stringify({ state: brief.next?.state, promptLength: brief.prompt?.length })
+  );
   const badCall = await client.request('tools/call', {
     name: 'quality_upgrade_apply',
     arguments: { path: dir, planId: plan.planId, pomHash: 'sha256:deadbeef', write: false }
