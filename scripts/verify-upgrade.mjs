@@ -212,6 +212,55 @@ async function main() {
       plan.candidates.every((item) => typeof item.group === 'string'),
     JSON.stringify(plan.groups?.map((group) => group.name))
   );
+
+  const managedDir = prepare();
+  const managedPom = POM.replace(
+    '<java.version>8</java.version>',
+    '<java.version>8</java.version>\n    <okhttp.version>4.1.0</okhttp.version>'
+  ).replace(
+    '</dependencies>',
+    [
+      '  <dependency>',
+      '    <groupId>com.squareup.okhttp3</groupId>',
+      '    <artifactId>okhttp</artifactId>',
+      '    <version>${okhttp.version}</version>',
+      '  </dependency>',
+      '</dependencies>'
+    ].join('\n')
+  );
+  fs.writeFileSync(path.join(managedDir, 'pom.xml'), managedPom, 'utf8');
+  fs.writeFileSync(
+    path.join(managedDir, '.quality-center', 'issues.json'),
+    JSON.stringify(
+      {
+        ...ISSUES,
+        issues: [
+          ...ISSUES.issues,
+          {
+            source: 'trivy',
+            severity: 'high',
+            rule: 'CVE-2023-0833',
+            message: 'okhttp 漏洞',
+            packageName: 'com.squareup.okhttp3:okhttp',
+            installedVersion: '4.1.0',
+            fixedVersion: '4.9.2'
+          }
+        ]
+      },
+      null,
+      2
+    ),
+    'utf8'
+  );
+  const managedPlan = JSON.parse(run(['upgrade', 'plan', managedDir, '--json']).out);
+  const managedCandidate = managedPlan.candidates?.find(
+    (item) => item.packageName === 'com.squareup.okhttp3:okhttp'
+  );
+  check(
+    '框架 BOM 属性覆盖依赖并入 framework 组',
+    managedCandidate?.group === 'framework',
+    JSON.stringify({ group: managedCandidate?.group, property: managedCandidate?.property })
+  );
   const patch = fs.existsSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff'))
     ? fs.readFileSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff'), 'utf8')
     : '';

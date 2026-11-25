@@ -19,6 +19,7 @@ import {
   UpgradeMode
 } from './upgrader';
 import { buildCommandArgs, inferFrameworkVersion, loadPolicy } from './upgradePolicy';
+import { isManagedFrameworkProperty } from './explain';
 
 export const PLAN_SCHEMA_VERSION = '3';
 
@@ -160,6 +161,10 @@ function groupOf(candidate: UpgradeCandidate, crossLine: boolean): PlanGroup {
     return 'cross-line';
   }
   if (candidate.groupId === 'org.springframework.boot') {
+    return 'framework';
+  }
+  // 属性会覆盖框架 BOM 的依赖必须跟框架同组落盘，否则框架组单独构建必然解析失败
+  if (isManagedFrameworkProperty(candidate.property)) {
     return 'framework';
   }
   return isFrameworkManaged(candidate.packageName) ? 'family' : 'independent';

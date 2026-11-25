@@ -145,6 +145,11 @@ export function detectManagedPropertyOverrides(pom: string): ManagedPropertyOver
     }));
 }
 
+/** 该属性是否由框架 BOM 管理；是则改版本会直接影响框架组能否解析，必须与框架同组落盘 */
+export function isManagedFrameworkProperty(property?: string): boolean {
+  return typeof property === 'string' && Boolean(MANAGED_PROPERTY_HINTS[property.toLowerCase()]);
+}
+
 function evidence(text: string, patterns: RegExp[], limit = 3): string[] {
   const lines = text.split(/\r?\n/).filter((line) => patterns.some((pattern) => pattern.test(line)));
   return lines

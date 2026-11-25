@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.27.27
+
+- 计划分组把“属性覆盖框架 BOM”的候选并入 `framework` 原子组（如 `okhttp.version`、`mysql.version`），避免框架组单独落盘后必然出现 BOM 解析失败
+- 新增该分组的回归断言，自检 102 通过 / 0 失败
+
 ## 0.27.26
 
 - `explain` 兼容 Maven 3.6.3 的 `Failure to find ...` 报错形式，`okhttp.version` 覆盖 BOM 时能稳定判成 `property-collision`，不再落成 `unknown`
