@@ -2805,7 +2805,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         category: item.category,
         title: item.title,
         detail: item.detail,
-        impact: item.impact
+        impact: item.impact,
+        impactLabel: item.impactLabel
       })),
       errors: (result?.errors ?? []).map((error) => ({
         source: SOURCE_LABEL[error.source],

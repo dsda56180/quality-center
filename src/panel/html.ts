@@ -31,6 +31,7 @@ export interface SnapshotSuggestion {
   title: string;
   detail: string;
   impact: number;
+  impactLabel?: string;
 }
 
 /** 与 CLI/MCP 同一个状态机；面板只渲染，不另算一套进度 */
@@ -1281,10 +1282,12 @@ export function getHtml(nonce: string): string {
     var allSuggestions = state.suggestions || [];
     if (n.plan && allSuggestions.length) {
       var picked = [];
-      ['duplicate', 'secret', 'manual', 'framework', 'dependency'].forEach(function (cat) {
+      allSuggestions.filter(function (s) { return s.category === 'duplicate'; }).slice(0, 2)
+        .forEach(function (s) { picked.push(s); });
+      ['secret', 'manual', 'framework', 'dependency'].forEach(function (cat) {
         if (picked.length >= 4) return;
         var hit = allSuggestions.filter(function (s) { return s.category === cat; })[0];
-        if (hit) picked.push(hit);
+        if (hit && picked.indexOf(hit) < 0) picked.push(hit);
       });
       allSuggestions.forEach(function (s) {
         if (picked.length < 4 && picked.indexOf(s) < 0) picked.push(s);
@@ -1293,8 +1296,8 @@ export function getHtml(nonce: string): string {
         picked.map(function (s) {
           return '<div class="wz-fixrow"><span class="fix-tag">' + esc(SUG_LABEL[s.category] || s.category) + '</span>' +
             '<span class="fix-title">' + esc(s.title) + '</span>' +
-            '<span class="fix-impact">' + (s.category === 'duplicate'
-              ? s.impact + ' 处引用'
+            '<span class="fix-impact">' + (s.impactLabel
+              ? s.impact + ' ' + s.impactLabel
               : s.impact + ' 项') + '</span></div>';
         }).join('') +
         '<div class="wz-fixnote">自动执行仍只写依赖升级；收敛、密钥、静态缺陷需要 AI 或人工确认后处理，全部建议见「修复建议」。</div></div>';
@@ -1543,8 +1546,8 @@ export function getHtml(nonce: string): string {
               + (s.category === 'framework' || s.category === 'dependency'
                   ? '<button class="plan-upgrade">按建议升级</button>' : '')
               + '<button class="copy-sug" data-sug="' + (i + 1) + '">复制建议</button>'
-              + '<span class="sug-impact"> ' + (s.category === 'duplicate'
-                  ? '涉及 ' + s.impact + ' 处引用/依赖'
+              + '<span class="sug-impact"> ' + (s.impactLabel
+                  ? '涉及 ' + s.impact + ' ' + s.impactLabel
                   : '可覆盖 ' + s.impact + ' 项问题') + '</span></div></div>';
           }).join('')
         : '<div class="empty">暂无可推导的修复建议</div>';

@@ -52,6 +52,8 @@ export interface Suggestion {
   detail: string;
   /** 该建议能覆盖的问题条数，用于排序 */
   impact: number;
+  /** 自定义影响单位（依赖收敛用“处引用”而不是“项问题”） */
+  impactLabel?: string;
 }
 
 export interface ScanResult {
