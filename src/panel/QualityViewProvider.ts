@@ -1662,7 +1662,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const crossLine = group === 'cross-line';
     const actionLabel = crossLine ? '已确认跨大版本，继续' : '升级这一组';
     const confirm = await vscode.window.showWarningMessage(
-      `只升级「${label}」：${groupCandidates.length} 项，涉及 ${cveCount} 条漏洞。` +
+      `执行「${label}」：${groupCandidates.length} 项，涉及 ${cveCount} 条漏洞。` +
         `写入后会跑构建门禁；失败会保留现场并给出原因。`,
       { modal: true },
       actionLabel,

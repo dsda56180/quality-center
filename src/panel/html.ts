@@ -339,6 +339,7 @@ export function getHtml(nonce: string): string {
   }
   .wz-title { font-weight: 600; line-height: 1.45; }
   .wz-meta { margin-top: 3px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .wz-purpose { margin-top: 4px; font-size: 11px; line-height: 1.5; color: var(--vscode-foreground); opacity: .9; }
   .wz-groups { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
   .wz-chip {
     font-size: 10px; padding: 1px 6px; border-radius: 8px;
@@ -356,11 +357,6 @@ export function getHtml(nonce: string): string {
     min-height: 24px; cursor: pointer;
   }
   .wz-actions .wz-primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-  .wz-drive { margin-top: 4px; }
-  .wz-drive button {
-    border: none; background: transparent; color: var(--vscode-textLink-foreground);
-    padding: 0; min-height: 0; font-size: 10px; text-decoration: underline;
-  }
   .msg.clamp {
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
     overflow: hidden;
@@ -855,6 +851,32 @@ export function getHtml(nonce: string): string {
       notes += '<div class="wz-note warn">注意：' + esc(w.message) + '</div>';
     });
     var label = n.plan && n.plan.nextLabel ? n.plan.nextLabel : '当前组';
+    var title = n.title;
+    if ((n.action === 'apply' || n.action === 'confirm') && n.plan) {
+      title = n.plan.state === 'partial' ? '升级建议执行中' : '升级建议已生成';
+    }
+    var purpose = '';
+    if (n.action === 'apply' || n.action === 'confirm') {
+      var issueCount = (state.issues || []).length;
+      purpose =
+        '根据' + (issueCount ? ' ' + issueCount + ' 项' : '') +
+        '扫描结果给出的升级建议，按风险分组。' +
+        (n.action === 'confirm'
+          ? '这一组含跨大版本，执行前需要你确认。'
+          : '你可以直接执行，或复制给 AI 驱动整个流程。');
+    } else if (n.action === 'plan') {
+      purpose = '根据扫描结果生成升级计划，先看分组和版本，不会直接改 pom。';
+    } else if (n.action === 'build') {
+      purpose = '升级已写入，跑构建门禁确认没有破坏现有功能。';
+    } else if (n.action === 'explain') {
+      purpose = '上一组已写入但构建没有通过，先看原因；必要时回滚到计划前。';
+    } else if (n.action === 'rescan') {
+      purpose = '构建已通过，复扫确认目标漏洞是否真的消除。';
+    } else if (n.action === 'scan') {
+      purpose = '先扫描项目，插件会根据结果给出升级建议。';
+    } else if (n.action === 'none') {
+      purpose = '升级与验证已完成，剩余项按报告人工评估。';
+    }
     function btn(key, text, primary) {
       return '<button class="' + (primary ? 'wz-primary' : 'secondary') + '" data-wz="' + key + '">' + esc(text) + '</button>';
     }
@@ -864,37 +886,41 @@ export function getHtml(nonce: string): string {
         actions = btn('scan', '开始扫描', true);
         break;
       case 'plan':
-        actions = btn('createPlan', '生成升级计划', true) + btn('openHandoff', '打开交接');
+        actions = btn('createPlan', '生成升级计划', true);
         break;
       case 'apply':
-        actions = btn('upgradeNext', '只升级「' + label + '」', true) + btn('openHandoff', '打开交接');
+        actions = btn('upgradeNext', '执行「' + label + '」', true);
         break;
       case 'confirm':
-        actions = btn('upgradeNext', '确认后升级「' + label + '」', true) + btn('openHandoff', '打开交接');
+        actions = btn('upgradeNext', '确认并执行「' + label + '」', true);
         break;
       case 'build':
-        actions = btn('buildGate', '跑构建门禁', true) + btn('openHandoff', '打开交接');
+        actions = btn('buildGate', '跑构建门禁', true);
         break;
       case 'explain':
-        actions = btn('explainBuild', '查看失败原因', true) + btn('revertPlan', '回滚到计划前') + btn('openHandoff', '打开交接');
+        actions = btn('explainBuild', '查看失败原因', true) + btn('revertPlan', '回滚到计划前');
         break;
       case 'rescan':
-        actions = btn('scan', '复扫验收', true) + btn('openHandoff', '打开交接');
+        actions = btn('scan', '复扫验收', true);
         break;
       case 'install':
         actions = btn('install-mvn', '安装 Maven', true);
         break;
       case 'revert':
-        actions = btn('revertPlan', '回滚到计划前', true) + btn('openHandoff', '打开交接');
+        actions = btn('revertPlan', '回滚到计划前', true);
         break;
       default:
         actions = btn('openHandoff', '打开交接');
     }
-    el.innerHTML = '<div class="wz-title">' + esc(n.title) + '</div>'
-      + (n.progress ? '<div class="wz-meta">' + esc(n.progress) + '</div>' : '')
-      + (n.why ? '<div class="wz-meta">' + esc(n.why) + '</div>' : '')
-      + groups + notes + '<div class="wz-actions">' + actions + '</div>'
-      + '<div class="wz-drive">' + btn('copyDrive', '复制给 AI 全权推进') + '</div>';
+    if (['apply', 'confirm', 'plan', 'build', 'explain', 'rescan'].indexOf(n.action) >= 0) {
+      actions += btn('copyDrive', '复制给 AI 执行');
+    }
+    el.innerHTML = '<div class="wz-title">' + esc(title) + '</div>'
+      + (n.progress
+        ? '<div class="wz-meta">' + esc((n.plan && (n.action === 'apply' || n.action === 'confirm') ? '计划 ' + n.plan.planId + ' · ' : '') + n.progress) + '</div>'
+        : '')
+      + (purpose ? '<div class="wz-purpose">' + esc(purpose) + '</div>' : '')
+      + groups + notes + '<div class="wz-actions">' + actions + '</div>';
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
       button.type = 'button';
