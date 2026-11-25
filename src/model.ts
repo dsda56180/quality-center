@@ -43,7 +43,7 @@ export interface ScanError {
   message: string;
 }
 
-export type SuggestionCategory = 'framework' | 'dependency' | 'secret' | 'manual';
+export type SuggestionCategory = 'framework' | 'dependency' | 'duplicate' | 'secret' | 'manual';
 
 /** 基于扫描结果推导出的修复建议（不是逐条问题，而是行动方案） */
 export interface Suggestion {

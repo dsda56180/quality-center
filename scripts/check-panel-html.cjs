@@ -17,6 +17,7 @@ const checks = {
   msgBarDedupesPlan: h.includes('var planPending') && h.includes('fixable > 0 && !planPending'),
   onePlanActionCenter: !h.includes('升级计划待执行') && h.indexOf('id="wizard"') < h.indexOf('id="tabs"'),
   planDetail: h.includes('计划明细') && h.includes('n.plan.cveTotal') && h.includes('n.plan.candidates'),
+  fullRepairPlan: h.includes('全面修复方案') && h.includes('不只依赖升级') && h.includes("duplicate: '收敛'"),
   noHandoffCtaAfterPlan: !provider.includes('升级第一组'),
   aiFirstInPlanCard: h.includes("actions = btn('copyDrive', '复制给 AI 执行', true) + btn('upgradeNext'"),
   mcpReadyHidden: !h.includes("if (mcp.state === 'ready')"),

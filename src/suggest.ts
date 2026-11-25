@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Issue, ScanResult, Suggestion } from './model';
+import { buildConsolidationSuggestions } from './duplicates';
 
 /** 框架层组件前缀：这些包大多由 Spring Boot BOM 统一管理，单独升级无效 */
 const FRAMEWORK_PREFIXES = [
@@ -264,6 +265,12 @@ export function buildSuggestions(root: string, result: ScanResult): Suggestion[]
         '这类问题需要看调用上下文，可在「静态缺陷」页逐条复制给 AI 修复，修复后重新编译再扫描确认。',
       impact: defects.length
     });
+  }
+
+  try {
+    suggestions.push(...buildConsolidationSuggestions(root));
+  } catch {
+    // 收敛分析失败不能影响已有修复建议；扫描结果照常展示
   }
 
   return suggestions.sort((a, b) => b.impact - a.impact);

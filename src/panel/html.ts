@@ -514,6 +514,20 @@ export function getHtml(nonce: string): string {
   .wz-plan-row .cve { flex: none; color: var(--vscode-editorWarning-foreground, #d29922); }
   .wz-plan-row.done { opacity: .65; }
   .wz-plan-note { margin-top: 4px; font-size: 10px; color: var(--vscode-descriptionForeground); }
+  .wz-fixplan { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--vscode-panel-border); }
+  .wz-fixplan-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+    font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 4px;
+  }
+  .wz-fixplan-head strong { color: var(--vscode-foreground); font-size: 11px; }
+  .wz-fixrow { display: flex; gap: 5px; align-items: baseline; line-height: 1.5; margin-bottom: 3px; }
+  .wz-fixrow .fix-tag {
+    flex: none; font-size: 9px; padding: 0 4px; border-radius: 7px;
+    color: var(--vscode-textLink-foreground); background: rgba(88,166,255,.12);
+  }
+  .wz-fixrow .fix-title { flex: 1 1 auto; min-width: 0; font-size: 10px; color: var(--vscode-foreground); }
+  .wz-fixrow .fix-impact { flex: none; font-size: 9px; color: var(--vscode-descriptionForeground); }
+  .wz-fixnote { margin-top: 4px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
   .msg.clamp {
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
     overflow: hidden;
@@ -683,7 +697,7 @@ export function getHtml(nonce: string): string {
     STYLE: '可疑代码',
     I18N: '国际化'
   };
-  const SUG_LABEL = { framework: '框架', dependency: '依赖', secret: '密钥', manual: '人工' };
+  const SUG_LABEL = { framework: '框架', dependency: '依赖', duplicate: '收敛', secret: '密钥', manual: '人工' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
   let state = { run: null, scanning: false, paused: false, deepFix: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, qcsec: true, astgrep: true, scanOnSave: true, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
@@ -1262,6 +1276,29 @@ export function getHtml(nonce: string): string {
             ' 项未纳入：策略未授权或需人工处理，已记录在计划文件。</div>'
           : '') + '</div>';
     }
+    // 全面修复方案：升级只是其中一类，收敛/密钥/代码/静态问题也要在同一张卡里可见
+    var fixPlan = '';
+    var allSuggestions = state.suggestions || [];
+    if (n.plan && allSuggestions.length) {
+      var picked = [];
+      ['duplicate', 'secret', 'manual', 'framework', 'dependency'].forEach(function (cat) {
+        if (picked.length >= 4) return;
+        var hit = allSuggestions.filter(function (s) { return s.category === cat; })[0];
+        if (hit) picked.push(hit);
+      });
+      allSuggestions.forEach(function (s) {
+        if (picked.length < 4 && picked.indexOf(s) < 0) picked.push(s);
+      });
+      fixPlan = '<div class="wz-fixplan"><div class="wz-fixplan-head"><strong>全面修复方案</strong><span>不只依赖升级</span></div>' +
+        picked.map(function (s) {
+          return '<div class="wz-fixrow"><span class="fix-tag">' + esc(SUG_LABEL[s.category] || s.category) + '</span>' +
+            '<span class="fix-title">' + esc(s.title) + '</span>' +
+            '<span class="fix-impact">' + (s.category === 'duplicate'
+              ? s.impact + ' 处引用'
+              : s.impact + ' 项') + '</span></div>';
+        }).join('') +
+        '<div class="wz-fixnote">自动执行仍只写依赖升级；收敛、密钥、静态缺陷需要 AI 或人工确认后处理，全部建议见「修复建议」。</div></div>';
+    }
     function btn(key, text, primary) {
       return '<button class="' + (primary ? 'wz-primary' : 'secondary') + '" data-wz="' + key + '">' + esc(text) + '</button>';
     }
@@ -1300,7 +1337,7 @@ export function getHtml(nonce: string): string {
     el.innerHTML = '<div class="wz-title">' + esc(title) + '</div>'
       + (meta ? '<div class="wz-meta">' + esc(meta) + '</div>' : '')
       + (purpose ? '<div class="wz-purpose">' + esc(purpose) + '</div>' : '')
-      + groups + planDetail + notes + '<div class="wz-actions">' + actions + '</div>';
+      + groups + planDetail + fixPlan + notes + '<div class="wz-actions">' + actions + '</div>';
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
       button.type = 'button';
@@ -1506,7 +1543,9 @@ export function getHtml(nonce: string): string {
               + (s.category === 'framework' || s.category === 'dependency'
                   ? '<button class="plan-upgrade">按建议升级</button>' : '')
               + '<button class="copy-sug" data-sug="' + (i + 1) + '">复制建议</button>'
-              + '<span class="sug-impact"> 可覆盖 ' + s.impact + ' 项问题</span></div></div>';
+              + '<span class="sug-impact"> ' + (s.category === 'duplicate'
+                  ? '涉及 ' + s.impact + ' 处引用/依赖'
+                  : '可覆盖 ' + s.impact + ' 项问题') + '</span></div></div>';
           }).join('')
         : '<div class="empty">暂无可推导的修复建议</div>';
     } else {
