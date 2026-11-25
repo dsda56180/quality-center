@@ -246,6 +246,8 @@ export function getHtml(nonce: string): string {
   body.ai-busy .d-actions,
   body.ai-busy .sug-actions,
   body.ai-busy .tool-link,
+  body.ai-busy .ai-link,
+  body.ai-busy #mcpcheck,
   body.ai-busy #mcpsetup { display: none !important; }
   .aistatus { display: none; margin: 0 0 10px; padding: 8px 10px; border-radius: 4px;
     border: 1px solid var(--vscode-panel-border); background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.1)); }
