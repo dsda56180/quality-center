@@ -486,8 +486,8 @@ export function getHtml(nonce: string): string {
       <label class="dlg-row"><input type="checkbox" id="opt-gitleaks" /> 密钥泄露（Gitleaks）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-trivy" /> 依赖漏洞（Trivy）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-spotbugs" /> 静态缺陷（SpotBugs，较慢）</label>
-      <label class="dlg-row"><input type="checkbox" id="opt-qcsec" /> 配置安全（qcsec：Druid/Actuator/CORS/明文口令）</label>
-      <label class="dlg-row"><input type="checkbox" id="opt-astgrep" /> 语义规则（AST：permitAll 敏感路径/日志敏感字段/上传校验）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-qcsec" /> 配置安全（qcsec：Druid/Actuator/CORS/明文口令/默认账号/日志与会话）</label>
+      <label class="dlg-row"><input type="checkbox" id="opt-astgrep" /> 语义规则（AST：敏感路径/注入/SSTI/反序列化/XXE 等 27 条）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-scansave" /> 保存文件后自动扫描</label>
       <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。保存后下次扫描生效。</div>
       <div class="dlg-sec">深度修复配方</div>
@@ -552,7 +552,7 @@ export function getHtml(nonce: string): string {
                 : issues.filter(function (i) { return i.source === key; }).length));
       const label = key === 'all'
         ? '全部'
-        : (key === 'ignored' ? '已忽略' : (key === 'suggest' ? '修复建议' : SRC_LABEL[key]));
+        : (key === 'ignored' ? '已忽略' : (key === 'suggest' ? '修复建议' : (SRC_LABEL[key] || key)));
       tab.textContent = label + ' ' + count;
       tab.classList.toggle('active', activeTab === key);
     });
@@ -1104,7 +1104,7 @@ export function getHtml(nonce: string): string {
           }).join('');
           return '<div class="group' + (collapsed[source] ? ' collapsed' : '')
             + '" data-group="' + source + '">'
-            + '<div class="group-title"><span class="chev">▾</span>' + SRC_LABEL[source] + ' (' + group.length + ')</div>'
+            + '<div class="group-title"><span class="chev">▾</span>' + (SRC_LABEL[source] || source) + ' (' + group.length + ')</div>'
             + items + '</div>';
         }).join('');
         list.scrollTop = savedScroll;

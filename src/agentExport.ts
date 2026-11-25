@@ -2,11 +2,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Issue, ScanResult, SEVERITY_LABEL, SEVERITY_ORDER, SOURCE_LABEL } from './model';
 import { toMarkdown } from './report';
+import { toSarif } from './sarif';
 
 export interface AgentExport {
   dir: string;
   jsonPath: string;
   markdownPath: string;
+  sarifPath: string;
 }
 
 function relative(root: string, file?: string): string {
@@ -57,7 +59,8 @@ export function exportForAgent(root: string, result: ScanResult): AgentExport {
     cvss: issue.cvss ?? 0,
     cwe: issue.cwe ?? [],
     publishedAt: issue.publishedAt ?? '',
-    category: issue.category ?? ''
+    category: issue.category ?? '',
+    occurrences: issue.occurrences ?? 1
   }));
 
   const payload = {
@@ -75,10 +78,13 @@ export function exportForAgent(root: string, result: ScanResult): AgentExport {
 
   const jsonPath = path.join(dir, 'issues.json');
   const markdownPath = path.join(dir, 'report.md');
+  // SARIF 顺手写一份：GitHub code scanning / 其它平台都能直接上传
+  const sarifPath = path.join(dir, 'report.sarif');
   fs.writeFileSync(jsonPath, JSON.stringify(payload, null, 2), 'utf8');
   fs.writeFileSync(markdownPath, toMarkdown(result, root), 'utf8');
+  fs.writeFileSync(sarifPath, toSarif(result, root), 'utf8');
 
-  return { dir, jsonPath, markdownPath };
+  return { dir, jsonPath, markdownPath, sarifPath };
 }
 
 export function formatIssueForCopy(issue: Issue, root: string, id: number): string {

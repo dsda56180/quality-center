@@ -4,6 +4,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { addToBaseline, removeFromBaseline, splitByBaseline } from './baseline';
+import { aggregateIssues } from './aggregate';
+import { muteRules, parseMuteList } from './ruleFilter';
 import { killRunningCommands, resolveBinary } from './exec';
 import { Issue, IssueSource, ScanResult, SEVERITY_ORDER } from './model';
 import type { ToolId } from './tools';
@@ -566,7 +568,11 @@ export class ScanRunner {
       (a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
     );
 
-    const split = splitByBaseline(root, issues);
+    const mutes = parseMuteList(config.get('rules.mute'));
+    const muted = muteRules(issues, mutes);
+    const aggregateInput =
+      config.get<boolean>('aggregate', false) ? aggregateIssues(muted.issues).issues : muted.issues;
+    const split = splitByBaseline(root, aggregateInput);
     this.lastResult = {
       startedAt,
       finishedAt: Date.now(),
@@ -576,6 +582,7 @@ export class ScanRunner {
       skipped,
       missingTools: missing.size > 0 ? Array.from(missing) : undefined,
       suggestions: [],
+      mutedByRule: muted.muted,
       buildHint
     };
     this.lastResult.suggestions = buildSuggestions(root, this.lastResult);

@@ -125,7 +125,9 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.trivy.preferMirror` | `true` | 未配置仓库时优先走 daocloud 镜像，避免 ghcr.io 不可达导致长时间等待 |
 | `qualityCenter.spotbugs.enabled` | `true` | 启用 SpotBugs + FindSecBugs 字节码检测 |
 | `qualityCenter.qcsec.enabled` | `true` | 启用配置安全扫描（qcsec），无需外部工具 |
-| `qualityCenter.astgrep.enabled` | `true` | 启用 AST 语义规则（astgrep）：解析 Java 语法树与 Thymeleaf/JSP 模板，检查 permitAll 敏感路径（含常量白名单、web.ignoring）、日志敏感字段、上传缺少校验、SQL 拼接、@CrossOrigin 通配、SpEL 注入、命令执行拼接、MyBatis 注解 SQL、SSRF、PrintWriter 与模板的未转义输出 |
+| `qualityCenter.astgrep.enabled` | `true` | 启用 AST 语义规则（astgrep）：解析 Java 语法树与 Thymeleaf/JSP/FreeMarker/Velocity 模板，覆盖 27 条规则（permitAll 敏感路径、日志敏感字段、上传校验、SQL 拼接、@CrossOrigin、SpEL、命令执行、MyBatis 注解 SQL、SSRF、XSS、路径穿越、Zip Slip、开放重定向、XXE、不安全随机数、JWT 不验签、时序比较、Cookie 标志、任意文件读取、SSTI、LDAP/JDBC/日志注入、敏感打印、反序列化、上传扩展名） |
+| `qualityCenter.rules.mute` | `[]` | 规则静音（单规则开关）：规则 id、前缀通配 `SEC_DRUID_*` 或来源名 `trivy`；静音条数记入 `summary.mutedByRule`，不进面板与报告 |
+| `qualityCenter.aggregate` | `false` | 同文件聚合：同规则同文件 ≥3 处合并为一条（仅 medium 及以下，高危逐条展示） |
 | `qualityCenter.dependencyUpgrade.enabled` | `true` | 显示「升级依赖」按钮，允许一键改写 pom 版本 |
 | `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
 | `qualityCenter.openRewrite.recipes` | `[]` | 手动启用的进阶配方；面板「设置」里按风险分组勾选，且只展示当前项目适用的配方 |
@@ -217,6 +219,10 @@ node <扩展目录>/out/cli.js scan --json --only trivy --delta        # 复扫�
 node <扩展目录>/out/cli.js scan --only trivy,spotbugs   # 只跑指定扫描器
 node <扩展目录>/out/cli.js scan --only qcsec            # 只跑配置层规则（无需 mvn/trivy）
 node <扩展目录>/out/cli.js scan --only astgrep          # 只跑 AST 语义规则（无需 mvn/trivy）
+node <扩展目录>/out/cli.js scan --mute SEC_DRUID_STATVIEW_RESET_ENABLED   # 单规则静音，支持 SEC_* 前缀通配
+node <扩展目录>/out/cli.js scan --sarif report.sarif   # 额外写 SARIF 2.1.0（GitHub code scanning 可直接上传）
+node <扩展目录>/out/cli.js scan --gha --fail-on high    # 输出 ::error/::warning 注解，CI 里直接标到代码行
+node <扩展目录>/out/cli.js scan --aggregate             # 同文件同类问题合并（medium 及以下）
 node <扩展目录>/out/cli.js build <项目>                 # 按策略 buildGate 构建（默认 package）
 node <扩展目录>/out/cli.js fix <项目>                   # 确定性修复，默认只预览
 node <扩展目录>/out/cli.js fix <项目> --write           # 写回文件，改完需复扫
@@ -261,7 +267,9 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 
 指令里只放“去读哪里、按什么顺序、什么不许做”，事实源仍是 `.quality-center/issues.json`、`report.md`、`plan.json` 与 MCP 的 `quality_report`，不重复搬运上下文。配套的 `quality_upgrade_check` / `quality_upgrade_revert` 让 AI 能自己确认是否真落地、失败能自己回滚。
 
-约定：stdout 只放结果，进度和日志全部走 stderr；退出码 `0` 通过、`1` 有达到阈值的问题（默认 `high`）、`2` 工具缺失或执行失败、`3` 用法错误。扫描结果同时写 `.quality-center/issues.json` 与 `report.md`。
+约定：stdout 只放结果，进度和日志全部走 stderr；退出码 `0` 通过、`1` 有达到阈值的问题（默认 `high`）、`2` 工具缺失或执行失败、`3` 用法错误。扫描结果同时写 `.quality-center/issues.json`、`report.md` 与 `report.sarif`。
+
+`--sarif` 输出标准 SARIF 2.1.0（`runs[0].tool.driver` + `results[].locations`），GitHub Actions 里可直接 `upload-sarif` 到 code scanning；`--gha` 则输出 `::error/::warning file=…,line=…,title=规则::消息` 形式的注解，适合不想接 code scanning 的流水线。两者可以一起用。
 
 `--json` 输出 `schemaVersion: "2"` 的 `AgentPayload`：`summary`（按严重度与来源计数）、`issues`（含相对路径 `file`、绝对路径 `abs`、`rule`、`zhSummary`、`advice`、`fixable`、`package`/`installedVersion`/`fixedVersion`/`cvss`）、`ignored`、`suggestions`（根因级方案）、`skipped`、`errors`、`missingTools`、`nextActions`。字段只增不减，结构变化时升版本号。
 
@@ -289,11 +297,13 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 npm run rules:matrix        # 跑 fixtures/ 下的正例与反例，输出 PASS / GAP / FAIL
 ```
 
-代码层由 SpotBugs + FindSecBugs 1.14（144 个 pattern）承担，可检出宽松 CORS（`PERMISSIVE_CORS`）、关闭 CSRF（`SPRING_CSRF_PROTECTION_DISABLED`）、硬编码口令、SQL 注入、XXE、反序列化、路径穿越等；配置层由内置 `qcsec` 承担，覆盖 Druid 面板默认口令与公网绑定、`allowMultiQueries`、Actuator 全暴露、CORS 通配源、明文口令、devtools、SSL 关闭、Swagger/Knife4j 文档开放、Redis 空口令、中间件默认账号、Nacos 关闭鉴权、Kafka SASL 明文口令、Nacos token 密钥未更换、Gateway actuator 端点开启、Druid 面板未配账号或开启 reset-enable、JDBC 关闭 TLS、Actuator 与业务共用端口共 20 条配置规则，外加 MyBatis 的 `${}` 与 `statementType="STATEMENT"` 2 条 Mapper 规则；源码语义层由 `astgrep` 承担，覆盖 `permitAll()` 敏感路径（含常量/`@Value` 默认值与 `web.ignoring()`）、日志敏感字段、上传缺少校验、SQL 字符串拼接（含 `String.format` 与 `StringBuilder` 链式 append）、`@CrossOrigin` 通配、SpEL/OGNL 注入、命令执行拼接、MyBatis 注解 SQL、SSRF、PrintWriter 与 Thymeleaf/JSP 未转义输出、上传路径穿越共 12 条规则。当前矩阵 57 个用例全部转绿（`PASS 57 / GAP 0 / FAIL 0`）。
+代码层由 SpotBugs + FindSecBugs 1.14（144 个 pattern）承担，可检出宽松 CORS（`PERMISSIVE_CORS`）、关闭 CSRF（`SPRING_CSRF_PROTECTION_DISABLED`）、硬编码口令、SQL 注入、XXE、反序列化、路径穿越等；配置层由内置 `qcsec` 承担，覆盖 Druid 面板默认口令与公网绑定、Druid `filters` 含 `config`、面板 `allow` 留空、`allowMultiQueries`、Actuator 全暴露 / `health.show-details=always` / `base-path=/` / Gateway 端点、CORS 通配源、明文口令、devtools、SSL 关闭、Swagger/Knife4j 文档开放、Knife4j 关 Basic 认证、Redis 空口令、中间件默认账号、Spring Security 内置账号、Nacos 关闭鉴权 / 身份标识未换 / token 密钥未换、Kafka SASL 明文口令、JDBC 关闭 TLS、MySQL 公钥获取、错误堆栈回传、SQL 与根日志 DEBUG、默认激活 dev profile、会话 Cookie 标志、会话超时过长、静态资源映射本地目录共 36 条配置规则，外加 MyBatis 的 `${}`（按 ORDER BY/LIMIT 位置分级，并标注所属 `<sql>` 片段与被哪个语句引用）与 `statementType="STATEMENT"` 2 条 Mapper 规则；源码语义层由 `astgrep` 承担，覆盖 `permitAll()` 敏感路径（含常量/`@Value` 默认值与 `web.ignoring()`）、日志敏感字段、上传缺少校验、SQL 字符串拼接（含 `String.format`、`StringBuilder` 链式 append、变量中转）、`@CrossOrigin` 通配、SpEL/OGNL 注入、命令执行拼接、MyBatis 注解 SQL、SSRF、PrintWriter 与 Thymeleaf/JSP 未转义输出、上传路径穿越、Zip Slip、开放重定向、XXE、不安全随机数、JWT 不验签、时序比较、会话 Cookie 标志、任意文件读取、SSTI（含 FreeMarker/Velocity 源码级注入）、LDAP/JDBC/日志注入、敏感字段打印、反序列化、上传扩展名校验共 27 条规则。当前矩阵 91 个用例全部转绿（`PASS 91 / GAP 0 / FAIL 0`）。
 
 `astgrep` 的引擎是 `@ast-grep/napi` + `@ast-grep/lang-java`（Java 语法为 wasm），打包时会把 Windows x64/arm64、macOS x64/arm64、Linux x64/arm64 六个平台的二进制一起放进 vsix（约 13 MB），用户侧无需再下载；第三方平台（如 musl 发行版）会在「已跳过」里注明「AST 引擎不可用」，其余五类扫描照常。
 
 FindSecBugs 只能通过 pom 的 `<build><plugins>` 生效——`spotbugs-maven-plugin` 的 `plugins` 参数没有 userProperty，`-Dspotbugs.plugins` 实际传不进去（0.17.19 及以前就是这样静默失效的）。现在插件会复制一份 `.qc-spotbugs-pom.xml` 注入后再运行、结束即删；项目自己配了 FindSecBugs 时不动原文件；非 Maven 工程降级为核心规则并把原因作为扫描异常上报。多模块工程目前只注入根 pom。
+
+SpotBugs 失败时会给出真正的原因（`Failed to execute goal` 段落或 POM/依赖解析的关键行），完整 Maven 输出写到 `.quality-center/logs/spotbugs.log`；若报告目录写不进去（只读、被杀软/编辑器占用、路径异常），会自动把占位文件挪到 `.bak-<时间戳>` 后重跑，仍失败则把报告改写到 `.quality-center/spotbugs-out`。
 
 ## 隐私与安全
 

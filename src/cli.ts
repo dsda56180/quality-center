@@ -10,6 +10,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { toSarif, toWorkflowCommands } from './sarif';
 import {
   buildProject,
   fixProject,
@@ -57,10 +58,14 @@ scan 选项:
   --detail <summary|full> 配合 --json：summary 只给计数 + Top N（默认 full，兼容旧用法）
   --top <N>              summary 模式返回的问题条数，默认 10
   --delta                与上一次扫描比较，只回新增/消失数量
-  --only <a,b,c>         只跑指定扫描器（checkstyle,gitleaks,trivy,spotbugs）
+  --only <a,b,c>         只跑指定扫描器（checkstyle,gitleaks,trivy,spotbugs,qcsec,astgrep）
   --fail-on <级别>       critical|high|medium|low|info|none，命中即退出码 1（默认 high）
+  --mute <a,b>           规则静音，支持规则 id、前缀通配（SEC_DRUID_*）、来源名（覆盖 qualityCenter.rules.mute）
+  --aggregate            同文件聚合（medium 及以下、>=3 处才合并，默认关闭）
+  --sarif [路径]         额外写 SARIF 2.1.0（默认 .quality-center/report.sarif）
+  --gha                  输出 GitHub Actions 注解（::error/::warning）
   --out <目录>           中间报告目录（默认 <目录>/.quality-center/scans）
-  --no-export            不写 .quality-center/issues.json 与 report.md
+  --no-export            不写 .quality-center/issues.json、report.md 与 report.sarif
   --quiet                不输出进度（stderr）
 
 fix 选项:
@@ -101,7 +106,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const flags: Record<string, string | true> = {};
   const positional: string[] = [];
-  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group', '--detail', '--top', '--log']);
+  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group', '--detail', '--top', '--log', '--mute', '--sarif']);
   for (let i = 0; i < argv.length; i += 1) {
     const item = argv[i];
     if (item.startsWith('--')) {
@@ -192,17 +197,41 @@ async function scanCommand(args: Args): Promise<number> {
 
   let scan;
   try {
+    const muteRaw = typeof args.flags['--mute'] === 'string' ? String(args.flags['--mute']) : undefined;
     scan = await scanProject({
       root,
       only,
       failOn,
       outDir: typeof args.flags['--out'] === 'string' ? String(args.flags['--out']) : undefined,
       exportFiles: args.flags['--no-export'] !== true,
+      mute: muteRaw ? muteRaw.split(',').map((item) => item.trim()).filter(Boolean) : undefined,
+      aggregate: args.flags['--aggregate'] === true,
       onProgress: scanProgress(args)
     });
   } catch (error) {
     progress(`扫描失败：${error instanceof Error ? error.message : String(error)}`);
     return 2;
+  }
+
+  // SARIF：给 GitHub code scanning / Azure DevOps / SonarQube 直接消费
+  const sarifFlag = args.flags['--sarif'];
+  if (typeof sarifFlag === 'string' || sarifFlag === true) {
+    const target =
+      typeof sarifFlag === 'string' && sarifFlag.trim()
+        ? path.resolve(sarifFlag)
+        : path.join(root, '.quality-center', 'report.sarif');
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, toSarif(scan.result, root), 'utf8');
+      log(args, `SARIF 已写入：${target}`);
+    } catch (error) {
+      progress(`写 SARIF 失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // GitHub Actions 注解：出现在 PR 的 Checks / Files changed
+  if (args.flags['--gha'] === true) {
+    process.stdout.write(`${toWorkflowCommands(scan.result, root)}\n`);
   }
 
   if (args.flags['--json'] === true) {

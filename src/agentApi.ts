@@ -10,6 +10,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { exportForAgent, AgentExport } from './agentExport';
 import { splitByBaseline } from './baseline';
+import { aggregateIssues } from './aggregate';
+import { muteRules, parseMuteList } from './ruleFilter';
 import { resolveBinary } from './exec';
 import { Issue, IssueSource, ScanResult, SEVERITY_LABEL, SEVERITY_ORDER, Severity } from './model';
 import { resolveConfig, scanCheckstyle } from './scanners/checkstyle';
@@ -46,6 +48,10 @@ export interface AgentScanOptions {
   outDir?: string;
   /** 是否写 .quality-center/issues.json 与 report.md，默认 true */
   exportFiles?: boolean;
+  /** 规则静音列表，支持精确 id、`前缀*` 与来源名 */
+  mute?: string[];
+  /** 同文件聚合（medium 及以下，>=3 处才合并），默认 false */
+  aggregate?: boolean;
   /** 进度回调，CLI 打到 stderr */
   onProgress?: (event: AgentScanEvent) => void;
   /** 供调用方决定是否继续（例如 Ctrl+C） */
@@ -133,6 +139,8 @@ export function optionsFromProject(
     },
     outDir: overrides.outDir ?? path.join(root, '.quality-center', 'scans'),
     exportFiles: overrides.exportFiles ?? true,
+    mute: overrides.mute ?? parseMuteList(settings['rules.mute']),
+    aggregate: overrides.aggregate ?? bool('aggregate', false),
     onProgress: overrides.onProgress,
     cancelled: overrides.cancelled
   };
@@ -284,7 +292,12 @@ export async function runAgentScan(options: AgentScanOptions): Promise<ScanResul
   }
 
   issues.sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
-  const split = splitByBaseline(root, issues);
+  const mutes = options.mute ?? parseMuteList(loadProjectSettings(root)['rules.mute']);
+  const mutedResult = muteRules(issues, mutes);
+  const finalIssues = options.aggregate
+    ? aggregateIssues(mutedResult.issues).issues
+    : mutedResult.issues;
+  const split = splitByBaseline(root, finalIssues);
   const result: ScanResult = {
     startedAt,
     finishedAt: Date.now(),
@@ -294,6 +307,7 @@ export async function runAgentScan(options: AgentScanOptions): Promise<ScanResul
     skipped,
     missingTools: missing.size > 0 ? Array.from(missing) : undefined,
     suggestions: [],
+    mutedByRule: mutedResult.muted,
     buildHint
   };
   result.suggestions = buildSuggestions(root, result);
@@ -321,6 +335,7 @@ export function summarize(result: ScanResult): AgentSummary {
     summary[severity] = result.issues.filter((issue) => issue.severity === severity).length;
   }
   summary.ignored = result.ignored.length;
+  summary.mutedByRule = result.mutedByRule ?? 0;
   for (const source of ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec', 'astgrep'] as const) {
     summary[source] = result.issues.filter((issue) => issue.source === source).length;
   }
@@ -370,7 +385,7 @@ export interface AgentPayload {
   missingTools: ToolId[];
   buildHint: string;
   /** 输出文件位置，便于 agent 二次读取 */
-  files: { issuesJson?: string; reportMarkdown?: string };
+  files: { issuesJson?: string; reportMarkdown?: string; sarif?: string };
   /** 给 agent 的下一步建议，避免它自己猜流程 */
   nextActions: string[];
 }
@@ -419,6 +434,11 @@ export function buildPayload(result: ScanResult, root: string, files?: AgentExpo
   if (result.ignored.length > 0) {
     nextActions.push('.quality-center/baseline.json 中已有忽略项，重扫不会重复计入统计');
   }
+  if ((result.mutedByRule ?? 0) > 0) {
+    nextActions.push(
+      `有 ${result.mutedByRule} 条命中被 rules.mute 静音（配置项 qualityCenter.rules.mute），需要复核时先清空该配置`
+    );
+  }
   if (nextActions.length === 0) {
     nextActions.push('当前没有需要处理的问题，可直接提交或进入评审');
   }
@@ -435,7 +455,9 @@ export function buildPayload(result: ScanResult, root: string, files?: AgentExpo
     skipped: result.skipped,
     missingTools: missing,
     buildHint: result.buildHint ?? '',
-    files: files ? { issuesJson: files.jsonPath, reportMarkdown: files.markdownPath } : {},
+    files: files
+      ? { issuesJson: files.jsonPath, reportMarkdown: files.markdownPath, sarif: files.sarifPath }
+      : {},
     nextActions
   };
 }

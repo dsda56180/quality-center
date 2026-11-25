@@ -1,0 +1,10 @@
+{
+  "id": "ast-template-engine-source",
+  "title": "Velocity evaluate 与 FreeMarker Template 编译外部输入",
+  "layer": "code",
+  "cwe": "CWE-94",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": ["AST_TEMPLATE_INJECTION"], "mustNotFire": [] },
+  "target": { "rules": ["AST_TEMPLATE_INJECTION"], "owner": "astgrep", "status": "covered" }
+}

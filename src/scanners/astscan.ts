@@ -1379,6 +1379,58 @@ function checkFileReadTraversal(file: string, root: SgNode): Issue[] {
 }
 
 /** 规则 21：模板引擎以外部输入作模板（SSTI） */
+/** 按顶层逗号切分实参文本，保留嵌套括号/字符串里的逗号 */
+function splitArguments(text: string): string[] {
+  const inner = text.trim().replace(/^\(/, '').replace(/\)$/, '');
+  const parts: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let current = '';
+  for (const char of inner) {
+    if (quote) {
+      current += char;
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === '(' || char === '{' || char === '[') {
+      depth++;
+    }
+    if (char === ')' || char === '}' || char === ']') {
+      depth--;
+    }
+    if (char === ',' && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim()) {
+    parts.push(current);
+  }
+  return parts.map((part) => part.trim());
+}
+
+/** 参数是否「能落到固定文本」：字面量，或同文件里以纯字面量初始化的 String 常量/局部变量 */
+function isConstantText(root: SgNode, argument: string): boolean {
+  const trimmed = argument.trim();
+  if (/^("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')$/.test(trimmed)) {
+    return true;
+  }
+  if (!/^[A-Za-z_$][\w$]*$/.test(trimmed)) {
+    return false;
+  }
+  const declaration = new RegExp(`\\b${trimmed}\\s*=\\s*("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*')\\s*;`);
+  return declaration.test(root.text());
+}
+
 function checkSsti(file: string, root: SgNode): Issue[] {
   const issues: Issue[] = [];
   for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
@@ -1400,6 +1452,73 @@ function checkSsti(file: string, root: SgNode): Issue[] {
         'CWE-94',
         '模板名/模板内容来自变量，攻击者可注入模板语法执行任意代码（SSTI）',
         '模板名只能用常量或白名单枚举，禁止把用户输入交给模板引擎解析。'
+      )
+    );
+  }
+
+  // FreeMarker / Velocity 走的是「源码级模板」：evaluate 的最后一段字符串、new Template 的内容都是模板源码
+  for (const call of root.findAll({ rule: { kind: 'method_invocation' } })) {
+    const name = call.field('name')?.text() ?? '';
+    const receiver = call.field('object')?.text() ?? '';
+    if (!/^(evaluate|evaluateTemplate|getTemplate|mergeTemplate)$/.test(name)) {
+      continue;
+    }
+    if (!/velocity|freemarker|template|engine/i.test(receiver)) {
+      continue;
+    }
+    const parts = splitArguments(call.field('arguments')?.text() ?? '');
+    if (parts.length === 0) {
+      continue;
+    }
+    const target = parts[parts.length - 1];
+    if (isConstantText(root, target)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        call,
+        'AST_TEMPLATE_INJECTION',
+        'high',
+        'CWE-94',
+        `模板引擎 ${name} 的参数不是常量，模板源码/模板名可被外部输入控制（FreeMarker / Velocity 注入）`,
+        '模板内容或模板名必须是常量/白名单；渲染用户内容只能作为数据模型传入，不能当作模板源码解析。'
+      )
+    );
+  }
+
+  // new Template(name, reader) 直接把 Reader 内容编译成模板，StringReader(userInput) 就是典型注入点
+  for (const creation of root.findAll({ rule: { kind: 'object_creation_expression' } })) {
+    const type = creation.field('type')?.text() ?? '';
+    if (!/^\s*(?:freemarker\.template\.)?Template\b/.test(type.replace(/<[^>]*>/, ''))) {
+      continue;
+    }
+    const parts = splitArguments(creation.field('arguments')?.text() ?? '');
+    if (parts.length < 2) {
+      continue;
+    }
+    const source = parts[1];
+    if (!/new\s+StringReader\s*\(/i.test(source)) {
+      continue;
+    }
+    const literalReader = /new\s+StringReader\s*\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')\s*\)/i.test(source);
+    if (literalReader) {
+      continue;
+    }
+    // 常量字段里存的模板源码是「固定模板」，不算注入
+    const readerArg = /new\s+StringReader\s*\(([\s\S]*)\)\s*$/.exec(source)?.[1] ?? '';
+    if (isConstantText(root, readerArg)) {
+      continue;
+    }
+    issues.push(
+      makeIssue(
+        file,
+        creation,
+        'AST_TEMPLATE_INJECTION',
+        'high',
+        'CWE-94',
+        'FreeMarker 模板由 StringReader 动态内容构造，等于把外部输入当模板源码编译执行',
+        '模板固定放在受控目录并用 Configuration.getTemplate 加载；动态内容只作为数据模型。'
       )
     );
   }

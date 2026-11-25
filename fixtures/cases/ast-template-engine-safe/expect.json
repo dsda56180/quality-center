@@ -1,0 +1,10 @@
+{
+  "id": "ast-template-engine-safe",
+  "title": "模板源码为常量（应不告警）",
+  "layer": "code",
+  "cwe": "CWE-94",
+  "scanners": ["astgrep"],
+  "requiresBuild": false,
+  "expect": { "mustFire": [], "mustNotFire": ["AST_TEMPLATE_INJECTION"] },
+  "target": { "rules": ["AST_TEMPLATE_INJECTION"], "owner": "astgrep", "status": "covered" }
+}

@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)、字节码静态缺陷与配置安全的统一面板，支持一键导出给 AI 修复",
-  "version": "0.26.0",
+  "version": "0.27.2",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -184,6 +184,19 @@
           "type": "boolean",
           "default": true,
           "description": "扫描时发现 gitleaks / trivy / mvn 等外部工具缺失，弹出提示并提供一键安装（winget / brew），安装完成后自动重新扫描"
+        },
+        "qualityCenter.rules.mute": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "规则静音（单规则开关）：填规则 id（SEC_DRUID_FILTERS_CONFIG）、前缀通配（SEC_DRUID_*）或来源名（trivy / astgrep）。被静音的命中不进入面板与报告，条数记录在扫描摘要里"
+        },
+        "qualityCenter.aggregate": {
+          "type": "boolean",
+          "default": false,
+          "description": "同文件聚合：同一规则在同一文件内命中 >=3 处时合并为一条（仅 medium 及以下，高危始终逐条展示）"
         },
         "qualityCenter.maven.useChinaMirror": {
           "type": "boolean",
