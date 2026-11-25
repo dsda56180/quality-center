@@ -576,7 +576,7 @@ async function handle(request: RpcRequest): Promise<void> {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: SERVER_NAME, version: VERSION },
         instructions:
-          'quality-center 提供六类扫描、Maven 构建、外部工具安装、确定性修复与依赖升级计划。开始或换会话时先调 quality_next 拿唯一状态与下一步命令（同时刷新 .quality-center/handoff.md）；构建失败先调 quality_explain；不要自己推断流程或手改 pom。'
+          'quality-center 提供六类扫描、Maven 构建、外部工具安装、确定性修复与依赖升级计划。开始或换会话时先调 quality_next 拿唯一状态与下一步命令（同时刷新 .quality-center/handoff.md）；构建失败先调 quality_explain；不要自己推断流程或手改 pom。用户明确授权全权推进时，按 quality_next 返回的 action 连续执行到 done / needs-confirm / blocked；每次 apply 后必须 build，失败先 explain，同一组两次失败就停手。'
       });
       return;
     case 'notifications/initialized':

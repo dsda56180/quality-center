@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)、字节码静态缺陷与配置安全的统一面板，支持一键导出给 AI 修复",
-  "version": "0.27.22",
+  "version": "0.27.23",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -94,6 +94,10 @@
       {
         "command": "qualityCenter.copyAgentPrompt",
         "title": "复制 AI 启动指令（升级）"
+      },
+      {
+        "command": "qualityCenter.copyAgentDriverPrompt",
+        "title": "质量中心：复制 AI 全权推进指令（升级）"
       }
     ],
     "configuration": {

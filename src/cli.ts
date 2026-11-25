@@ -32,6 +32,7 @@ import { projectStatus } from './status';
 import { buildNextAction } from './nextAction';
 import { explainBuildFailure } from './explain';
 import { integrate } from './integrate';
+import { buildAgentPrompt } from './agentPrompt';
 
 const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 CI 用的无界面接口
 
@@ -40,6 +41,7 @@ const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 
   quality-center status [目录] [--json]  一屏看工具/扫描/升级计划/pom 状态
   quality-center next [目录] [--json]    给出唯一下一步，并刷新 .quality-center/handoff.md
   quality-center explain [目录] [--json] 翻译构建失败：原因/影响/建议
+  quality-center prompt [目录] [--drive] 输出可复制给 AI 的执行指令（--drive 为全权推进循环）
   quality-center build [目录]            执行策略门禁构建（默认 mvn package）
   quality-center fix [目录] [--write]    应用确定性修复（默认只预览）
   quality-center tools status [--json]   查看外部工具安装状态
@@ -80,6 +82,12 @@ explain 选项:
   --json                 以 JSON 输出原因/影响/建议
   --log <文件>           指定日志，缺省读 .quality-center/build.log
 
+prompt 选项:
+  --drive               输出「全权推进」循环（默认协助模式）
+  --plan <planId>       指定计划，缺省用最新一份
+  --failure <文件>      附上失败日志尾部，供 AI 从现场开始判断
+  --json                以 JSON 输出 { mode, planId, prompt }
+
 upgrade 选项:
   --plan <planId>        指定计划，缺省用最新一份
   --hash <pomHash>       落盘前校验 pom 哈希，防止计划过期后误写
@@ -106,7 +114,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const flags: Record<string, string | true> = {};
   const positional: string[] = [];
-  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group', '--detail', '--top', '--log', '--mute', '--sarif']);
+  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group', '--detail', '--top', '--log', '--mute', '--sarif', '--failure']);
   for (let i = 0; i < argv.length; i += 1) {
     const item = argv[i];
     if (item.startsWith('--')) {
@@ -629,6 +637,33 @@ async function nextCommand(args: Args): Promise<number> {
   return 0;
 }
 
+async function promptCommand(args: Args): Promise<number> {
+  const root = targetRoot(args);
+  if (!fs.existsSync(root)) {
+    progress(`目录不存在：${root}`);
+    return 2;
+  }
+  const mode = args.flags['--drive'] === true ? ('drive' as const) : ('assist' as const);
+  const planId = typeof args.flags['--plan'] === 'string' ? String(args.flags['--plan']) : undefined;
+  let failure: string | undefined;
+  const failureFile = typeof args.flags['--failure'] === 'string' ? String(args.flags['--failure']) : '';
+  if (failureFile) {
+    const file = path.resolve(root, failureFile);
+    if (fs.existsSync(file)) {
+      failure = fs.readFileSync(file, 'utf8').slice(-3000);
+    } else {
+      progress(`失败日志不存在：${file}`);
+    }
+  }
+  const prompt = buildAgentPrompt(root, { mode, planId, failure });
+  if (args.flags['--json'] === true) {
+    process.stdout.write(`${JSON.stringify({ mode, planId: planId ?? null, root, prompt }, null, 2)}\n`);
+  } else {
+    process.stdout.write(`${prompt}\n`);
+  }
+  return 0;
+}
+
 async function explainCommand(args: Args): Promise<number> {
   const root = targetRoot(args);
   if (!fs.existsSync(root)) {
@@ -708,6 +743,8 @@ async function main(): Promise<number> {
       return nextCommand(args);
     case 'explain':
       return explainCommand(args);
+    case 'prompt':
+      return promptCommand(args);
     case 'build':
       return buildCommand(args);
     case 'fix':

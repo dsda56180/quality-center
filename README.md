@@ -213,6 +213,7 @@ AI 已经能读 pom、跑 mvn、改文件；插件不再和模型比“会不会
 node <扩展目录>/out/cli.js next <项目>                   # 唯一下一步 + 刷新 handoff.md
 node <扩展目录>/out/cli.js next <项目> --json            # 状态机 JSON（command/blockers/handoffFile）
 node <扩展目录>/out/cli.js explain <项目>                # 构建失败 → 原因/影响/建议
+node <扩展目录>/out/cli.js prompt <项目> --drive         # 输出“AI 全权推进”循环指令（可直接粘贴）
 node <扩展目录>/out/cli.js scan --json --fail-on high   # 六类扫描，JSON 到 stdout
 node <扩展目录>/out/cli.js scan --json --detail summary --top 10   # 只给计数 + Top N
 node <扩展目录>/out/cli.js scan --json --only trivy --delta        # 复扫只看新增/消失
@@ -262,8 +263,9 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 插件负责判定、出补丁、守门禁；需要判断或排障时把现场交给编辑器 / CLI 里的 AI，而不是等插件更新。
 
 - 升级预览面板：**「复制给 AI 继续」**（含当前计划、分组顺序、pomHash 与硬性规则）
+- 升级向导卡：**「复制给 AI 全权推进」**（`qc prompt --drive`）——AI 按 `qc next` 循环执行到 `done`，只在 `needs-confirm / blocked / 同一组连续失败 / 跨大版本` 时停手
 - 编译失败弹窗：**「复制给 AI」**（附带 Maven 尾部与「已还原 pom」的事实）
-- 命令面板：`quality-center: 复制 AI 启动指令（升级）`
+- 命令面板：`quality-center: 复制 AI 启动指令（升级）`（协助模式）、`quality-center: 复制 AI 全权推进指令（升级）`（全权模式）
 
 指令里只放“去读哪里、按什么顺序、什么不许做”，事实源仍是 `.quality-center/issues.json`、`report.md`、`plan.json` 与 MCP 的 `quality_report`，不重复搬运上下文。配套的 `quality_upgrade_check` / `quality_upgrade_revert` 让 AI 能自己确认是否真落地、失败能自己回滚。
 

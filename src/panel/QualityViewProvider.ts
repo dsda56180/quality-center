@@ -364,6 +364,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       case 'openHandoff':
         await this.openHandoffFile();
         break;
+      case 'copyDrivePrompt':
+        await this.copyDrivePrompt();
+        break;
       case 'saveSettings':
         await this.saveScanSettings(message.options);
         break;
@@ -1897,6 +1900,23 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       void vscode.window.showInformationMessage(
         `没有可回滚的计划：${error instanceof Error ? error.message : String(error)}`
       );
+    }
+  }
+
+  /** 复制“全权推进”指令：AI 按 qc next 循环执行，而不是每步等用户点按钮 */
+  private async copyDrivePrompt(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      void vscode.window.showInformationMessage('还没有打开项目。');
+      return;
+    }
+    await vscode.env.clipboard.writeText(buildAgentPrompt(root, { mode: 'drive' }));
+    const pick = await vscode.window.showInformationMessage(
+      '已复制「AI 全权推进」指令：包含循环、退出条件与禁止动作，粘贴到编辑器 AI 对话框即可。',
+      '打开交接'
+    );
+    if (pick === '打开交接') {
+      await this.openHandoffFile();
     }
   }
 

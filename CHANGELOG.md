@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.27.23
+
+- 新增 `qc prompt --drive` 与面板「复制给 AI 全权推进」：把唯一状态机、10 轮执行循环、退出条件、禁止手改/跳测试/碰运气写成可直接粘贴的执行授权
+- 新增命令面板「复制 AI 全权推进指令（升级）」；`prompt` 同时支持 `--plan`、`--failure <文件>` 与 `--json`
+- MCP 初始化说明同步：用户授权后可按 `quality_next` 连续执行到 done / needs-confirm / blocked
+
 ## 0.27.22
 
 - 合并 main 上的 0.27.0–0.27.2：保留升级向导与状态机，同时带回 SARIF / GitHub Actions 注解 / 单规则静音 / 同文件聚合 / SpotBugs 失败恢复

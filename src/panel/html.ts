@@ -356,6 +356,11 @@ export function getHtml(nonce: string): string {
     min-height: 24px; cursor: pointer;
   }
   .wz-actions .wz-primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .wz-drive { margin-top: 4px; }
+  .wz-drive button {
+    border: none; background: transparent; color: var(--vscode-textLink-foreground);
+    padding: 0; min-height: 0; font-size: 10px; text-decoration: underline;
+  }
   .msg.clamp {
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
     overflow: hidden;
@@ -888,7 +893,8 @@ export function getHtml(nonce: string): string {
     el.innerHTML = '<div class="wz-title">' + esc(n.title) + '</div>'
       + (n.progress ? '<div class="wz-meta">' + esc(n.progress) + '</div>' : '')
       + (n.why ? '<div class="wz-meta">' + esc(n.why) + '</div>' : '')
-      + groups + notes + '<div class="wz-actions">' + actions + '</div>';
+      + groups + notes + '<div class="wz-actions">' + actions + '</div>'
+      + '<div class="wz-drive">' + btn('copyDrive', '复制给 AI 全权推进') + '</div>';
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
       button.type = 'button';
@@ -916,6 +922,8 @@ export function getHtml(nonce: string): string {
       vscode.postMessage({ type: 'revertPlan' });
     } else if (key === 'openHandoff') {
       vscode.postMessage({ type: 'openHandoff' });
+    } else if (key === 'copyDrive') {
+      vscode.postMessage({ type: 'copyDrivePrompt' });
     } else if (key === 'install-mvn') {
       vscode.postMessage({ type: 'installTool', tool: 'mvn' });
     }

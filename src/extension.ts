@@ -12,10 +12,16 @@ import { buildAgentPrompt } from './agentPrompt';
 const SAVE_SCAN_EXT = /\.(java|xml|properties|ya?ml|toml|json|gradle|kts)$/i;
 const IGNORED_DIRS = new Set(['target', 'node_modules', '.git', 'build', 'out']);
 
-async function copyAgentPrompt(root: string, failure?: string): Promise<void> {
-  await vscode.env.clipboard.writeText(buildAgentPrompt(root, { failure }));
+async function copyAgentPrompt(
+  root: string,
+  failure?: string,
+  mode: 'assist' | 'drive' = 'assist'
+): Promise<void> {
+  await vscode.env.clipboard.writeText(buildAgentPrompt(root, { failure, mode }));
   void vscode.window.showInformationMessage(
-    '已复制给 AI 的启动指令：粘贴到编辑器 AI 对话框（或让 CLI 里的 AI 读 .quality-center/ 与 MCP 工具）即可继续。'
+    mode === 'drive'
+      ? '已复制「AI 全权推进」指令：AI 会按 qc next 循环执行，只在 needs-confirm / blocked / 连续失败时停手。'
+      : '已复制给 AI 的启动指令：粘贴到编辑器 AI 对话框（或让 CLI 里的 AI 读 .quality-center/ 与 MCP 工具）即可继续。'
   );
 }
 
@@ -121,6 +127,14 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       await copyAgentPrompt(root);
+    }),
+    vscode.commands.registerCommand('qualityCenter.copyAgentDriverPrompt', async () => {
+      const root = projectRoot();
+      if (!root) {
+        void vscode.window.showInformationMessage('请先打开一个项目文件夹。');
+        return;
+      }
+      await copyAgentPrompt(root, undefined, 'drive');
     })
   );
 

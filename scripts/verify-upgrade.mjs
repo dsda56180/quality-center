@@ -612,6 +612,13 @@ async function main() {
     JSON.stringify({ state: nextVerify.state, action: nextVerify.action })
   );
 
+  const promptRun = run(['prompt', nextDir, '--drive']);
+  const drivePrompt = promptRun.out;
+  check('CLI prompt 输出全权推进指令', promptRun.code === 0 && drivePrompt.includes('你已被授权驱动'));
+  check('全权推进包含循环与退出条件', drivePrompt.includes('执行循环') && drivePrompt.includes('退出条件'));
+  check('全权推进要求逐轮重取状态', drivePrompt.includes('每轮都重新 qc next') && drivePrompt.includes('原样执行 next 返回的 command'));
+  check('全权推进禁止手改 pom 与跳测试', drivePrompt.includes('禁止手改') && drivePrompt.includes('跳过测试'));
+
   console.log(`\n结果：${passed} 通过，${failures.length} 失败`);
   if (failures.length) {
     failures.forEach((item) => console.log(`  ✗ ${item}`));

@@ -12,6 +12,7 @@
       "status",
       "next",
       "explain",
+      "prompt",
       "build",
       "fix",
       "tools status",
