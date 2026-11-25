@@ -392,6 +392,19 @@ async function main() {
     brief.prompt?.includes('启动前确认') && typeof brief.next?.state === 'string',
     JSON.stringify({ state: brief.next?.state, promptLength: brief.prompt?.length })
   );
+  const autopilotCall = await client.request('tools/call', {
+    name: 'quality_agent_brief',
+    arguments: { path: dir, mode: 'autopilot' }
+  });
+  const autopilot = JSON.parse(autopilotCall.result?.content?.[0]?.text ?? '{}');
+  check(
+    'MCP autopilot 只做一次目标确认并连续执行',
+    autopilot.prompt?.includes('目标确认') &&
+      autopilot.prompt?.includes('确认后连续执行到收尾') &&
+      autopilot.prompt?.includes('不要每完成一组就停下来') &&
+      autopilot.prompt?.includes('quality_scan') === true,
+    JSON.stringify({ length: autopilot.prompt?.length })
+  );
   const badCall = await client.request('tools/call', {
     name: 'quality_upgrade_apply',
     arguments: { path: dir, planId: plan.planId, pomHash: 'sha256:deadbeef', write: false }

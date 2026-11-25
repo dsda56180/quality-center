@@ -162,10 +162,17 @@ const TOOLS: ToolDef[] = [
   {
     name: 'quality_agent_brief',
     description:
-      '全权推进的唯一入口：返回当前项目的完整执行指令（含启动前确认、冲突调整、逐组落盘与止损规则）+ 当前状态机快照。用户说“按质量中心推进 / 全权升级 / 继续升级”时先调它，不要要求用户手工粘贴长 prompt，也不要自己推断流程。',
+      '全权推进的唯一入口：返回当前项目的完整执行指令（含启动前确认、autopilot 一次性修复、冲突调整、逐组落盘与止损规则）+ 当前状态机快照。用户说“按质量中心推进 / 全权升级 / 一次性修完”时先调它；mode=autopilot 表示默认参数已授权、不要反复提问。',
     inputSchema: {
       type: 'object',
-      properties: { path: PATH_PROP }
+      properties: {
+        path: PATH_PROP,
+        mode: {
+          type: 'string',
+          enum: ['drive', 'autopilot'],
+          description: 'drive=先做 4 项启动前确认；autopilot=用户已一次性授权，默认 JDK8/package 门禁，不逐项提问，最后必须复扫'
+        }
+      }
     }
   },
   {
@@ -334,8 +341,9 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         return asText({ error: `目录不存在：${root}` }, true);
       }
       const next = buildNextAction(root, { writeHandoff: true });
+      const mode = params?.mode === 'autopilot' ? 'autopilot' : 'drive';
       return asText({
-        prompt: buildAgentPrompt(root, { mode: 'drive' }),
+        prompt: buildAgentPrompt(root, { mode }),
         next
       });
     }

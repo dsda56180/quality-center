@@ -265,7 +265,7 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 
 - 升级预览面板：**「复制给 AI 继续」**（含当前计划、分组顺序、pomHash 与硬性规则）
 - 升级向导卡：**「复制给 AI 全权推进」**（现在只复制一句 MCP 入口；AI 先调 `quality_agent_brief`，由插件返回完整驱动指令与状态，不再手工粘贴长 prompt）
-- MCP：`quality_agent_brief` 是“全权推进”的唯一入口，返回 `prompt + next`；没有 MCP 时才退回 `qc prompt --drive`
+- MCP：`quality_agent_brief` 是“全权推进”的唯一入口，返回 `prompt + next`；`mode=autopilot` 会先做一次目标确认（范围/JDK 边界/门禁），确认后连续执行到收尾，只有 JDK 11/17/21、Boot 3 等硬阻塞再询问，最后强制复扫
 - 工具面板顶部有 MCP 状态条：检测 `.trae/.cursor/.vscode/.mcp.json` 配置，并启动 `qc.cjs mcp` 做 `initialize + tools/list` 自检；Trae 已启用并连上后，MCP 服务写 `.quality-center/mcp-client.json` 心跳，面板校验 pid 后显示“MCP 已接入 · Trae”，否则只显示“已配置 · 需在 IDE 启用”
 - 首次打开面板若发现 MCP 未配置/异常，会弹一次安装提示，可直接生成/修复；可用 `qualityCenter.mcp.notifyMissing=false` 关闭
 - 编译失败弹窗：**「复制给 AI」**（附带 Maven 尾部与「已还原 pom」的事实）

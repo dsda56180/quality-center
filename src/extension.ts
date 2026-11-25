@@ -19,12 +19,12 @@ async function copyAgentPrompt(
 ): Promise<void> {
   const text =
     mode === 'drive'
-      ? '使用 quality-center MCP：先调用 quality_agent_brief，按返回的 prompt 与 next 执行；启动前先确认 JDK、构建门禁、跨大版本与修复权限。没有 MCP 时运行 node .quality-center/bin/qc.cjs prompt . --drive 后照它执行。'
+      ? '使用 quality-center MCP：先调用 quality_agent_brief（mode=autopilot）；先做一次目标确认，确认后连续执行到收尾，不要每步停下等我再发起。只有 JDK 11/17/21、Spring Boot 3 等硬阻塞再询问。没有 MCP 时运行 node .quality-center/bin/qc.cjs prompt . --drive 后照它执行。'
       : buildAgentPrompt(root, { failure });
   await vscode.env.clipboard.writeText(text);
   void vscode.window.showInformationMessage(
     mode === 'drive'
-      ? '已复制 MCP 入口：AI 会先调 quality_agent_brief，再按插件状态机执行。'
+      ? '已复制 MCP 入口：AI 会先做一次目标确认，然后按 autopilot 连续执行并在最后复扫。'
       : '已复制给 AI 的启动指令：粘贴到编辑器 AI 对话框（或让 CLI 里的 AI 读 .quality-center/ 与 MCP 工具）即可继续。'
   );
 }

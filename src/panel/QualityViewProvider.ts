@@ -2002,12 +2002,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
     await vscode.env.clipboard.writeText(
-      '使用 quality-center MCP：先调用 quality_agent_brief，按返回的 prompt 与 next 执行；' +
-        '启动前先确认 JDK、构建门禁、跨大版本与修复权限。' +
+      '使用 quality-center MCP：先调用 quality_agent_brief（mode=autopilot）；先做一次目标确认（范围、JDK/框架边界、门禁），确认后连续执行到收尾，不要每步停下等我再发起。' +
+        '默认 Java 8、package 门禁，允许属性覆盖与最小代码修复；只有 JDK 11/17/21、Spring Boot 3、跨线无兼容版本等硬阻塞才再次询问，最后必须 quality_scan 复验。' +
         '没有 MCP 时运行 node .quality-center/bin/qc.cjs prompt . --drive 后照它执行。'
     );
     const pick = await vscode.window.showInformationMessage(
-      '已复制 MCP 入口：AI 会先调 quality_agent_brief，再按插件状态机执行；不再需要粘贴长 prompt。',
+      '已复制 MCP 入口：AI 会先做一次目标确认，然后按 autopilot 连续执行并在最后复扫。',
       '打开交接'
     );
     if (pick === '打开交接') {

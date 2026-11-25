@@ -19,17 +19,21 @@ export interface AgentPromptOptions {
   planId?: string;
   /**
    * assist：让 AI 协助推进，每步可等用户决定；
-   * drive：用户已授权 AI 连续执行，按 qc next 循环到 done 或触发退出条件。
+   * drive：用户已授权 AI 连续执行，启动前做 4 项确认；
+   * autopilot：默认参数已授权，不逐项提问，一次修到可修完，最后复扫。
    */
-  mode?: 'assist' | 'drive';
+  mode?: 'assist' | 'drive' | 'autopilot';
 }
 
 export function buildAgentPrompt(root: string, options: AgentPromptOptions = {}): string {
   const drive = options.mode === 'drive';
+  const autopilot = options.mode === 'autopilot';
   const lines: string[] = [
-    drive
-      ? '你已被授权驱动整个依赖升级与 CVE 整改流程；但启动前必须先完成一次“开始前确认”，之后不需要每一步等用户确认，且始终服从插件的状态机和止损规则。'
-      : '按 quality-center 的标准化流程完成本项目依赖升级与 CVE 整改。',
+    autopilot
+      ? '你已被授权一次性完成本项目的质量整改：静态问题、可确定修复项与依赖升级。先做一次“目标确认”，用户确认后连续执行到收尾，不要执行一步就停下等用户再次发起；只有硬阻塞才再次询问。'
+      : drive
+        ? '你已被授权驱动整个依赖升级与 CVE 整改流程；但启动前必须先完成一次“开始前确认”，之后不需要每一步等用户确认，且始终服从插件的状态机和止损规则。'
+        : '按 quality-center 的标准化流程完成本项目依赖升级与 CVE 整改。',
     ''
   ];
 
@@ -39,6 +43,25 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
     planContext = ` Java ${plan.project.javaVersion ?? '未知'} / 框架 ${plan.project.frameworkVersion ?? '未知'} → ${plan.project.frameworkTarget ?? '未声明'}`;
   } catch {
     // 没有计划时，启动前确认里只用通用说法
+  }
+
+  if (autopilot) {
+    lines.push(
+      '启动前只做一次「目标确认」，一次问清下面 3 项，不要拆成多轮、不要逐项追问：',
+      '1. 目标范围：本次是否处理“静态代码 + 确定性修复 + 依赖/CVE 升级”的全部可修复项（默认是），还是只修高危/CVE？',
+      '2. 版本边界：源码保持 Java 8 / Spring Boot 2.7.18；遇到必须升 JDK 11/17/21 或 Spring Boot 3.x 的项，是本次处理、跳过，还是先停下问用户（默认停下询问）？',
+      '3. 门禁与权限：buildGate=package、不跳测试、不改测试；允许项目属性覆盖和“删无用 import / 调整修饰符顺序 / 简化布尔比较”等最小代码修复；安全设计、密钥轮换、架构重构只报告不擅自改。是否接受？',
+      '用户确认后：按下面默认参数连续执行到收尾，不再每一步征求同意，也不要在完成一个组后停下等用户再发起。',
+      '只有出现硬阻塞时才再次询问；用户回答后继续剩余项，不要从头重来。',
+      '',
+      '确认后的默认参数：',
+      '1. JDK：源码保持当前 Java 版本（' + (planContext || '以 pom 为准') + '）；只允许运行时是更高 JDK，不允许擅自改 source/target。',
+      '2. 门禁：沿用 upgrade-policy.json 的 buildGate（默认 package），不跳过测试、不改测试、不降低门禁。',
+      '3. 跨大版本：默认不写；只有某个 CVE 在当前 Java 8 下没有兼容修复版本时，才把它列为“需要升级 JDK/框架”的阻塞项，不得自行 apply。',
+      '4. 属性覆盖与最小代码修复：允许；允许删除无用 import、调整修饰符顺序、简化布尔比较等可逆小改；不允许大范围重构。',
+      '5. 静态问题：按下面阶段批量修，不要一条一条问用户。',
+      ''
+    );
   }
 
   if (drive) {
@@ -139,6 +162,32 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
       '退出条件（任一命中立即停止）：done；needs-confirm；blocked；同一组连续两次失败；pom drift；需要跨大版本；超过 10 轮。',
       '停止时汇报：计划 id、已完成组/总数、失败原因/影响/建议、执行过的命令、剩余人工项。',
       'done 时：复扫、最终 build、`qc upgrade check` 应为 applied，并给出 CVE 前后数量与仍需人工判断的条目。'
+    );
+  }
+
+  if (autopilot) {
+    lines.push(
+      '',
+      '一次性执行流程（优先 MCP，工具不存在才用 CLI；不要每步问用户）：',
+      '阶段 1 基线：`quality_scan`（全量）→ `quality_report format=summary` 记录修复前的总数、按来源/严重度计数。',
+      '阶段 2 确定性修复：`quality_fix write=true`；然后 `quality_build`（或仅在 pom 未变时先做一次轻量编译）确认没有引入编译失败。',
+      '阶段 3 依赖升级：`quality_upgrade_plan` → 按 framework/family/independent 顺序逐组 `quality_upgrade_apply write=true` → 每组 `quality_build` → 失败先 `quality_explain`，同组两次失败 `quality_upgrade_revert` 并把该组列为阻塞。',
+      '阶段 4 静态代码：`quality_report format=json` 取剩余问题；按 `.quality-center/skills/quality-center-java-upgrade/SKILL.md` 的判定，优先修有明确文件/行号、改动局部、可编译验证的 Checkstyle/SpotBugs/astgrep 问题；安全设计类、需要改架构或密钥轮换的只记录不擅自改。每修 20 条或每 10 分钟做一次 `quality_build`。',
+      '阶段 5 单问题复核：修完后 `quality_scan`（全量）→ `quality_report` 对比修复前/后；不要用旧 issues.json 冒充复验。',
+      '阶段 6 收尾：`quality_build` 一次最终构建；若升级计划仍有组未完成，`quality_upgrade_check` 确认没有 drift；输出修复前/后计数、已修文件、剩余问题、阻塞项与证据文件。',
+      '',
+      '硬阻塞（命中就停这一类，不要停整个流程）：',
+      '- 需要把源码 Java 升到 11/17/21，或需要 Spring Boot 3.x / javax→jakarta；',
+      '- 某 CVE 在 Java 8 下无兼容修复版本，或 cross-line 依赖只能靠大版本解决；',
+      '- 构建失败无法用 quality_explain 归因，或测试失败是代码语义变化导致；',
+      '- 密钥/凭证泄露需要轮换、权限模型需要产品决策、需要大范围重构。',
+      '命中硬阻塞时：先问用户“这一项本次处理 / 跳过 / 先记录”，不要强行改 source/target、不要跳测试、不要 --allow-cross-line；用户回答后继续其他可修项，最后统一汇总。用户不回答则跳过该项并在最终汇总里列出。',
+      '',
+      '用户沟通规则：',
+      '- 除了启动目标确认和硬阻塞，过程不提问；每完成一个阶段只输出一行进度（阶段、已修数、构建结果）。',
+      '- 确认后一次执行到底，不要每完成一组就停下来等用户再次发起。',
+      '- 只有上述硬阻塞出现时才明确说“这一项需要升级 JDK/框架或人工决策”，其余情况继续执行。',
+      '- 最终必须给出一份汇总：修复前 → 修复后、按来源变化、剩余与阻塞、改动文件、复验命令；不要只说“已完成”。'
     );
   }
 
