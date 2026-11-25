@@ -550,6 +550,28 @@ async function main() {
     JSON.stringify({ kind: explain.kind, cause: explain.cause })
   );
 
+  const failureFindDir = prepare();
+  fs.writeFileSync(
+    path.join(failureFindDir, '.quality-center', 'build.log'),
+    [
+      '[INFO] BUILD FAILURE',
+      '[ERROR] Non-resolvable import POM: Failure to find com.squareup.okhttp3:okhttp-bom:pom:4.1.0 in https://maven.aliyun.com/repository/public/ was cached in the local repository',
+      '[ERROR] @ org.springframework.boot:spring-boot-dependencies:2.7.18'
+    ].join('\n'),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(failureFindDir, 'pom.xml'),
+    POM.replace('<java.version>8</java.version>', '<java.version>8</java.version>\n    <okhttp.version>4.1.0</okhttp.version>'),
+    'utf8'
+  );
+  const failureFind = JSON.parse(run(['explain', failureFindDir, '--json']).out);
+  check(
+    'explain 识别 Maven Failure to find',
+    failureFind.kind === 'property-collision' && failureFind.cause.includes('okhttp.version'),
+    JSON.stringify({ kind: failureFind.kind, cause: failureFind.cause })
+  );
+
   const failureDir = prepare();
   const failurePlan = JSON.parse(run(['upgrade', 'plan', failureDir, '--json']).out);
   run([

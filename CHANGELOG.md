@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.27.26
+
+- `explain` 兼容 Maven 3.6.3 的 `Failure to find ...` 报错形式，`okhttp.version` 覆盖 BOM 时能稳定判成 `property-collision`，不再落成 `unknown`
+- 新增该日志形态的回归断言，自检 101 通过 / 0 失败
+
 ## 0.27.25
 
 - 确认框文案统一为“执行「组名」”，不再说“只升级”

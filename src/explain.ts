@@ -237,7 +237,7 @@ export function explainBuildFailure(root: string, text?: string, logFile?: strin
     };
   }
 
-  const importPom = /Non-resolvable import POM: Could not find artifact ([^\s:]+):([^\s:]+):pom:([^\s]+)/.exec(full);
+  const importPom = /Non-resolvable import POM: (?:Could not find artifact|Failure to find) ([^\s:]+):([^\s:]+):pom:([^\s]+)/.exec(full);
   if (importPom) {
     const groupId = importPom[1];
     const artifactId = importPom[2];
