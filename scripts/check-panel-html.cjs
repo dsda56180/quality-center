@@ -21,6 +21,7 @@ const checks = {
   noHandoffCtaAfterPlan: !provider.includes('升级第一组'),
   aiFirstInPlanCard: h.includes('data-wz="copyScopes"') && h.includes('全面修复'),
   scopeChooser: h.includes('wz-scope-picker') && h.includes('scopePickSummary') && h.includes('data-scope-pick="'),
+  scopePlanInMenu: h.includes('wz-scope-menu-foot') && h.includes('只生成计划文件，不改 pom'),
   scopeDistinct: ['upgrade', 'consolidation', 'code', 'secrets', 'static'].every((s) =>
     h.includes(`key: '${s}', label:`)
   ),

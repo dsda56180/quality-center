@@ -556,6 +556,11 @@ export function getHtml(nonce: string): string {
     font-size: 10px; cursor: pointer; white-space: nowrap;
   }
   .wz-scope-option input { margin: 0; width: 12px; height: 12px; }
+  .wz-scope-menu-foot {
+    display: flex; align-items: center; gap: 5px; margin-top: 4px; padding-top: 4px;
+    border-top: 1px dashed var(--vscode-panel-border);
+    font-size: 9px; color: var(--vscode-descriptionForeground);
+  }
   .wz-scope-run {
     flex: none; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px;
     border: 1px solid var(--vscode-button-background);
@@ -1382,16 +1387,17 @@ export function getHtml(nonce: string): string {
           (o.count ? '' : ' disabled') + '>' +
           esc(o.label) + '<span class="fix-impact">' + esc(String(o.note || '0')) + '</span></label>';
       }).join('');
+      var planShortcut = (!n.plan && depCount)
+        ? '<div class="wz-scope-menu-foot"><button id="scopePlanBtn" class="wz-scope-plan" data-wz="createPlan"' +
+          (scopePick.indexOf('upgrade') >= 0 ? '' : ' style="display:none"') +
+          '>仅生成依赖计划</button><span>只生成计划文件，不改 pom</span></div>'
+        : '';
       scopeBar = '<div class="wz-scopebar"><div class="wz-scope-row">' +
         '<details class="wz-scope-picker"><summary><span class="pick-label">修复范围</span>' +
         '<span id="scopePickSummary">' + pickText + '</span></summary>' +
-        '<div class="wz-scope-menu">' + checks + '</div></details>' +
+        '<div class="wz-scope-menu">' + checks + planShortcut + '</div></details>' +
         '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
         (validPick.length ? '' : ' disabled') + '>复制给 AI</button>' +
-        (!n.plan && depCount
-          ? '<button id="scopePlanBtn" class="wz-scope-plan" data-wz="createPlan"' +
-            (scopePick.indexOf('upgrade') >= 0 ? '' : ' style="display:none"') + '>仅生成依赖计划</button>'
-          : '') +
         '</div><div class="wz-scope-note">只复制所选范围的指令；未选类别只报告。依赖计划的手动执行仍在下方。</div></div>';
     }
     var actions = '';
