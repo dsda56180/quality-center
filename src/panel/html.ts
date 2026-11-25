@@ -529,6 +529,34 @@ export function getHtml(nonce: string): string {
   .wz-fixrow .fix-title { flex: 1 1 auto; min-width: 0; font-size: 10px; color: var(--vscode-foreground); }
   .wz-fixrow .fix-impact { flex: none; font-size: 9px; color: var(--vscode-descriptionForeground); }
   .wz-fixnote { margin-top: 4px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
+  .wz-scopebar {
+    margin-top: 8px; padding: 7px 8px; border-radius: 8px;
+    border: 1px solid var(--vscode-panel-border);
+    background: var(--vscode-sideBar-background, rgba(128,128,128,.05));
+  }
+  .wz-scope-title { font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 5px; }
+  .wz-scope-actions { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+  .wz-scope-btn {
+    padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px;
+    border: 1px solid var(--vscode-button-secondaryBackground, rgba(128,128,128,.25));
+    background: var(--vscode-button-secondaryBackground, transparent);
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  }
+  .wz-scope-btn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.16)); }
+  .wz-scope-btn.primary {
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+    border-color: var(--vscode-button-background); font-weight: 600;
+  }
+  .wz-scope-more { margin-top: 5px; }
+  .wz-scope-more summary {
+    cursor: pointer; font-size: 10px; color: var(--vscode-textLink-foreground);
+    list-style: none;
+  }
+  .wz-scope-more summary::-webkit-details-marker { display: none; }
+  .wz-scope-more summary::before { content: '▸ '; }
+  .wz-scope-more[open] summary::before { content: '▾ '; }
+  .wz-scope-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+  .wz-scope-note { margin-top: 5px; font-size: 9px; line-height: 1.4; color: var(--vscode-descriptionForeground); }
   .msg.clamp {
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
     overflow: hidden;
@@ -1148,7 +1176,7 @@ export function getHtml(nonce: string): string {
 
     // 修复与优化：人工可执行的动作统一进消息栏，不再使用独立 fixbar
     var n = state.next;
-    var planPending = Boolean(n && ['apply', 'confirm', 'build', 'explain', 'rescan'].indexOf(n.action) >= 0);
+    var planPending = Boolean(n && ['plan', 'apply', 'confirm', 'build', 'explain', 'rescan'].indexOf(n.action) >= 0);
     var fixable = (state.issues || []).filter(function (i) { return i.fixable; }).length;
     if (!busy && fixable > 0 && !planPending) {
       add('info',
@@ -1158,11 +1186,6 @@ export function getHtml(nonce: string): string {
     if (!busy && n) {
       if (n.action === 'scan') {
         add('info', '还没有扫描结果，先扫描项目才能给出修复与升级建议。', wizard('开始扫描', 'scan'));
-      } else if (n.action === 'plan') {
-        add('info',
-          '有 ' + (state.issues || []).length + ' 项问题，还没有升级计划；交给 AI 生成并执行，计划阶段不会改 pom。',
-          action('复制给 AI', 'copyDrivePrompt', '复制完整任务提示，由 AI 生成计划并驱动后续步骤', true) +
-          wizard('生成计划', 'createPlan'));
       }
     }
     if (!busy && state.finishedAt && state.buildHint) {
@@ -1194,7 +1217,9 @@ export function getHtml(nonce: string): string {
     var el = document.getElementById('wizard');
     if (!el) return;
     var n = state.next;
-    if (!n || (!n.plan && (n.action === 'plan' || n.action === 'scan'))) {
+    var issueTotal0 = (state.issues || []).length;
+    var hasData = issueTotal0 > 0 || (state.suggestions || []).length > 0 || Boolean(n && n.plan);
+    if (!n || !hasData || (n.action === 'scan' && !n.plan)) {
       el.style.display = 'none';
       el.innerHTML = '';
       return;
@@ -1216,8 +1241,20 @@ export function getHtml(nonce: string): string {
     var label = n.plan && n.plan.nextLabel ? n.plan.nextLabel : '当前组';
     var title = n.title;
     var meta = n.progress || '';
+    var issueTotal = (state.issues || []).length;
+    var fixableCount = (state.issues || []).filter(function (i) { return i.fixable; }).length;
+    var depCount = (state.issues || []).filter(function (i) { return i.source === 'trivy'; }).length;
+    var staticCount = (state.issues || []).filter(function (i) { return i.source === 'spotbugs' || i.source === 'qcsec'; }).length;
+    var secretCount = (state.issues || []).filter(function (i) { return i.source === 'gitleaks'; }).length;
+    var allSuggestions = state.suggestions || [];
+    var dupSuggestions = allSuggestions.filter(function (s) { return s.category === 'duplicate'; });
+    if (n.action === 'plan') {
+      title = '质量修复方案';
+      meta = issueTotal + ' 项问题 · 可自动修复 ' + fixableCount + ' · 依赖 ' + depCount +
+        (dupSuggestions.length ? ' · 收敛建议 ' + dupSuggestions.length : '');
+    }
     if ((n.action === 'apply' || n.action === 'confirm') && n.plan) {
-      title = n.plan.state === 'partial' ? '升级计划执行中' : '升级计划已生成';
+      title = n.plan.state === 'partial' ? '质量修复方案 · 升级计划执行中' : '质量修复方案 · 升级计划已生成';
       if (state.final) {
         title = n.plan.state === 'partial' ? '本次 AI 修复已收尾 · 剩余组需人工确认' : '本次 AI 修复已收尾';
       }
@@ -1229,16 +1266,17 @@ export function getHtml(nonce: string): string {
     var purpose = '';
     if (n.action === 'apply' || n.action === 'confirm') {
       purpose =
-        '按风险从低到高拆成 ' + (n.plan ? n.plan.groups.length : 0) + ' 组（' +
+        '先选范围：全面修复交给 AI 按类别推进；仅升级依赖只走可回滚的 pom 计划。' +
+        '升级计划按风险从低到高拆成 ' + (n.plan ? n.plan.groups.length : 0) + ' 组（' +
         (n.plan ? n.plan.groups.map(function (g) { return g.label; }).join(' → ') : '') +
-        '）。每组落盘后自动跑构建门禁，失败只处理这一组。' +
+        '），每组落盘后跑构建门禁，失败只处理这一组。' +
         (n.action === 'confirm' ? '当前组含跨大版本，执行前需要确认。' : '');
       if (state.final) {
         purpose = '本次 AI 修复已生成最终验收（' + state.final.baselineTotal + ' → ' + state.final.currentTotal +
           ' 项）。剩下的组需要你确认后才进入下一轮，不代表 AI 还在执行。';
       }
     } else if (n.action === 'plan') {
-      purpose = '根据扫描结果生成升级计划，先看分组和版本，不会直接改 pom。';
+      purpose = '先选范围：生成可回滚的依赖升级计划，或交给 AI 全面修复 / 只修某一块。生成计划不会改 pom。';
     } else if (n.action === 'build') {
       purpose = '升级已写入，跑构建门禁确认没有破坏现有功能。';
     } else if (n.action === 'explain') {
@@ -1279,8 +1317,7 @@ export function getHtml(nonce: string): string {
     }
     // 全面修复方案：升级只是其中一类，收敛/密钥/代码/静态问题也要在同一张卡里可见
     var fixPlan = '';
-    var allSuggestions = state.suggestions || [];
-    if (n.plan && allSuggestions.length) {
+    if (allSuggestions.length) {
       var picked = [];
       allSuggestions.filter(function (s) { return s.category === 'duplicate'; }).slice(0, 2)
         .forEach(function (s) { picked.push(s); });
@@ -1305,28 +1342,62 @@ export function getHtml(nonce: string): string {
     function btn(key, text, primary) {
       return '<button class="' + (primary ? 'wz-primary' : 'secondary') + '" data-wz="' + key + '">' + esc(text) + '</button>';
     }
+    function scopeBtn(key, text) {
+      return '<button class="wz-scope-btn" data-wz="copyScope:' + key + '" title="只复制这个范围的 AI 指令">' +
+        esc(text) + '</button>';
+    }
+    var scopeBar = '';
+    if (hasData) {
+      var scopeMain = '';
+      if (!n.plan) {
+        scopeMain += '<button class="wz-scope-btn" data-wz="createPlan">生成升级计划</button>';
+      }
+      scopeMain += '<button class="wz-scope-btn primary" data-wz="copyScope:all">全面修复</button>';
+      scopeMain += scopeBtn('upgrade', '仅升级依赖');
+      var scopeMore = '';
+      if (dupSuggestions.length) {
+        scopeMore += scopeBtn('consolidation', '依赖收敛 ' + dupSuggestions.length + ' 类');
+      }
+      if (fixableCount) {
+        scopeMore += scopeBtn('code', '代码质量 ' + fixableCount + ' 项');
+      }
+      if (secretCount) {
+        scopeMore += scopeBtn('secrets', '密钥 ' + secretCount + ' 处');
+      }
+      if (staticCount) {
+        scopeMore += scopeBtn('static', '静态缺陷 ' + staticCount + ' 项');
+      }
+      scopeBar = '<div class="wz-scopebar"><div class="wz-scope-title">选择修复范围</div>' +
+        '<div class="wz-scope-actions">' + scopeMain + '</div>' +
+        '<div class="wz-scope-note">按钮只复制对应范围的 AI 指令，不会直接改文件；依赖升级的手动执行仍在下方计划里。</div>' +
+        (scopeMore
+          ? '<details class="wz-scope-more"><summary>修复某一块</summary><div class="wz-scope-list">' +
+            scopeMore + '</div><div class="wz-scope-note">AI 只会改这一类，其他类别只报告。</div></details>'
+          : '') +
+        '</div>';
+    }
     var actions = '';
     switch (n.action) {
       case 'scan':
         actions = btn('scan', '开始扫描', true);
         break;
       case 'plan':
-        actions = btn('copyDrive', '复制给 AI 执行', true) + btn('createPlan', '生成升级计划');
+        actions = '';
         break;
       case 'apply':
-        actions = btn('copyDrive', '复制给 AI 执行', true) + btn('upgradeNext', '手动执行「' + label + '」');
+        actions = btn('upgradeNext', '手动执行「' + label + '」');
         break;
       case 'confirm':
-        actions = btn('copyDrive', '复制给 AI 执行', true) + btn('upgradeNext', '确认并手动执行「' + label + '」');
+        actions = btn('upgradeNext', '确认并手动执行「' + label + '」');
         break;
       case 'build':
-        actions = btn('buildGate', '跑构建门禁', true) + btn('copyDrive', '复制给 AI 执行');
+        actions = btn('buildGate', '跑构建门禁', true);
         break;
       case 'explain':
-        actions = btn('explainBuild', '查看失败原因', true) + btn('revertPlan', '回滚到计划前') + btn('copyDrive', '复制给 AI 执行');
+        actions = btn('explainBuild', '查看失败原因', true) + btn('revertPlan', '回滚到计划前');
         break;
       case 'rescan':
-        actions = btn('scan', '复扫验收', true) + btn('copyDrive', '复制给 AI 执行');
+        actions = btn('scan', '复扫验收', true);
         break;
       case 'install':
         actions = btn('install-mvn', '安装 Maven', true);
@@ -1340,7 +1411,8 @@ export function getHtml(nonce: string): string {
     el.innerHTML = '<div class="wz-title">' + esc(title) + '</div>'
       + (meta ? '<div class="wz-meta">' + esc(meta) + '</div>' : '')
       + (purpose ? '<div class="wz-purpose">' + esc(purpose) + '</div>' : '')
-      + groups + planDetail + fixPlan + notes + '<div class="wz-actions">' + actions + '</div>';
+      + scopeBar + groups + planDetail + fixPlan + notes
+      + (actions ? '<div class="wz-actions">' + actions + '</div>' : '');
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
       button.type = 'button';
@@ -1356,6 +1428,8 @@ export function getHtml(nonce: string): string {
     if (!key) return;
     if (key === 'scan') {
       vscode.postMessage({ type: 'scan' });
+    } else if (key.indexOf('copyScope:') === 0) {
+      vscode.postMessage({ type: 'copyScope', scope: key.slice('copyScope:'.length) });
     } else if (key === 'createPlan') {
       vscode.postMessage({ type: 'createUpgradePlan' });
     } else if (key === 'upgradeNext') {

@@ -32,7 +32,7 @@ import {
 import { digestScan } from './scanDigest';
 import { projectStatus } from './status';
 import { buildNextAction } from './nextAction';
-import { buildAgentPrompt } from './agentPrompt';
+import { buildAgentPrompt, type AgentScope } from './agentPrompt';
 import { explainBuildFailure } from './explain';
 import { finalizeRun } from './finalize';
 import {
@@ -206,7 +206,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'quality_agent_brief',
     description:
-      '全权推进的唯一入口：返回当前项目的完整执行指令（含启动前确认、autopilot 一次性修复、冲突调整、逐组落盘与止损规则）+ 当前状态机快照。用户说“按质量中心推进 / 全权升级 / 一次性修完”时先调它；mode=autopilot 表示默认参数已授权、不要反复提问。',
+      '全权推进的唯一入口：返回当前项目的完整执行指令（含启动前确认、autopilot 一次性修复、冲突调整、逐组落盘与止损规则）+ 当前状态机快照。用户说“按质量中心推进 / 全权升级 / 一次性修完”时先调它；mode=autopilot 表示默认参数已授权、不要反复提问。scope 必须按用户选择：全面修复=all，只升级依赖=upgrade，依赖收敛=consolidation，代码质量=code，密钥=secrets，静态缺陷=static；不要用 all 代替用户明确限定的范围。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -215,6 +215,11 @@ const TOOLS: ToolDef[] = [
           type: 'string',
           enum: ['drive', 'autopilot'],
           description: 'drive=先做 4 项启动前确认；autopilot=用户已一次性授权，默认 JDK8/package 门禁，不逐项提问，最后必须复扫'
+        },
+        scope: {
+          type: 'string',
+          enum: ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'],
+          description: '修复范围。all=全面修复；upgrade=仅依赖版本/CVE；consolidation=依赖收敛；code=确定性代码修复；secrets=硬编码密钥；static=静态缺陷。缺省 all。'
         }
       }
     }
@@ -433,12 +438,20 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       if (!fs.existsSync(root)) {
         return asText({ error: `目录不存在：${root}` }, true);
       }
-      const next = buildNextAction(root, { writeHandoff: true });
       const mode = params?.mode === 'autopilot' ? 'autopilot' : 'drive';
-      beginRun(root, mode as RunMode);
+      const scopes: AgentScope[] = ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'];
+      const scope: AgentScope = scopes.includes(params?.scope as AgentScope)
+        ? (params?.scope as AgentScope)
+        : 'all';
+      const upgradeScope = scope === 'all' || scope === 'upgrade';
+      const next = upgradeScope ? buildNextAction(root, { writeHandoff: true }) : undefined;
+      beginRun(root, mode as RunMode, {
+        phase: (upgradeScope ? 'baseline_build' : 'static_fix') as RunPhase
+      });
       return asText({
-        prompt: buildAgentPrompt(root, { mode }),
-        next
+        scope,
+        prompt: buildAgentPrompt(root, { mode, scope }),
+        next: next ?? null
       });
     }
     case 'quality_next': {
@@ -864,7 +877,7 @@ async function handle(request: RpcRequest): Promise<void> {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: SERVER_NAME, version: VERSION },
         instructions:
-          'quality-center 提供六类扫描、Maven 构建、外部工具安装、确定性修复与依赖升级计划。用户要求“按质量中心推进 / 全权升级”时，先调 quality_agent_brief 获取完整执行指令与状态快照，再按其中的 next 执行；换会话或状态不确定时先调 quality_next。构建失败先调 quality_explain；不要自己推断流程、手改 pom 或要求用户粘贴长 prompt。用户明确授权全权推进时，按 action 连续执行到 done / needs-confirm / blocked；每次 apply 后必须 build，失败先 explain，同一组两次失败就停手。'
+          'quality-center 提供六类扫描、Maven 构建、外部工具安装、确定性修复与依赖升级计划。用户要求“按质量中心推进 / 全权升级”时，先调 quality_agent_brief 获取完整执行指令与状态快照，再按其中的 next 执行；用户只要某一类（依赖升级/收敛/代码/密钥/静态）时，quality_agent_brief 必须带对应 scope，不要用默认 all 扩大授权。换会话或状态不确定时先调 quality_next。构建失败先调 quality_explain；不要自己推断流程、手改 pom 或要求用户粘贴长 prompt。用户明确授权全权推进时，按 action 连续执行到 done / needs-confirm / blocked；每次 apply 后必须 build，失败先 explain，同一组两次失败就停手。'
       });
       return;
     case 'notifications/initialized':

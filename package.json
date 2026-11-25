@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)、字节码静态缺陷与配置安全的统一面板，支持一键导出给 AI 修复",
-  "version": "0.27.46",
+  "version": "0.27.48",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -299,8 +299,9 @@
     "verify:upgrade": "node scripts/verify-upgrade.mjs",
     "verify:panel": "node scripts/check-panel-html.cjs",
     "verify:duplicates": "node scripts/check-duplicates.cjs",
+    "verify:scope": "node scripts/check-agent-scopes.cjs",
     "verify:runstate": "node scripts/check-runstate.cjs",
-    "verify:all": "npm run compile && npm run verify:panel && npm run verify:duplicates && npm run verify:runstate && npm run verify:upgrade",
+    "verify:all": "npm run compile && npm run verify:panel && npm run verify:duplicates && npm run verify:scope && npm run verify:runstate && npm run verify:upgrade",
     "pack": "node scripts/pack.mjs"
   },
   "devDependencies": {

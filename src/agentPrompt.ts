@@ -12,6 +12,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PLAN_GROUP_LABEL, readUpgradePlan } from './upgradePlanFile';
 
+export type AgentScope = 'all' | 'upgrade' | 'consolidation' | 'code' | 'secrets' | 'static';
+
 export interface AgentPromptOptions {
   /** 失败现场（如 Maven 尾部或编译错误），附在最后一段 */
   failure?: string;
@@ -23,14 +25,113 @@ export interface AgentPromptOptions {
    * autopilot：默认参数已授权，不逐项提问，一次修到可修完，最后复扫。
    */
   mode?: 'assist' | 'drive' | 'autopilot';
+  /**
+   * 修复范围。面板的“全面修复 / 仅升级依赖 / 修复某一块”对应不同 scope；
+   * AI 必须先知道自己被授权改哪一类，否则会把“全面”理解成可以顺手改 pom。
+   */
+  scope?: AgentScope;
+}
+
+const SCOPE_LABEL: Record<Exclude<AgentScope, 'all'>, string> = {
+  upgrade: '依赖版本升级 / CVE',
+  consolidation: '依赖收敛（JSON / 日志 / HTTP / BOM）',
+  code: '确定性代码修复（Checkstyle / astgrep）',
+  secrets: '硬编码密钥处置（gitleaks）',
+  static: '静态缺陷（SpotBugs / qcsec）'
+};
+
+/**
+ * 单一范围的执行指令。范围和“全面修复”共用同一套事实源，但授权边界不同：
+ * AI 只能改当前 scope 允许的内容，其他类别只报告。
+ */
+function buildScopedAgentPrompt(root: string, scope: Exclude<AgentScope, 'all'>, options: AgentPromptOptions): string {
+  const label = SCOPE_LABEL[scope];
+  const lines: string[] = [
+    `你本次只处理「${label}」，其他类别只报告、不修改；不要因为“顺手”去改 pom、依赖、测试、配置或无关代码。`,
+    '事实源仍然是 .quality-center/issues.json / suggestions / report.md；不要凭聊天记忆推断问题数量。',
+    '编辑器内优先用 quality_* MCP；没有 MCP 时用 .quality-center/bin/qc.cjs。',
+    ''
+  ];
+
+  if (scope === 'upgrade') {
+    let planContext = '';
+    try {
+      const plan = readUpgradePlan(root, options.planId);
+      planContext = `当前计划 ${plan.planId}：${plan.project.frameworkVersion ?? '未知'} → ${plan.project.frameworkTarget ?? '未声明'}，Java ${plan.project.javaVersion ?? '未知'}。`;
+    } catch {
+      planContext = '当前还没有升级计划。';
+    }
+    lines.push(
+      planContext,
+      '执行顺序：',
+      '1. 没有计划：quality_upgrade_plan（或 `qc upgrade plan . --reuse`）生成；只生成计划，不改 pom。',
+      '2. 按 framework → family → independent 逐组 quality_upgrade_apply write=true；每组后 quality_build；失败先 quality_explain，同组两次失败 quality_upgrade_revert 并列为阻塞。',
+      '3. cross-line 默认不动；需要跨大版本时停下等用户确认，不得自行 --allow-cross-line。',
+      '4. 每轮用 quality_next 重新取状态，不要沿用上一轮判断；最后 quality_scan + quality_finalize。',
+      '边界：不得调用 quality_fix，不得改静态代码、密钥、依赖收敛项；不得手改 pom 或跳测试。'
+    );
+  } else if (scope === 'consolidation') {
+    lines.push(
+      '第一步：读 issues.json 的 suggestions，只取 category=duplicate；按 impact 从高到低列出：',
+      '- 能力类别（JSON / 日志 / HTTP / BOM）',
+      '- 重复库、引用文件数、当前用途',
+      '- 保留哪一个、迁移顺序、不能自动删除的原因',
+      '第二步：先给用户看迁移清单（这一步不能省略）；确认后按“先改代码、编译通过、再删依赖”的顺序小步执行。',
+      '第三步：每完成一个能力类别，quality_build + quality_scan；有新增编译错误立即停手并汇报，不要继续删下一个库。',
+      '边界：不改依赖版本（那是 upgrade）；不自动删依赖；不为了统一 JSON 而重写业务序列化协议；BOM 项只改显式 version 并提示用 mvn dependency:tree 复核。'
+    );
+  } else if (scope === 'code') {
+    lines.push(
+      '只处理可确定性修复项：无用导入、冗余导入、ModifierOrder、SimplifyBooleanExpression。',
+      '1. quality_fix write=false 先预览，确认 diff 只包含上述规则。',
+      '2. quality_fix write=true 落盘；随后 quality_build，失败先 quality_explain。',
+      '3. quality_scan 复核，确认对应规则数量下降且没有新增编译错误。',
+      '边界：不改 pom、不改依赖、不改测试、不改配置；不做语义重构。'
+    );
+  } else if (scope === 'secrets') {
+    lines.push(
+      '只处理 gitleaks 硬编码密钥。',
+      '1. 先按文件/规则分组，绝不打印、复制或提交密钥原值。',
+      '2. 先建议轮换密钥（已进入版本库即视为泄露），再迁移到环境变量或配置中心，代码只保留占位符。',
+      '3. 用户确认轮换完成后，再做代码替换并 quality_scan 复核；不能确认轮换时只报告，不改代码。',
+      '边界：不改依赖、不改业务逻辑、不把密钥写进示例配置或日志。'
+    );
+  } else if (scope === 'static') {
+    lines.push(
+      '只处理 SpotBugs / qcsec 静态缺陷。',
+      '1. quality_report format=json 取剩余项，按严重度排序，先 critical/high。',
+      '2. 每条修复必须说明规则、调用上下文和影响范围；只做局部、可编译验证的改动。',
+      '3. 每修 20 条或每 10 分钟 quality_build；最后 quality_scan 复核。',
+      '边界：安全设计、权限模型、架构重构只报告；不改依赖、不改测试。'
+    );
+  }
+
+  lines.push(
+    '',
+    '通用硬性规则：',
+    '1. 不读、不打印、不提交密钥原值。',
+    '2. 不跳过测试、不降低 buildGate、不改测试来换通过。',
+    '3. 失败先 quality_explain；同一类连续两次失败就停手，不碰运气。',
+    '4. 换会话或状态不确定时，调用 quality_agent_brief 时必须带同一个 scope，不要退回默认 all。',
+    '5. 最终汇报：范围、处理前/后数量、改动文件、构建与复扫结果、剩余人工项。'
+  );
+
+  if (options.failure && options.failure.trim()) {
+    lines.push('', '失败现场（从这里开始判断）：', '```', options.failure.trim().slice(-3000), '```');
+  }
+  return lines.join('\n');
 }
 
 export function buildAgentPrompt(root: string, options: AgentPromptOptions = {}): string {
+  const scope = options.scope ?? 'all';
+  if (scope !== 'all') {
+    return buildScopedAgentPrompt(root, scope, options);
+  }
   const drive = options.mode === 'drive';
   const autopilot = options.mode === 'autopilot';
   const lines: string[] = [
     autopilot
-      ? '你已被授权一次性完成本项目的质量整改：静态问题、可确定修复项与依赖升级。先做一次“目标确认”，用户确认后连续执行到收尾，不要执行一步就停下等用户再次发起；只有硬阻塞才再次询问。'
+      ? '你已被授权一次性完成本项目的质量整改：静态问题、可确定修复项、依赖版本升级与依赖收敛。先做一次“目标确认”，用户确认后连续执行到收尾，不要执行一步就停下等用户再次发起；只有硬阻塞才再次询问。'
       : drive
         ? '你已被授权驱动整个依赖升级与 CVE 整改流程；但启动前必须先完成一次“开始前确认”，之后不需要每一步等用户确认，且始终服从插件的状态机和止损规则。'
         : '按 quality-center 的标准化流程完成本项目依赖升级与 CVE 整改。',
@@ -48,7 +149,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
   if (autopilot) {
     lines.push(
       '启动前只做一次「目标确认」，一次问清下面 3 项，不要拆成多轮、不要逐项追问：',
-      '1. 目标范围：本次是否处理“静态代码 + 确定性修复 + 依赖/CVE 升级”的全部可修复项（默认是），还是只修高危/CVE？',
+      '1. 目标范围：本次是否处理“静态代码 + 确定性修复 + 依赖/CVE 升级 + 依赖收敛”的全部可修复项（默认是），还是只修高危/CVE？',
       '2. 版本边界：源码保持 Java 8 / Spring Boot 2.7.18；遇到必须升 JDK 11/17/21 或 Spring Boot 3.x 的项，是本次处理、跳过，还是先停下问用户（默认停下询问）？',
       '3. 门禁与权限：buildGate=package、不跳测试、不改测试；允许项目属性覆盖和“删无用 import / 调整修饰符顺序 / 简化布尔比较”等最小代码修复；安全设计、密钥轮换、架构重构只报告不擅自改。是否接受？',
       '用户确认后：按下面默认参数连续执行到收尾，不再每一步征求同意，也不要在完成一个组后停下等用户再发起。',
@@ -174,6 +275,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
       '阶段 3 依赖升级：`quality_upgrade_plan`（必须先有当前 pom 的成功构建记录）→ 按 framework/family/independent 顺序逐组 `quality_upgrade_apply write=true` → 每组 `quality_build` → 失败先 `quality_explain`，同组两次失败 `quality_upgrade_revert` 并把该组列为阻塞。',
       '只允许一个升级计划：阶段 3 生成的计划必须一直用到收尾；阶段 5/6 不得再执行 `quality_upgrade_plan` 生成第二个计划。剩余 CVE 若需要新增 `<dependencyManagement>`，而策略 `allowDependencyManagement=false`，直接列为阻塞，不要追加计划、不要部分 apply 一组。',
       'apply 一组后若 `quality_upgrade_check` 显示该组只落盘了一部分候选，视为不完整：立即 `quality_upgrade_revert` 该组并列为阻塞，不能把半组状态当作完成。',
+      '阶段 3.5 依赖收敛：读 `issues.json` 的 suggestions，只取 category=duplicate；先列每个能力类别的重复库、引用文件和迁移顺序，再按“先改代码、编译通过、最后删依赖”的顺序小步处理。不要自动删依赖，不要为了统一 JSON 重写业务序列化协议；BOM 项删除显式 version 后必须提示用 mvn dependency:tree 复核。每一类完成后 quality_build + quality_scan。',
       '阶段 4 静态代码：先 `quality_phase phase=static_fix`（让面板知道已进入静态修复），再 `quality_report format=json` 取剩余问题；按 `.quality-center/skills/quality-center-java-upgrade/SKILL.md` 的判定，优先修有明确文件/行号、改动局部、可编译验证的 Checkstyle/SpotBugs/astgrep 问题；安全设计类、需要改架构或密钥轮换的只记录不擅自改。每修 20 条或每 10 分钟做一次 `quality_build`。',
       '阶段 5 单问题复核：修完后 `quality_scan`（全量）→ `quality_report` 对比修复前/后；不要用旧 issues.json 冒充复验。',
       '阶段 6 收尾：`quality_build` 一次最终构建；若升级计划仍有组未完成，`quality_upgrade_check` 确认没有 drift；最后调用 `quality_finalize` 生成插件口径的修复前/后、按来源变化、plan 进度、构建/测试状态与阻塞项，AI 只转述结果，不要自己数。',

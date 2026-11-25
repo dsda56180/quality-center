@@ -18,7 +18,7 @@ import { mavenMirrorArgs } from '../maven';
 import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, UpgradePreviewEntry } from './deepFixPanel';
 import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '../upgrader';
 import { loadPolicy } from '../upgradePolicy';
-import { buildAgentPrompt } from '../agentPrompt';
+import { buildAgentPrompt, type AgentScope } from '../agentPrompt';
 import { McpStatus, probeMcp } from '../mcpStatus';
 import { readRunState, runSnapshot, setRunActor } from '../runState';
 import {
@@ -473,11 +473,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     id?: number;
     pkg?: string;
     tool?: string;
+    scope?: string;
     options?: ScanSettingsInput;
   }): Promise<void> {
     const readOnly = new Set([
       'copy', 'copyIssue', 'openAgent', 'copySuggestion', 'explainBuild', 'openHandoff',
-      'copyDrivePrompt', 'checkMcp', 'openMcpConfig', 'open', 'openLink', 'saveSettings',
+      'copyDrivePrompt', 'copyScope', 'checkMcp', 'openMcpConfig', 'open', 'openLink', 'saveSettings',
       'pauseScan', 'stopScan'
     ]);
     if (message.type && !readOnly.has(message.type) && this.runLocked()) {
@@ -559,6 +560,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'copyDrivePrompt':
         await this.copyDrivePrompt();
+        break;
+      case 'copyScope':
+        await this.copyScopePrompt(message.scope);
         break;
       case 'checkMcp':
         await this.refreshMcpStatus();
@@ -2171,18 +2175,29 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
   /** 复制“全权推进”指令：AI 按 qc next 循环执行，而不是每步等用户点按钮 */
   private async copyDrivePrompt(): Promise<void> {
+    await this.copyScopePrompt('all');
+  }
+
+  /** 按范围复制给 AI：全面 / 只升级 / 收敛 / 代码 / 密钥 / 静态，避免 AI 把“全面”理解成可以顺手改 pom */
+  private async copyScopePrompt(rawScope: unknown): Promise<void> {
     const root = this.runner.root();
     if (!root) {
       void vscode.window.showInformationMessage('还没有打开项目。');
       return;
     }
-    await vscode.env.clipboard.writeText(
-      '使用 quality-center MCP：先调用 quality_agent_brief（mode=autopilot）；先做一次目标确认（范围、JDK/框架边界、门禁），确认后连续执行到收尾，不要每步停下等我再发起。' +
-        '默认 Java 8、package 门禁，允许属性覆盖与最小代码修复；只有 JDK 11/17/21、Spring Boot 3、跨线无兼容版本等硬阻塞才再次询问，最后必须 quality_scan 复验。' +
-        '没有 MCP 时运行 node .quality-center/bin/qc.cjs prompt . --drive 后照它执行。'
-    );
+    const scopes: AgentScope[] = ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'];
+    const scope = scopes.includes(rawScope as AgentScope) ? (rawScope as AgentScope) : 'all';
+    const label: Record<AgentScope, string> = {
+      all: '全面修复',
+      upgrade: '仅升级依赖',
+      consolidation: '依赖收敛',
+      code: '代码质量',
+      secrets: '硬编码密钥',
+      static: '静态缺陷'
+    };
+    await vscode.env.clipboard.writeText(buildAgentPrompt(root, { mode: 'autopilot', scope }));
     void vscode.window.showInformationMessage(
-      '已复制 MCP 入口：AI 会先做一次目标确认，然后按 autopilot 连续执行并在最后复扫。'
+      `已复制「${label[scope]}」指令：AI 只会改这个范围，其他类别只报告。`
     );
   }
 

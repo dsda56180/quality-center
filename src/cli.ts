@@ -32,7 +32,7 @@ import { projectStatus } from './status';
 import { buildNextAction } from './nextAction';
 import { explainBuildFailure } from './explain';
 import { integrate } from './integrate';
-import { buildAgentPrompt } from './agentPrompt';
+import { buildAgentPrompt, type AgentScope } from './agentPrompt';
 import { beginRun, beginTool, endTool, finishRun, readRunState, setRunActor } from './runState';
 
 const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 CI 用的无界面接口
@@ -85,9 +85,10 @@ explain 选项:
 
 prompt 选项:
   --drive               输出「全权推进」循环（默认协助模式）
+  --scope <scope>       all|upgrade|consolidation|code|secrets|static，默认 all
   --plan <planId>       指定计划，缺省用最新一份
   --failure <文件>      附上失败日志尾部，供 AI 从现场开始判断
-  --json                以 JSON 输出 { mode, planId, prompt }
+  --json                以 JSON 输出 { mode, scope, planId, prompt }
 
 upgrade 选项:
   --plan <planId>        指定计划，缺省用最新一份
@@ -115,7 +116,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const flags: Record<string, string | true> = {};
   const positional: string[] = [];
-  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group', '--detail', '--top', '--log', '--mute', '--sarif', '--failure']);
+  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group', '--detail', '--top', '--log', '--mute', '--sarif', '--failure', '--scope']);
   for (let i = 0; i < argv.length; i += 1) {
     const item = argv[i];
     if (item.startsWith('--')) {
@@ -659,6 +660,10 @@ async function promptCommand(args: Args): Promise<number> {
     return 2;
   }
   const mode = args.flags['--drive'] === true ? ('drive' as const) : ('assist' as const);
+  const scopes: AgentScope[] = ['all', 'upgrade', 'consolidation', 'code', 'secrets', 'static'];
+  const scope: AgentScope = scopes.includes(args.flags['--scope'] as AgentScope)
+    ? (args.flags['--scope'] as AgentScope)
+    : 'all';
   const planId = typeof args.flags['--plan'] === 'string' ? String(args.flags['--plan']) : undefined;
   let failure: string | undefined;
   const failureFile = typeof args.flags['--failure'] === 'string' ? String(args.flags['--failure']) : '';
@@ -670,9 +675,9 @@ async function promptCommand(args: Args): Promise<number> {
       progress(`失败日志不存在：${file}`);
     }
   }
-  const prompt = buildAgentPrompt(root, { mode, planId, failure });
+  const prompt = buildAgentPrompt(root, { mode, planId, failure, scope });
   if (args.flags['--json'] === true) {
-    process.stdout.write(`${JSON.stringify({ mode, planId: planId ?? null, root, prompt }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ mode, scope, planId: planId ?? null, root, prompt }, null, 2)}\n`);
   } else {
     process.stdout.write(`${prompt}\n`);
   }
