@@ -257,8 +257,6 @@ export function getHtml(nonce: string): string {
   }
   /* AI 执行时用状态卡替换所有写操作入口，避免“面板按钮”和“AI 动作”同时可点 */
   body.ai-busy .toolbar button:not(.mcp-status-btn),
-  body.ai-busy #fixbar,
-  body.ai-busy #buildbar,
   body.ai-busy #wizard,
   body.ai-busy .item .actions,
   body.ai-busy .d-actions,
@@ -408,19 +406,6 @@ export function getHtml(nonce: string): string {
   }
   .copy-one:hover, .fix-one:hover, .detail-toggle:hover { background: var(--vscode-list-hoverBackground); }
   .actions { margin-left: auto; display: flex; gap: 4px; flex: none; }
-  .fixbar {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 8px; margin-bottom: 8px; border-radius: 4px;
-    background: rgba(58,141,219,.14); font-size: 11px;
-  }
-  .fixbar button { flex: none; padding: 2px 10px; font-size: 11px; }
-  .buildbar {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    padding: 6px 8px; margin-bottom: 8px; border-radius: 4px;
-    background: rgba(217,161,11,.14); font-size: 11px; line-height: 1.5;
-  }
-  .buildbar span { flex: 1 1 160px; }
-  .buildbar button { flex: none; padding: 2px 10px; font-size: 11px; }
   .loc { margin-top: 3px; font-size: 11px; color: var(--vscode-descriptionForeground); word-break: break-all; }
   .msg { margin-top: 2px; line-height: 1.45; word-break: break-word; }
   .empty, .hint { color: var(--vscode-descriptionForeground); padding: 8px 0; line-height: 1.6; }
@@ -576,8 +561,8 @@ export function getHtml(nonce: string): string {
     <button id="resume" class="icon-btn" title="继续扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 2l8 5-8 5z"/></svg></button>
     <button id="pause" class="icon-btn secondary" title="暂停扫描：当前扫描器结束后不再启动新的扫描器" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 2h3v10H3zM8 2h3v10H8z"/></svg></button>
     <button id="stop" class="icon-btn secondary" title="终止扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 3h8v8H3z"/></svg></button>
-    <button id="mcpbtn" class="mcp-status-btn checking" title="MCP 检测中"><span class="mcp-dot"></span>MCP</button>
     <span class="spacer"></span>
+    <button id="mcpbtn" class="mcp-status-btn checking" title="MCP 检测中"><span class="mcp-dot"></span>MCP</button>
     <button id="deepfix" class="icon-btn secondary" title="深度修复"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg></button>
     <button id="upgrade" class="icon-btn secondary" title="升级依赖"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M5 4v2h14V4H5zm0 10h4v6h6v-6h4l-7-7-7 7z"/></svg></button>
     <button id="copy" class="icon-btn secondary" title="复制给 AI"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 1h6l2 2v8H4zM2 4h1.5v9h7v1.5H2z"/></svg></button>
@@ -615,14 +600,6 @@ export function getHtml(nonce: string): string {
     <button class="tab" data-tab="suggest">建议</button>
   </div>
   <input type="search" id="q" placeholder="搜索文件、规则或描述">
-  <div id="fixbar" class="fixbar" style="display:none">
-    <span id="fixtip"></span>
-    <button id="fixall">一键修复</button>
-  </div>
-  <div id="buildbar" class="buildbar" style="display:none">
-    <span id="buildtip"></span>
-    <button id="build">构建并扫描</button>
-  </div>
   <div id="wizard" class="wizard" style="display:none"></div>
   </div>
   <div id="list"><div class="empty">点击「▶」开始扫描</div></div>
@@ -1056,13 +1033,19 @@ export function getHtml(nonce: string): string {
     return value.length > 260 ? value.slice(0, 260) + '…' : value;
   }
 
-  /** 顶部消息栏：只放用户需要知悉或需要操作的事情，按严重度着色并带动作 */
-  function renderMessages() {
+  /** 顶部消息栏：平时隐藏，只在需要用户知悉或确认/操作时出现 */
+  function renderMessages(busy) {
     var bar = document.getElementById('msgbar');
     if (!bar) return;
     var items = [];
     function action(label, type, title) {
       return '<button class="msg-action" data-msg="' + type + '" title="' + esc(title || label) + '">' + label + '</button>';
+    }
+    function wizard(label, key, title) {
+      return '<button class="msg-action" data-wz="' + key + '" title="' + esc(title || label) + '">' + label + '</button>';
+    }
+    function focus(label, id) {
+      return '<button class="msg-action" data-focus="' + id + '" title="' + esc(label) + '">' + label + '</button>';
     }
     function add(level, text, actions) {
       items.push(
@@ -1073,13 +1056,9 @@ export function getHtml(nonce: string): string {
       );
     }
 
-    var mcp = state.mcp || { state: 'checking', label: '检测 MCP…', detail: '' };
-    if (mcp.state === 'checking') {
-      add('info', '⏳ 正在检测 MCP 配置与服务…');
-    } else if (mcp.state === 'ready') {
-      add('ok', '🟢 ' + esc(mcp.label) + (mcp.tools ? ' · ' + mcp.tools + ' 个工具' : ''),
-        action('重新检测', 'checkMcp', '重新做一次 MCP 协议自检'));
-    } else if (mcp.state === 'configured') {
+    // MCP 正常时不打扰；只有未接入、待启用、配置异常才占用消息栏
+    var mcp = state.mcp || {};
+    if (mcp.state === 'configured') {
       add('warn',
         '🟡 ' + esc(mcp.label) + '：' + esc(mcp.detail),
         action('重新检测', 'checkMcp', 'Trae 已启用项目级 MCP 后，重新检测是否握手成功') +
@@ -1089,19 +1068,73 @@ export function getHtml(nonce: string): string {
         '🔴 ' + esc(mcp.label) + '：' + esc(mcp.detail),
         action('修复配置', 'setupMcp', '重新生成可用的项目 MCP 配置') +
         (mcp.configFile ? action('查看配置', 'openMcpConfig', '打开项目 MCP 配置文件') : ''));
-    } else {
+    } else if (mcp.state === 'missing') {
       add('error',
         '⚪ ' + esc(mcp.label) + (mcp.detail ? '：' + esc(mcp.detail) : ''),
         action('一键接入', 'setupMcp', '生成项目 MCP 配置'));
     }
 
-    if (state.run && state.run.lastToolError && state.run.status !== 'done') {
-      add('warn', '⚠ AI 最近一次工具失败：' + esc(shortError(state.run.lastToolError)));
+    // AI 执行情况：执行中/阻塞/待确认时给一条可回溯到状态卡的摘要
+    var run = state.run;
+    if (run && (run.status === 'running' || run.status === 'blocked' || run.status === 'needs_confirm')) {
+      var age = run.updatedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(run.updatedAt)) / 1000)) : 0;
+      var working = run.status === 'running' && age < 1800;
+      var blockErr = run.lastToolError ? ' · ' + esc(shortError(run.lastToolError)) : '';
+      if (working) {
+        var phase = run.phase === 'done' ? uiPhaseForTool(run.lastTool, run) : run.phase;
+        var phaseText = ({
+          baseline_build: '基线构建', baseline_scan: '基线扫描', fix: '确定性修复', plan: '依赖计划',
+          apply: '依赖落盘', static_fix: '静态修复', rescan: '复扫', finalize: '收尾'
+        })[phase] || phase || '执行中';
+        add('info',
+          '🤖 AI（' + esc((run.actor && run.actor.client) || 'MCP') + '）正在执行 · ' + phaseText +
+          (run.lastTool ? ' · ' + esc(run.lastTool) : ''),
+          focus('查看详情', 'aistatus'));
+      } else if (run.status === 'blocked') {
+        add('error', '⛔ AI 已阻塞 · ' + esc(run.lastTool || '等待处理') + blockErr, focus('查看详情', 'aistatus'));
+      } else if (run.status === 'needs_confirm') {
+        add('warn', '⏸ AI 等待你确认 · ' + esc(run.lastTool || '继续执行'), focus('查看详情', 'aistatus'));
+      }
     }
-    if (state.task) {
-      var sec = Math.max(0, Math.floor((Date.now() - state.task.startedAt) / 1000));
-      add('info', '⏳ ' + esc(state.task.label) + '：' + esc(state.task.stage) + ' · 已用 ' + sec + ' 秒');
+
+    // 修复与优化：人工可执行的动作统一进消息栏，不再使用独立 fixbar
+    var fixable = (state.issues || []).filter(function (i) { return i.fixable; }).length;
+    if (!busy && fixable > 0) {
+      add('info',
+        '🔧 可自动修复 ' + fixable + ' 项（无用导入 / 冗余导入 / 修饰符顺序 / 布尔表达式简化）',
+        action('一键修复', 'fixAll'));
     }
+    var n = state.next;
+    if (!busy && n) {
+      var nextLabel = n.plan && n.plan.nextLabel ? n.plan.nextLabel : '当前组';
+      if (n.action === 'scan') {
+        add('info', '还没有扫描结果，先扫描项目才能给出修复与升级建议。', wizard('开始扫描', 'scan'));
+      } else if (n.action === 'plan') {
+        add('info',
+          '有 ' + (state.issues || []).length + ' 项问题，还没有升级计划；先生成计划，不会直接改 pom。',
+          wizard('生成升级计划', 'createPlan'));
+      } else if (n.action === 'confirm') {
+        add('warn',
+          '升级计划有一组跨大版本，等待你确认：' + esc(nextLabel),
+          wizard('确认并执行', 'upgradeNext') + focus('查看计划', 'wizard'));
+      } else if (n.action === 'apply') {
+        add('info',
+          '升级计划待执行：' + esc(nextLabel),
+          wizard('执行下一组', 'upgradeNext') + focus('查看计划', 'wizard'));
+      } else if (n.action === 'build') {
+        add('info', '升级已落盘，构建门禁待跑。',
+          wizard('跑构建门禁', 'buildGate') + focus('查看计划', 'wizard'));
+      } else if (n.action === 'explain') {
+        add('warn', '上一组已落盘但构建未通过，先定位原因。',
+          wizard('查看失败原因', 'explainBuild') + wizard('回滚', 'revertPlan'));
+      } else if (n.action === 'rescan') {
+        add('info', '构建已通过，复扫验收待跑。', wizard('复扫验收', 'scan'));
+      }
+    }
+    if (!busy && state.finishedAt && state.buildHint) {
+      add('warn', '🧱 ' + esc(state.buildHint), action('构建并扫描', 'buildAndScan'));
+    }
+
     if (state.final) {
       var f = state.final;
       add('info', '🧾 最终验收：' + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
@@ -1127,7 +1160,7 @@ export function getHtml(nonce: string): string {
     var el = document.getElementById('wizard');
     if (!el) return;
     var n = state.next;
-    if (!n) {
+    if (!n || (!n.plan && (n.action === 'plan' || n.action === 'scan'))) {
       el.style.display = 'none';
       el.innerHTML = '';
       return;
@@ -1492,25 +1525,7 @@ export function getHtml(nonce: string): string {
       }
     }
 
-    renderMessages();
-
-    const fixable = (state.issues || []).filter(function (i) { return i.fixable; }).length;
-    const bar = document.getElementById('fixbar');
-    if (!busy && fixable > 0) {
-      bar.style.display = 'flex';
-      document.getElementById('fixtip').textContent =
-        '可自动修复 ' + fixable + ' 项（无用导入 / 冗余导入 / 修饰符顺序 / 布尔表达式简化）';
-    } else {
-      bar.style.display = 'none';
-    }
-
-    const buildbar = document.getElementById('buildbar');
-    if (!busy && state.finishedAt && state.buildHint) {
-      buildbar.style.display = 'flex';
-      document.getElementById('buildtip').textContent = state.buildHint;
-    } else {
-      buildbar.style.display = 'none';
-    }
+    renderMessages(busy);
   }
 
   document.getElementById('summary').addEventListener('click', function (e) {
@@ -1766,14 +1781,19 @@ export function getHtml(nonce: string): string {
     activeTab = tab.getAttribute('data-tab');
     render();
   });
-  document.getElementById('fixall').addEventListener('click', function () {
-    vscode.postMessage({ type: 'fixAll' });
-  });
-  document.getElementById('build').addEventListener('click', function () {
-    vscode.postMessage({ type: 'buildAndScan' });
-  });
   document.getElementById('msgbar').addEventListener('click', function (e) {
     const target = e.target;
+    const focus = target && target.closest ? target.closest('[data-focus]') : null;
+    if (focus) {
+      var dest = document.getElementById(focus.getAttribute('data-focus'));
+      if (dest) dest.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      return;
+    }
+    const wz = target && target.closest ? target.closest('[data-wz]') : null;
+    if (wz) {
+      handleWizardAction(wz.getAttribute('data-wz'));
+      return;
+    }
     const action = target && target.closest ? target.closest('[data-msg]') : null;
     if (action) {
       vscode.postMessage({ type: action.getAttribute('data-msg') });
@@ -1883,7 +1903,8 @@ export function getHtml(nonce: string): string {
       renderAiStatus();
     }
     if (state.task || (state.run && ['running', 'blocked', 'needs_confirm'].indexOf(state.run.status) >= 0)) {
-      renderMessages();
+      var busy = !!state.scanning || !!state.deepFix || !!(state.run && state.run.status === 'running');
+      renderMessages(busy);
     }
     if (!state.scanning && !state.deepFix) {
       return;
