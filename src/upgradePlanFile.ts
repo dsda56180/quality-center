@@ -597,7 +597,10 @@ export function readUpgradePlan(root: string, planId?: string): UpgradePlanFile 
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
-  const id = planId ?? ids[ids.length - 1];
+  // 已回滚的计划不再算“当前计划”：否则最新目录是一个 revert 掉的计划，
+  // check/plan 门禁会把它当成进行中，挡住真正还在推进的旧计划。
+  const activeIds = ids.filter((id) => !fs.existsSync(path.join(dir, id, 'reverted.json')));
+  const id = planId ?? activeIds[activeIds.length - 1] ?? ids[ids.length - 1];
   if (!id) {
     throw new Error('还没有升级计划：先执行 upgrade plan');
   }
