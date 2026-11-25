@@ -701,10 +701,58 @@ async function main() {
     '回答冲突时调整策略并重新生成计划',
     drivePrompt.includes('用户回答与当前计划冲突') &&
       drivePrompt.includes('upgrade-policy.json') &&
+      drivePrompt.includes('targetJavaVersion') &&
       drivePrompt.includes('qc upgrade plan .') &&
       drivePrompt.includes('不要 `--reuse`'),
     drivePrompt.slice(0, 900)
   );
+
+  console.log('\n11) 源码升 JDK：策略改 targetJavaVersion 后生成新计划');
+  const java17Dir = prepare();
+  fs.writeFileSync(
+    path.join(java17Dir, '.quality-center', 'upgrade-policy.json'),
+    JSON.stringify(
+      {
+        schemaVersion: '1',
+        frameworkTargets: { '8': '2.7.18', '17': '3.2.12' },
+        targetJavaVersion: '17',
+        allowNextFrameworkLine: true,
+        forbiddenPackages: [],
+        buildGate: 'package',
+        mavenArgs: [],
+        runTestsOnNextLine: true
+      },
+      null,
+      2
+    ),
+    'utf8'
+  );
+  const java17PlanRun = run(['upgrade', 'plan', java17Dir, '--json']);
+  const java17Plan = java17PlanRun.code === 0 ? JSON.parse(java17PlanRun.out) : {};
+  check('Java 17 计划生成成功', java17PlanRun.code === 0, java17PlanRun.err.trim());
+  check('计划目标 Java = 17', java17Plan.project?.javaVersion === '17', String(java17Plan.project?.javaVersion));
+  check('计划框架目标 = 3.2.12', java17Plan.project?.frameworkTarget === '3.2.12', String(java17Plan.project?.frameworkTarget));
+  check(
+    '计划包含 java.version 属性迁移',
+    Array.isArray(java17Plan.candidates) &&
+      java17Plan.candidates.some(
+        (item) => item.packageName === 'java.version' && item.mode === 'project-property' && item.to === '17'
+      ),
+    JSON.stringify(java17Plan.candidates?.map((item) => item.packageName) ?? [])
+  );
+  check(
+    'java.version 与框架同组落盘',
+    java17Plan.groups?.find((group) => group.name === 'framework')?.candidates.includes('java.version') === true,
+    JSON.stringify(java17Plan.groups ?? [])
+  );
+  check(
+    '授权的 Boot 3 父 POM 与 Java 版本同组，不再要求跨线确认',
+    java17Plan.groups?.find((group) => group.name === 'framework')?.candidates.includes('org.springframework.boot:spring-boot-starter-parent') === true &&
+      java17Plan.candidates?.find((item) => item.packageName === 'java.version')?.crossLine === false,
+    JSON.stringify(java17Plan.candidates ?? [])
+  );
+  const java17Diff = fs.readFileSync(path.join(java17Dir, '.quality-center', 'upgrade', java17Plan.planId, 'pom.diff'), 'utf8');
+  check('pom.diff 含 8 → 17', java17Diff.includes('-    <java.version>8</java.version>') && java17Diff.includes('+    <java.version>17</java.version>'));
 
   console.log(`\n结果：${passed} 通过，${failures.length} 失败`);
   if (failures.length) {

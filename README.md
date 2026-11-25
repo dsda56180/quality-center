@@ -248,6 +248,7 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 ```
 
 - 目标版本由 `.quality-center/upgrade-policy.json` 的 `frameworkTargets` 按 Java 版本推导，不再写死版本号；Java 17 未声明上限时只跳过框架层并给出原因，不会静默跳 3.x。
+- 源码也要升 JDK 时，在策略里写 `targetJavaVersion`（如 `"17"`），并给同 key 配 `frameworkTargets`（如 `"17": "3.2.12"`）。计划会生成 `<java.version>` 迁移，并和 Boot 3.x 父 POM 一起进 `framework` 组；已授权的迁移不再要求跨线确认。
 - **`qc next` / `quality_next` 是唯一入口**：它把扫描、计划、步骤、构建结果收敛成「一个状态 + 一个命令 + 为什么」，同时刷新 `.quality-center/handoff.md`；新会话或新 Agent 读这一页就能接上，不用自己推断流程。
 - **构建失败先 `qc explain` / `quality_explain`**：把 `Non-resolvable import POM`、坐标不存在、依赖解析失败、编译错误、收敛冲突翻译成原因/影响/建议；`build-result.json` 记录每次构建（成功也记），`next` 不会靠日志时间猜。
 - 候选带 `group`：`framework → family → independent → cross-line`，AI/CI 一组一组推进；一组没通过构建就停在 `partial`，不会把整条依赖链一次性怼进 pom。

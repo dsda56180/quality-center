@@ -1,6 +1,13 @@
 import * as fs from 'fs';
 
-export type UpgradePreviewMode = 'parent' | 'bom' | 'plugin' | 'property' | 'extract' | 'manage';
+export type UpgradePreviewMode =
+  | 'parent'
+  | 'bom'
+  | 'plugin'
+  | 'property'
+  | 'project-property'
+  | 'extract'
+  | 'manage';
 
 export interface UpgradePreviewChange {
   label: string;
@@ -41,6 +48,7 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
     bom: 'BOM',
     plugin: '构建插件',
     property: '属性',
+    'project-property': '项目属性（Java 版本）',
     extract: '版本抽离',
     manage: '版本覆盖'
   };

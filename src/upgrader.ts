@@ -22,7 +22,15 @@ export interface DirectDependency {
  * - extract：把版本抽离成独立属性（硬编码、或属性被多处共用时）
  * - manage：传递依赖，在 dependencyManagement 中新增版本覆盖（同样使用属性）
  */
-export type UpgradeMode = 'parent' | 'bom' | 'plugin' | 'property' | 'extract' | 'manage';
+export type UpgradeMode =
+  | 'parent'
+  | 'bom'
+  | 'plugin'
+  | 'property'
+  /** 项目级属性（如 java.version），即使没有被 ${} 引用也要改 */
+  | 'project-property'
+  | 'extract'
+  | 'manage';
 
 export interface UpgradeCandidate {
   packageName: string;
@@ -59,6 +67,10 @@ export interface UpgradeContext {
   managed?: Map<string, ManagedEntry>;
   /** 框架目标版本，由 upgradePolicy 按 Java 版本推导；为空表示不自动升级框架 */
   frameworkTarget?: string;
+  /** 项目当前源码 Java 版本；用于生成 java.version 迁移候选 */
+  currentJavaVersion?: string;
+  /** 计划要迁移到的 Java 版本；与 currentJavaVersion 不一致时生成 java.version 候选 */
+  targetJavaVersion?: string;
 }
 
 export interface UpgradeChange {
@@ -253,6 +265,30 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
   const skipped: { packageName: string; reason: string }[] = [];
   /** 已被框架层升级覆盖的依赖 → 覆盖它的候选包名 */
   const coveredBy = new Map<string, string>();
+
+  // 0. Java 源码级别迁移：策略显式要求 targetJavaVersion 时必须进计划，
+  //    否则只改 parent 到 Boot 3.x 会因 java.version 仍为旧值而在编译期失败。
+  const currentJava = context?.currentJavaVersion;
+  const targetJava = context?.targetJavaVersion;
+  if (currentJava && targetJava && compareVersion(targetJava, currentJava) > 0 && /<java\.version>\s*[^<]+<\/java\.version>/.test(pom)) {
+    candidates.push({
+      packageName: 'java.version',
+      groupId: 'project',
+      artifactId: 'java.version',
+      from: currentJava,
+      to: targetJava,
+      cveCount: 0,
+      mode: 'project-property',
+      source: '<properties> 中的项目 Java 版本',
+      sourceKind: 'declared',
+      property: 'java.version',
+      note:
+        `源码编译级别从 Java ${currentJava} 提升到 ${targetJava}。` +
+        (frameworkTarget?.startsWith('3.')
+          ? 'Boot 3.x 还要求 javax.* → jakarta.* 迁移，构建失败按 explain 处理。'
+          : '')
+    });
+  }
 
   // 1. Spring Boot 2.x 升级：一次提升整组 BOM 管理的版本，不再逐个固定
   const bootRefs = parseBomRefs(pom).filter((ref) => ref.groupId === 'org.springframework.boot');
@@ -467,6 +503,7 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
   }
 
   const order: Record<UpgradeMode, number> = {
+    'project-property': -1,
     parent: 0,
     bom: 0,
     plugin: 1,
@@ -778,6 +815,15 @@ export function applyUpgrade(
       return replaceBlockVersion(pom, candidate.mode, candidate, to);
     case 'property': {
       if (!candidate.property || propertyUsages(pom, candidate.property) !== 1) {
+        return undefined;
+      }
+      const result = setProperty(pom, candidate.property, to);
+      return result
+        ? { text: result.text, changes: [{ label: 'properties', old: result.old, new: result.new }] }
+        : undefined;
+    }
+    case 'project-property': {
+      if (!candidate.property || !new RegExp(`<${candidate.property.replace(/\./g, '\\.')}>\\s*[^<]+</${candidate.property.replace(/\./g, '\\.')}>`).test(pom)) {
         return undefined;
       }
       const result = setProperty(pom, candidate.property, to);

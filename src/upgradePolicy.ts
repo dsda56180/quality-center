@@ -14,6 +14,11 @@ export type BuildGate = 'compile' | 'package' | 'test';
 export interface UpgradePolicy {
   /** 允许的目标版本映射：{"8": "2.7.18"} */
   frameworkTargets: Record<string, string>;
+  /**
+   * 项目要迁移到的 Java 版本（如 "17"）。缺省表示源码编译级别不变。
+   * 设置后，计划会包含 <java.version> 变更，并按该版本查 frameworkTargets。
+   */
+  targetJavaVersion?: string;
   /** 允许跨到 Spring Boot 3.x（默认不允许） */
   allowNextFrameworkLine: boolean;
   /** 禁止保留的依赖坐标（group:artifact） */
@@ -30,8 +35,10 @@ export interface LoadedPolicy {
   policy: UpgradePolicy;
   /** 策略文件绝对路径；缺省时为空，表示全部来自推导 */
   file?: string;
-  /** 推导出的 Java 版本 */
+  /** 推导出的 Java 版本（源码当前编译级别） */
   javaVersion?: string;
+  /** 计划要迁移到的 Java 版本；未设置时等于 javaVersion */
+  targetJavaVersion?: string;
   /** 实际使用的框架目标版本 */
   frameworkTarget?: string;
   /** 说明每一项的来源，直接写进报告 */
@@ -130,6 +137,12 @@ export function loadPolicy(root: string, pom?: string): LoadedPolicy {
     if (typeof obj.allowNextFrameworkLine === 'boolean') {
       policy.allowNextFrameworkLine = obj.allowNextFrameworkLine;
     }
+    if (typeof obj.targetJavaVersion === 'string') {
+      const normalized = obj.targetJavaVersion.trim().replace(/^1\./, '');
+      if (/^\d+$/.test(normalized)) {
+        policy.targetJavaVersion = normalized;
+      }
+    }
     if (typeof obj.buildGate === 'string' && ['compile', 'package', 'test'].includes(obj.buildGate)) {
       policy.buildGate = obj.buildGate as BuildGate;
     }
@@ -155,12 +168,24 @@ export function loadPolicy(root: string, pom?: string): LoadedPolicy {
     sources.push(`Java ${javaVersion}（pom 推导）`);
   }
 
-  const frameworkTarget = javaVersion ? policy.frameworkTargets[javaVersion] : undefined;
-  if (frameworkTarget) {
-    sources.push(`框架上限 ${frameworkTarget}（Java ${javaVersion} 映射表）`);
+  const targetJavaVersion = policy.targetJavaVersion ?? javaVersion;
+  if (targetJavaVersion && targetJavaVersion !== javaVersion) {
+    sources.push(`目标 Java ${targetJavaVersion}（策略指定；源码从 Java ${javaVersion ?? '未知'} 迁移）`);
   }
 
-  return { policy, file: fs.existsSync(file) ? file : undefined, javaVersion, frameworkTarget, sources };
+  const frameworkTarget = targetJavaVersion ? policy.frameworkTargets[targetJavaVersion] : undefined;
+  if (frameworkTarget) {
+    sources.push(`框架上限 ${frameworkTarget}（Java ${targetJavaVersion} 映射表）`);
+  }
+
+  return {
+    policy,
+    file: fs.existsSync(file) ? file : undefined,
+    javaVersion,
+    targetJavaVersion,
+    frameworkTarget,
+    sources
+  };
 }
 
 function readPom(root: string): string | undefined {
@@ -177,6 +202,7 @@ export function defaultPolicyDocument(root: string): UpgradePolicy & { schemaVer
   return {
     schemaVersion: '1',
     frameworkTargets: loaded.policy.frameworkTargets,
+    targetJavaVersion: loaded.policy.targetJavaVersion,
     allowNextFrameworkLine: loaded.policy.allowNextFrameworkLine,
     forbiddenPackages: loaded.policy.forbiddenPackages,
     buildGate: loaded.policy.buildGate,

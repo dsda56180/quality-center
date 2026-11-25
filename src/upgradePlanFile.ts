@@ -67,7 +67,10 @@ export interface UpgradePlanFile {
   createdAt: string;
   project: {
     root: string;
+    /** 计划的目标 Java 版本；未迁移时等于当前版本 */
     javaVersion?: string;
+    /** 项目当前的 Java 版本（仅在发生迁移时出现） */
+    sourceJavaVersion?: string;
     frameworkVersion?: string;
     frameworkTarget?: string;
     policySources: string[];
@@ -157,6 +160,10 @@ export function isCrossLine(from: string, to: string): boolean {
 
 /** 候选分组：框架先走，框架族跟着 BOM 对齐，独立依赖其次，跨大版本最后且需人工确认 */
 function groupOf(candidate: UpgradeCandidate, crossLine: boolean): PlanGroup {
+  // Java 源码级别是框架升级的前置条件，必须和 parent/BOM 同组落盘
+  if (candidate.packageName === 'java.version') {
+    return 'framework';
+  }
   if (crossLine) {
     return 'cross-line';
   }
@@ -399,7 +406,11 @@ export function createUpgradePlan(
     }
   }
   const loaded = loadPolicy(root, original);
-  const context: UpgradeContext = { frameworkTarget: loaded.frameworkTarget };
+  const context: UpgradeContext = {
+    frameworkTarget: loaded.frameworkTarget,
+    currentJavaVersion: loaded.javaVersion,
+    targetJavaVersion: loaded.targetJavaVersion
+  };
   const raw = planUpgrades(root, issues, context);
 
   const forbidden = new Set(loaded.policy.forbiddenPackages);
@@ -432,7 +443,15 @@ export function createUpgradePlan(
       return;
     }
     text = applied.text;
-    const crossLine = isCrossLine(candidate.from, candidate.to);
+    // 策略显式指定 targetJavaVersion 时，Java 级别与 Boot 3.x 父 POM 都是用户授权的迁移，
+    // 不再按“未知跨大版本”阻断，否则 framework 组无法一次落盘。
+    const authorizedJavaMigration = candidate.packageName === 'java.version';
+    const authorizedBootLine =
+      candidate.groupId === 'org.springframework.boot' &&
+      Boolean(loaded.targetJavaVersion && loaded.targetJavaVersion !== loaded.javaVersion) &&
+      Boolean(loaded.frameworkTarget?.startsWith('3.')) &&
+      loaded.policy.allowNextFrameworkLine;
+    const crossLine = authorizedJavaMigration || authorizedBootLine ? false : isCrossLine(candidate.from, candidate.to);
     candidates.push({
       id: `c${candidates.length + 1}`,
       packageName: candidate.packageName,
@@ -480,7 +499,8 @@ export function createUpgradePlan(
     createdAt: new Date().toISOString(),
     project: {
       root,
-      javaVersion: loaded.javaVersion,
+      javaVersion: loaded.targetJavaVersion ?? loaded.javaVersion,
+      sourceJavaVersion: loaded.targetJavaVersion && loaded.targetJavaVersion !== loaded.javaVersion ? loaded.javaVersion : undefined,
       frameworkVersion,
       frameworkTarget: loaded.frameworkTarget,
       policySources: loaded.sources,

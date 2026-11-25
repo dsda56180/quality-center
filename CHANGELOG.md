@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.30
+
+- 策略新增 `targetJavaVersion`：回答“源码也升 JDK”时，计划会真正包含 `<java.version>` 从旧值到目标值的迁移，而不是只改 Boot 父 POM
+- `targetJavaVersion` 与 Boot 3.x 父 POM 一起进入 `framework` 原子组，一次 apply 同步落盘；不再把已授权的 Java/Boot 3 迁移误判为“未知跨大版本”而阻断
+- drive prompt 明确冲突调整要写 `targetJavaVersion`，并保留门禁、框架目标、跨大版本的冲突处理项
+- 新增 Java 8 → 17 / Boot 2.4.2 → 3.2.12 计划断言（含 `pom.diff`），自检 111 通过 / 0 失败
+
 ## 0.27.29
 
 - 启动前确认遇到回答冲突时，不再只“停在 plan”：要求 AI 按用户回答调整 `upgrade-policy.json`（JDK 映射、buildGate、allowNextFrameworkLine），再用 `qc upgrade plan` 生成新计划并对比差异
