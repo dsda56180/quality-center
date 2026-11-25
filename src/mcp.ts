@@ -43,6 +43,32 @@ interface RpcRequest {
 const PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'quality-center';
 const VERSION = packageVersion();
+/** 最近一次真实 IDE 客户端的 initialize 信息；面板据此判断“已接入” */
+let clientInfo: { name?: string; version?: string } = {};
+
+/**
+ * 写客户端心跳。只记录非面板自检的客户端：Trae/Claude/Cursor 等真正 initialize 后，
+ * 面板就能在 `.quality-center/mcp-client.json` 看到“谁在什么时候连过”，而不是只猜配置存在。
+ */
+function writeClientHeartbeat(event: string, detail?: Record<string, unknown>): void {
+  const name = clientInfo.name ?? '';
+  if (!name || /quality-center|panel/i.test(name)) {
+    return;
+  }
+  try {
+    const dir = path.join(process.cwd(), '.quality-center');
+    if (!fs.existsSync(dir)) {
+      return;
+    }
+    fs.writeFileSync(
+      path.join(dir, 'mcp-client.json'),
+      `${JSON.stringify({ client: name, version: clientInfo.version, pid: process.pid, at: Date.now(), event, ...detail }, null, 2)}\n`,
+      'utf8'
+    );
+  } catch {
+    // 心跳失败不影响 MCP 主流程
+  }
+}
 
 const log = (message: string): void => {
   process.stderr.write(`[quality-center-mcp] ${message}\n`);
@@ -590,6 +616,12 @@ async function handle(request: RpcRequest): Promise<void> {
   const { id, method, params } = request;
   switch (method) {
     case 'initialize':
+      const info = (params?.clientInfo ?? {}) as { name?: unknown; version?: unknown };
+      clientInfo = {
+        name: typeof info.name === 'string' ? info.name : undefined,
+        version: typeof info.version === 'string' ? info.version : undefined
+      };
+      writeClientHeartbeat('initialize');
       reply(id, {
         protocolVersion:
           typeof params?.protocolVersion === 'string' ? (params.protocolVersion as string) : PROTOCOL_VERSION,
@@ -606,10 +638,12 @@ async function handle(request: RpcRequest): Promise<void> {
       reply(id, {});
       return;
     case 'tools/list':
+      writeClientHeartbeat('tools/list', { tools: TOOLS.length });
       reply(id, { tools: TOOLS });
       return;
     case 'tools/call': {
       const name = String(params?.name ?? '');
+      writeClientHeartbeat('tools/call', { tool: name });
       const args = (params?.arguments as Record<string, unknown>) ?? {};
       if (!TOOLS.some((tool) => tool.name === name)) {
         replyError(id, -32602, `未知工具：${name}`);

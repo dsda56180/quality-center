@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.33
+
+- MCP 服务在真实客户端 `initialize / tools/list / tools/call` 时写 `.quality-center/mcp-client.json` 心跳（客户端名、版本、pid、时间、工具数）
+- 面板状态检测读取心跳并校验 pid 是否存活：Trae 已启用并连上后显示“MCP 已接入 · Trae”，不再只停留在“已配置”
+- 面板自检客户端 `quality-center-panel` 不写心跳，避免把自检误判成 IDE 已接入
+- 心跳文件不进版本库，只作为本地接入证据
+
 ## 0.27.32
 
 - 工具面板新增 MCP 状态条：`未配置 / 已配置 / 已就绪 / 异常`，显示识别到的编辑器、配置文件和工具数

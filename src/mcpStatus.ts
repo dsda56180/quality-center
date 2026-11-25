@@ -31,6 +31,37 @@ interface ConfigHit {
   registered: boolean;
 }
 
+interface ClientHeartbeat {
+  client: string;
+  version?: string;
+  pid?: number;
+  at?: number;
+  tools?: number;
+}
+
+function readClientHeartbeat(root: string): ClientHeartbeat | undefined {
+  const file = path.join(root, '.quality-center', 'mcp-client.json');
+  if (!fs.existsSync(file)) {
+    return undefined;
+  }
+  try {
+    const data = JSON.parse(fs.readFileSync(file, 'utf8')) as ClientHeartbeat;
+    if (!data.client || /quality-center|panel/i.test(data.client)) {
+      return undefined;
+    }
+    if (typeof data.pid === 'number') {
+      try {
+        process.kill(data.pid, 0);
+      } catch {
+        return undefined;
+      }
+    }
+    return data;
+  } catch {
+    return undefined;
+  }
+}
+
 function inspectConfig(root: string): ConfigHit | undefined {
   for (const candidate of CONFIG_CANDIDATES) {
     const file = path.join(root, candidate.file);
@@ -163,6 +194,18 @@ export async function probeMcp(root: string): Promise<McpStatus> {
 
   const tools = await probeServer(root, launcher);
   if (tools && tools > 0) {
+    const heartbeat = readClientHeartbeat(root);
+    if (heartbeat) {
+      const time = heartbeat.at ? new Date(heartbeat.at).toLocaleTimeString() : '未知时间';
+      return {
+        state: 'ready',
+        label: `MCP 已接入 · ${heartbeat.client}`,
+        detail: `${heartbeat.client} 已于 ${time} 完成 MCP 握手，服务提供 ${tools} 个工具；面板可以直接让 AI 调 quality_agent_brief。`,
+        configFile: hit.file,
+        editor: hit.editor,
+        tools
+      };
+    }
     // Trae 的项目级 MCP 默认需要手动启用/信任，插件无法通过公开 API 读取这个开关；
     // 服务自检通过只能说明“已配置”，不能替 IDE 宣称“AI 已能搜到工具”。
     const needsClientEnable = hit.editor === 'Trae';
