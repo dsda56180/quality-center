@@ -134,6 +134,14 @@ export class ScanRunner {
     killRunningCommands();
   }
 
+  /** 外部（MCP / CLI）改了 issues.json：丢掉内存结果，从仓库事实源重载 */
+  reloadLedger(): void {
+    this.lastResult = undefined;
+    this.ledgerLoaded = false;
+    this.cacheLoaded = false;
+    this.loadLedger();
+  }
+
   private waitForResume(): Promise<void> {
     return new Promise((resolve) => this.resumeWaiters.push(resolve));
   }

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.27.37
+
+- 新增运行状态层：`.quality-center/run-state.json` + `events.jsonl`，MCP/CLI 每次工具调用都写 `tool.start/tool.end`，固定阶段机 `baseline_build → baseline_scan → fix → plan → apply → static_fix → rescan → finalize`；面板只读投影，不再维护第二份状态
+- 面板实时联动：监听 `run-state.json` / 事件 / issues / 计划 / build-result / pom，250ms 防抖重建台账；顶部显示“AI 执行中 / 阶段 / 最近工具 / 多久前更新”，卡住、策略阻塞、测试跳过、pom drift 都有提示；AI 运行中面板写操作锁定并置灰
+- 构建契约：`build-result.json` 增加 `planId / drift / tests`；pom 偏离活动计划直接拒绝构建；策略新增 `runTests`（默认 true），强制覆盖 pom 的 `maven.test.skip=true`，并读 surefire 报告区分 `executed / skipped`
+- 计划/apply 门禁：新建计划要求当前 pom 的成功构建记录；旧计划里需要新增 `dependencyManagement` 的候选在 apply/check/next 阶段统一跳过并列为策略阻塞，不再只靠 plan 阶段过滤
+- 新增 `quality_finalize`：由插件从基线快照、当前 issues、plan steps、build-result 计算修复前/后、按来源变化、首次可见、计划进度、构建/测试与阻塞，写 `final-report.json / final-report.md`；AI 只转述
+- 新增 `quality_phase`：AI 进入静态修复/复扫时显式推进阶段，面板不再把手工改代码阶段显示成“依赖落盘”
+- 新增确定性修复审计：`quality_fix write=true` 同步保存 before 快照、patch、`fix-result.json`（含 before/after 哈希）；新增 `quality_fix_rollback`，修复后又被改过的文件拒绝覆盖
+- 新增 MCP 调用审计 `.quality-center/mcp-calls.jsonl`；`integrate` 为已有策略补齐新键；CLI 写操作也进入 RunState
+- 自检 119 通过 / 0 失败
+
 ## 0.27.36
 
 - 修复 Trae 等不展开 `${workspaceFolder}` 的客户端：MCP 配置改为项目内 `qc.cjs` 绝对路径并带 `cwd`；面板检测到配置里残留字面量变量时显示 `broken`（“MCP 配置未展开变量”）

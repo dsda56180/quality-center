@@ -57,6 +57,35 @@ export interface SnapshotNext {
 
 export interface Snapshot {
   type: 'state';
+  /** AI / CLI 当前运行态：由扩展读 .quality-center/run-state.json 投影，面板不自己维护 */
+  run?: {
+    runId: string;
+    mode: string;
+    phase: string;
+    status: string;
+    actor: { kind: string; client?: string; tool?: string };
+    startedAt: string;
+    updatedAt: string;
+    ageSeconds: number;
+    stalled: boolean;
+    lastTool?: string;
+    lastToolOk?: boolean;
+    lastToolError?: string;
+    planId?: string;
+    blocked: { code: string; message: string; suggestion?: string }[];
+    lastScan?: { at?: string; total: number; bySource: Record<string, number> };
+    build?: {
+      at: string;
+      ok: boolean;
+      planId?: string;
+      drift?: boolean;
+      tests?: string;
+      seconds?: number;
+      gate?: string;
+    };
+    active: boolean;
+    revision: string;
+  };
   scanning: boolean;
   /** 唯一状态机：现在到哪、下一步只做什么 */
   next?: SnapshotNext;
@@ -560,7 +589,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架', dependency: '依赖', secret: '密钥', manual: '人工' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { scanning: false, paused: false, deepFix: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, qcsec: true, astgrep: true, scanOnSave: true, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
+  let state = { run: null, scanning: false, paused: false, deepFix: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, qcsec: true, astgrep: true, scanOnSave: true, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
   let activeTab = 'all';
   /** 各来源分组的折叠状态，跨渲染保留 */
   let collapsed = {};
@@ -847,6 +876,28 @@ export function getHtml(nonce: string): string {
   /** 面板顶部的提示行：进行中的长任务 + 扫描异常 + 已跳过的扫描器 */
   function renderNotice() {
     const notes = [];
+    if (state.run && (state.run.active || state.run.status === 'blocked' || state.run.status === 'needs_confirm')) {
+      var phaseLabel = ({
+        baseline_build: '基线构建', baseline_scan: '基线扫描', fix: '确定性修复', plan: '依赖计划',
+        apply: '依赖落盘', static_fix: '静态修复', rescan: '复扫', finalize: '收尾',
+        done: '已完成', blocked: '已阻塞', needs_confirm: '待确认', paused: '已暂停', idle: '空闲'
+      })[state.run.phase] || state.run.phase;
+      var actor = state.run.actor || {};
+      var who = actor.kind === 'mcp' ? 'AI（' + (actor.client || 'MCP') + '）' : actor.kind === 'panel' ? '面板' : actor.kind === 'cli' ? 'CLI' : '外部';
+      var age = state.run.updatedAt ? Math.max(0, Math.floor((Date.now() - Date.parse(state.run.updatedAt)) / 1000)) : Math.max(0, Number(state.run.ageSeconds || 0));
+      var stalled = state.run.stalled || (state.run.status === 'running' && age > (/^(quality_build|quality_scan|quality_fix|quality_upgrade_apply|quality_upgrade_plan)$/.test(state.run.lastTool || '') ? 600 : 90));
+      notes.push('🤖 ' + who + '执行中 · ' + phaseLabel + ' · ' + age + ' 秒前更新' +
+        (state.run.lastTool ? ' · 最近工具 ' + esc(state.run.lastTool) : ''));
+      if (stalled) notes.push('⚠ 已较长时间没有工具活动，可能卡住；可在 AI 窗口继续或接管。');
+      if (state.run.lastToolError) notes.push('⚠ 最近一次工具失败：' + esc(state.run.lastToolError));
+      (state.run.blocked || []).slice(0, 3).forEach(function (b) { notes.push('⛔ ' + esc(b.message)); });
+      if (state.run.build && state.run.build.tests === 'skipped') {
+        notes.push('⚠ 最近构建跳过了测试：构建成功不等于测试通过。');
+      }
+      if (state.run.build && state.run.build.drift) {
+        notes.push('⛔ 最近构建发现 pom 已偏离活动计划，结果不可作为验收证据。');
+      }
+    }
     if (state.task) {
       var sec = Math.max(0, Math.floor((Date.now() - state.task.startedAt) / 1000));
       notes.push('⏳ ' + esc(state.task.label) + '：' + esc(state.task.stage) + ' · 已用 ' + sec + ' 秒');
@@ -1030,7 +1081,9 @@ export function getHtml(nonce: string): string {
       upgradeBtn.style.display = state.upgradeEnabled === false ? 'none' : '';
     }
     var deep = state.deepFix;
-    var busy = !!state.scanning || !!deep;
+    var runBusy = !!state.run && state.run.status === 'running' &&
+      (!state.run.updatedAt || Date.now() - Date.parse(state.run.updatedAt) < 30 * 60 * 1000);
+    var busy = !!state.scanning || !!deep || runBusy;
     ['scan', 'deepfix', 'upgrade'].forEach(function (id) {
       var button = document.getElementById(id);
       if (button) {
@@ -1591,7 +1644,7 @@ export function getHtml(nonce: string): string {
     }
   });
   setInterval(function () {
-    if (state.task) {
+    if (state.task || (state.run && ['running', 'blocked', 'needs_confirm'].indexOf(state.run.status) >= 0)) {
       renderNotice();
     }
     if (!state.scanning && !state.deepFix) {

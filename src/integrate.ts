@@ -64,6 +64,17 @@ const NESTED_GITIGNORE = [
   '# 由 quality-center 生成：本目录只提交策略、启动器与技能，其余是运行产物',
   'issues.json',
   'scan-digest.json',
+  'scan-baseline.json',
+  'run-state.json',
+  'events.jsonl',
+  'mcp-calls.jsonl',
+  'mcp-client.json',
+  'build-result.json',
+  'final-report.json',
+  'final-report.md',
+  'fix-result.json',
+  'fix/',
+  'handoff.md',
   'build.log',
   'report.md',
   'report.sarif',
@@ -302,7 +313,28 @@ export function integrate(root: string, options: IntegrateOptions): IntegrateRes
   // 1. 单一事实源
   const policyFile = path.join(root, POLICY_REL);
   if (fs.existsSync(policyFile)) {
-    record(policyFile, 'unchanged');
+    // 已有策略只补缺失键（例如新加的 runTests / allowDependencyManagement），不覆盖用户调过的值
+    try {
+      const current = JSON.parse(fs.readFileSync(policyFile, 'utf8')) as Record<string, unknown>;
+      const defaults = defaultPolicyDocument(root) as unknown as Record<string, unknown>;
+      const missing = Object.keys(defaults).filter(
+        (key) => defaults[key] !== undefined && !(key in current)
+      );
+      if (missing.length === 0) {
+        record(policyFile, 'unchanged');
+      } else if (check) {
+        record(policyFile, 'drift');
+        notes.push(`策略缺少新键：${missing.join(', ')}；执行 integrate 可补默认值`);
+      } else {
+        const merged = { ...defaults, ...current };
+        fs.writeFileSync(policyFile, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+        record(policyFile, 'updated');
+        notes.push(`已为已有策略补齐新键：${missing.join(', ')}（保留原值）`);
+      }
+    } catch {
+      record(policyFile, 'drift');
+      notes.push('upgrade-policy.json 不是合法 JSON，未自动覆盖；请手工修复');
+    }
   } else if (check) {
     record(policyFile, 'missing');
   } else {

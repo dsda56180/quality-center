@@ -30,6 +30,12 @@ export interface UpgradePolicy {
   /** 单测是否在跨大版本升级时强制开启 */
   runTestsOnNextLine: boolean;
   /**
+   * 构建时是否真的执行测试。
+   * 默认 true：项目 pom 里的 maven.test.skip / skipTests 会被显式覆盖，
+   * 避免“构建成功”被误解为“测试通过”。
+   */
+  runTests: boolean;
+  /**
    * 是否允许通过新增 <dependencyManagement> 固定传递依赖/CVE 修复版本。
    * 默认 false：传递依赖的 CVE 只报告，不自动写 pom，避免引入未经验证的版本组合。
    */
@@ -65,6 +71,7 @@ export const DEFAULT_POLICY: UpgradePolicy = {
   buildGate: 'package',
   mavenArgs: [],
   runTestsOnNextLine: true,
+  runTests: true,
   allowDependencyManagement: false
 };
 
@@ -155,6 +162,9 @@ export function loadPolicy(root: string, pom?: string): LoadedPolicy {
     if (typeof obj.runTestsOnNextLine === 'boolean') {
       policy.runTestsOnNextLine = obj.runTestsOnNextLine;
     }
+    if (typeof obj.runTests === 'boolean') {
+      policy.runTests = obj.runTests;
+    }
     if (typeof obj.allowDependencyManagement === 'boolean') {
       policy.allowDependencyManagement = obj.allowDependencyManagement;
     }
@@ -217,16 +227,20 @@ export function defaultPolicyDocument(root: string): UpgradePolicy & { schemaVer
     buildGate: loaded.policy.buildGate,
     mavenArgs: loaded.policy.mavenArgs,
     runTestsOnNextLine: loaded.policy.runTestsOnNextLine,
+    runTests: loaded.policy.runTests,
     allowDependencyManagement: loaded.policy.allowDependencyManagement
   };
 }
 
 /** 构建命令：按门禁级别与 mavenArgs 生成，供 CLI / MCP / 适配器共用 */
 export function buildCommandArgs(policy: UpgradePolicy, options?: { skipTests?: boolean }): string[] {
-  const skipTests = options?.skipTests ?? policy.buildGate !== 'test';
+  const skipTests = options?.skipTests ?? !policy.runTests;
   const args = ['-B', '-q', ...policy.mavenArgs];
   if (skipTests) {
-    args.push('-Dmaven.test.skip=true');
+    args.push('-DskipTests');
+  } else {
+    // 项目 pom 可能自己写了 maven.test.skip=true，必须显式覆盖，否则“构建成功”会掩盖测试未执行
+    args.push('-Dmaven.test.skip=false', '-DskipTests=false');
   }
   args.push(policy.buildGate === 'compile' ? 'compile' : policy.buildGate === 'test' ? 'test' : 'package');
   return args;

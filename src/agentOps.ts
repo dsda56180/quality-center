@@ -21,6 +21,8 @@ import { applyFixesToContent, FIXABLE_RULES } from './fixerCore';
 import { Issue, IssueSource, ScanResult, Severity } from './model';
 import { EXTERNAL_TOOLS, installLocation, installPlan, ToolId } from './tools';
 import { loadPolicy } from './upgradePolicy';
+import { readRunState, recordBuild as recordRunBuild, recordFix as recordRunFix, recordScan as recordRunScan } from './runState';
+import { ensureScanBaseline } from './scanDigest';
 
 export const PACKAGE_ROOT = path.resolve(__dirname, '..');
 
@@ -73,6 +75,8 @@ export interface ScanRequest {
   mute?: string[];
   /** 同文件聚合（medium 及以下） */
   aggregate?: boolean;
+  /** 内部预检（例如修复前只扫 checkstyle）不要记录运行状态/基线 */
+  recordRun?: boolean;
   onProgress?: (event: AgentScanEvent) => void;
 }
 
@@ -112,6 +116,15 @@ export async function scanProject(request: ScanRequest): Promise<ScanOutcome> {
         };
   const payload = buildPayload(result, request.root, exported);
   const exitCode = payload.missingTools.length > 0 ? 2 : exitCodeFor(result, request.failOn ?? 'high');
+  const runState = readRunState(request.root);
+  if (request.recordRun !== false && runState && runState.status !== 'done') {
+    ensureScanBaseline(request.root, payload);
+    recordRunScan(request.root, {
+      generatedAt: payload.generatedAt,
+      total: payload.issues.length,
+      bySource: Object.fromEntries(SOURCES.map((source) => [source, Number(payload.summary[source] ?? 0)]))
+    });
+  }
   return {
     result,
     payload,
@@ -127,6 +140,14 @@ export interface BuildError {
   message: string;
 }
 
+export interface TestSummary {
+  state: 'executed' | 'skipped' | 'none';
+  total: number;
+  failures: number;
+  errors: number;
+  skipped: number;
+}
+
 export interface BuildOutcome {
   ok: boolean;
   code: number;
@@ -140,6 +161,11 @@ export interface BuildOutcome {
   logFile?: string;
   /** 本次实际使用的门禁（compile / package / test） */
   gate?: string;
+  /** 测试是否真的执行；skipped 时不能把构建成功当作测试通过 */
+  tests?: TestSummary;
+  /** pom 已偏离活动计划时拒绝构建，防止手工改 pom 被“构建成功”洗白 */
+  drift?: boolean;
+  planId?: string;
 }
 
 /** 把 Maven 输出拆成结构化编译错误，便于定向修复 */
@@ -208,6 +234,9 @@ function recordBuild(root: string, outcome: BuildOutcome, gate: string, args: st
           pomHash: pomHashOf(root),
           gate,
           args,
+          planId: outcome.planId,
+          drift: outcome.drift === true,
+          tests: outcome.tests,
           logFile: outcome.logFile ? path.relative(root, outcome.logFile) : undefined
         },
         null,
@@ -218,7 +247,49 @@ function recordBuild(root: string, outcome: BuildOutcome, gate: string, args: st
   } catch {
     // 台账写不进去不影响构建本身
   }
+  recordRunBuild(root, {
+    ok: outcome.ok,
+    planId: outcome.planId,
+    drift: outcome.drift === true,
+    tests: outcome.tests?.state,
+    seconds: outcome.seconds,
+    gate
+  });
   return outcome;
+}
+
+/** 读 surefire 报告，确定测试到底跑了没有 */
+function readTestSummary(root: string, expectedSkip: boolean): TestSummary {
+  if (expectedSkip) {
+    return { state: 'skipped', total: 0, failures: 0, errors: 0, skipped: 0 };
+  }
+  const dir = path.join(root, 'target', 'surefire-reports');
+  if (!fs.existsSync(dir)) {
+    return { state: 'none', total: 0, failures: 0, errors: 0, skipped: 0 };
+  }
+  let total = 0;
+  let failures = 0;
+  let errors = 0;
+  let skipped = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.xml')) {
+      continue;
+    }
+    try {
+      const xml = fs.readFileSync(path.join(dir, entry.name), 'utf8').slice(0, 4000);
+      const attr = (name: string): number => {
+        const match = new RegExp(`\\b${name}="(\\d+)"`).exec(xml);
+        return match ? Number(match[1]) : 0;
+      };
+      total += attr('tests');
+      failures += attr('failures');
+      errors += attr('errors');
+      skipped += attr('skipped');
+    } catch {
+      // 单个报告坏掉不影响整体
+    }
+  }
+  return { state: total > 0 || failures > 0 || errors > 0 ? 'executed' : 'none', total, failures, errors, skipped };
 }
 
 /** 执行构建门禁；门禁级别与 mavenArgs 来自 .quality-center/upgrade-policy.json */
@@ -229,17 +300,68 @@ export async function buildProject(
   const loaded = loadPolicy(root);
   const gate = loaded.policy.buildGate;
   const goal = gate === 'compile' ? 'compile' : gate === 'test' ? 'test' : 'package';
+  const testsEnabled = loaded.policy.runTests && goal !== 'compile';
   const args = ['-B', ...loaded.policy.mavenArgs];
-  if (goal !== 'test') {
+  if (testsEnabled) {
+    // 项目 pom 可能自己写了 maven.test.skip=true，必须显式覆盖
+    args.push('-Dmaven.test.skip=false', '-DskipTests=false');
+  } else {
     args.push('-DskipTests');
   }
   args.push(goal);
+  if (testsEnabled) {
+    // 先清掉上一轮 surefire，避免旧报告把“本次没跑测试”伪装成 executed
+    try {
+      fs.rmSync(path.join(root, 'target', 'surefire-reports'), { recursive: true, force: true });
+    } catch {
+      // target 不可写时交给构建本身报错
+    }
+  }
+
+  let planId: string | undefined;
+  let drift = false;
+  try {
+    const { checkUpgradePlan } = await import('./upgradePlanFile');
+    const check = checkUpgradePlan(root);
+    planId = check.planId;
+    drift = check.state === 'drift';
+  } catch {
+    // 没有计划：普通构建
+  }
+  if (drift) {
+    return recordBuild(
+      root,
+      {
+        ok: false,
+        code: 2,
+        seconds: 0,
+        jars: [],
+        tail: `pom 已偏离活动计划 ${planId ?? ''}：拒绝构建，先 upgrade check / revert / plan --replace`,
+        gate,
+        drift: true,
+        planId,
+        tests: readTestSummary(root, !testsEnabled)
+      },
+      gate,
+      args
+    );
+  }
 
   const mvn = resolveBinary('mvn');
   if (!mvn) {
     return recordBuild(
       root,
-      { ok: false, code: 2, seconds: 0, jars: [], tail: '没有找到 mvn，先执行 tools install mvn', gate },
+      {
+        ok: false,
+        code: 2,
+        seconds: 0,
+        jars: [],
+        tail: '没有找到 mvn，先执行 tools install mvn',
+        gate,
+        drift,
+        planId,
+        tests: readTestSummary(root, !testsEnabled)
+      },
       gate,
       args
     );
@@ -278,7 +400,10 @@ export async function buildProject(
         tail: tailLines(outcome.stdout, outcome.stderr, 8),
         errors,
         logFile,
-        gate
+        gate,
+        drift,
+        planId,
+        tests: readTestSummary(root, !testsEnabled)
       },
       gate,
       args
@@ -286,7 +411,17 @@ export async function buildProject(
   }
   return recordBuild(
     root,
-    { ok: true, code: 0, seconds, jars: artifactJars(root), tail: '', gate },
+    {
+      ok: true,
+      code: 0,
+      seconds,
+      jars: artifactJars(root),
+      tail: '',
+      gate,
+      drift,
+      planId,
+      tests: readTestSummary(root, !testsEnabled)
+    },
     gate,
     args
   );
@@ -460,6 +595,58 @@ export interface FixOutcome {
   files: FileFix[];
   /** 拍平后的提示，例如没有可修项 */
   note: string;
+  /** 写入后的审计目录；dry-run 没有 */
+  fixId?: string;
+  auditFile?: string;
+}
+
+interface FixFileRecord {
+  file: string;
+  rel: string;
+  beforeCopy: string;
+  beforeHash: string;
+  afterHash: string;
+  applied: number;
+  skipped: number;
+  changes: { line: number; rule: string; kind: 'replace' | 'delete' }[];
+}
+
+interface FixAudit {
+  fixId: string;
+  at: string;
+  mode: 'write';
+  applied: number;
+  skipped: number;
+  files: FixFileRecord[];
+}
+
+function hashText(text: string): string {
+  return `sha256:${crypto.createHash('sha256').update(text, 'utf8').digest('hex')}`;
+}
+
+/** 只做审计用的行级差异摘要，不替代 git diff，但能看出改了哪几行 */
+function renderPatch(rel: string, before: string, after: string): string {
+  const beforeLines = before.split(/\r?\n/);
+  const afterLines = after.split(/\r?\n/);
+  const lines = [`--- a/${rel}`, `+++ b/${rel}`];
+  const max = Math.max(beforeLines.length, afterLines.length);
+  let changed = 0;
+  for (let index = 0; index < max && changed < 40; index += 1) {
+    const oldLine = beforeLines[index];
+    const newLine = afterLines[index];
+    if (oldLine === newLine) {
+      continue;
+    }
+    changed += 1;
+    lines.push(`@@ ${index + 1} @@`);
+    if (oldLine !== undefined) {
+      lines.push(`-${oldLine}`);
+    }
+    if (newLine !== undefined) {
+      lines.push(`+${newLine}`);
+    }
+  }
+  return `${lines.join('\n')}\n`;
 }
 
 function absoluteIssueFile(root: string, file: string): string {
@@ -475,7 +662,14 @@ export async function fixProject(
   write: boolean,
   onProgress?: (event: AgentScanEvent) => void
 ): Promise<FixOutcome> {
-  const scan = await scanProject({ root, exportFiles: false, failOn: 'none', onProgress });
+  const scan = await scanProject({
+    root,
+    only: ['checkstyle'],
+    exportFiles: false,
+    failOn: 'none',
+    recordRun: false,
+    onProgress
+  });
   const targets = scan.result.issues.filter(
     (issue: Issue) => FIXABLE_RULES.has(issue.rule) && issue.file && (issue.line ?? 0) > 0
   );
@@ -489,8 +683,11 @@ export async function fixProject(
   }
 
   const files: FileFix[] = [];
+  const records: FixFileRecord[] = [];
   let applied = 0;
   let skipped = 0;
+  const fixId = `fix-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}`;
+  const fixDir = path.join(root, '.quality-center', 'fix', fixId);
 
   for (const [file, list] of byFile) {
     if (!fs.existsSync(file)) {
@@ -504,27 +701,119 @@ export async function fixProject(
     if (outcome.applied === 0) {
       continue;
     }
+    const rel = path.relative(root, file).split(path.sep).join('/');
     if (write) {
+      const before = path.join(fixDir, 'before', rel);
+      fs.mkdirSync(path.dirname(before), { recursive: true });
+      fs.writeFileSync(before, original, 'utf8');
+      fs.writeFileSync(path.join(fixDir, 'patches', `${rel.replace(/[\\/]/g, '__')}.patch`), renderPatch(rel, original, outcome.content), 'utf8');
       fs.writeFileSync(file, outcome.content, 'utf8');
+      records.push({
+        file,
+        rel,
+        beforeCopy: path.relative(root, before).split(path.sep).join('/'),
+        beforeHash: hashText(original),
+        afterHash: hashText(outcome.content),
+        applied: outcome.applied,
+        skipped: outcome.skipped,
+        changes: outcome.changes
+      });
     }
     files.push({
       file,
-      rel: path.relative(root, file).split(path.sep).join('/'),
+      rel,
       applied: outcome.applied,
       skipped: outcome.skipped,
       changes: outcome.changes
     });
   }
 
+  if (write && records.length > 0) {
+    const audit: FixAudit = {
+      fixId,
+      at: new Date().toISOString(),
+      mode: 'write',
+      applied,
+      skipped,
+      files: records
+    };
+    const auditFile = path.join(fixDir, 'fix-result.json');
+    fs.mkdirSync(path.dirname(auditFile), { recursive: true });
+    fs.writeFileSync(auditFile, `${JSON.stringify(audit, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(path.join(root, '.quality-center', 'fix-result.json'), `${JSON.stringify(audit, null, 2)}\n`, 'utf8');
+  }
+
+  recordRunFix(root, {
+    applied,
+    skipped,
+    files: files.length,
+    mode: write ? 'write' : 'dry-run',
+    fixId: write && records.length > 0 ? fixId : undefined
+  });
   return {
     mode: write ? 'write' : 'dry-run',
     targets: targets.length,
     applied,
     skipped,
     files,
+    fixId: write && records.length > 0 ? fixId : undefined,
+    auditFile: write && records.length > 0 ? `.quality-center/fix/${fixId}/fix-result.json` : undefined,
     note:
       targets.length === 0
         ? '没有命中可确定性修复的规则（UnusedImports / RedundantImport / ModifierOrder / SimplifyBooleanExpression）'
         : ''
   };
+}
+
+export interface FixRollbackResult {
+  ok: boolean;
+  fixId: string;
+  restored: string[];
+  refused: { file: string; reason: string }[];
+  reason?: string;
+}
+
+/**
+ * 回滚确定性修复：当前文件必须仍是修复后的内容才允许覆盖，手工改过的文件拒绝，
+ * 避免“回滚”把用户/AI 后续的修改一起抹掉。
+ */
+export function rollbackFixProject(root: string, fixId: string): FixRollbackResult {
+  const dir = path.join(root, '.quality-center', 'fix', fixId);
+  const result: FixRollbackResult = { ok: false, fixId, restored: [], refused: [] };
+  try {
+    const audit = JSON.parse(fs.readFileSync(path.join(dir, 'fix-result.json'), 'utf8')) as FixAudit;
+    for (const entry of audit.files) {
+      const currentFile = path.resolve(root, entry.rel);
+      const beforeFile = path.resolve(root, entry.beforeCopy);
+      if (!fs.existsSync(beforeFile)) {
+        result.refused.push({ file: entry.rel, reason: '缺少修复前快照' });
+        continue;
+      }
+      const before = fs.readFileSync(beforeFile, 'utf8');
+      if (fs.existsSync(currentFile)) {
+        const current = fs.readFileSync(currentFile, 'utf8');
+        if (hashText(current) !== entry.afterHash && hashText(current) !== entry.beforeHash) {
+          result.refused.push({ file: entry.rel, reason: '文件在修复后又被改动，拒绝覆盖' });
+          continue;
+        }
+        if (hashText(current) === entry.beforeHash) {
+          result.restored.push(entry.rel);
+          continue;
+        }
+      }
+      fs.mkdirSync(path.dirname(currentFile), { recursive: true });
+      fs.writeFileSync(currentFile, before, 'utf8');
+      result.restored.push(entry.rel);
+    }
+    result.ok = result.refused.length === 0;
+    result.reason = result.ok ? undefined : '部分文件已被后续修改，未回滚；请手工处理 refused 列表';
+    fs.writeFileSync(
+      path.join(dir, 'rollback-result.json'),
+      `${JSON.stringify({ at: new Date().toISOString(), ...result }, null, 2)}\n`,
+      'utf8'
+    );
+  } catch (error) {
+    result.reason = `回滚失败：${error instanceof Error ? error.message : String(error)}`;
+  }
+  return result;
 }

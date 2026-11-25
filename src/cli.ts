@@ -33,6 +33,7 @@ import { buildNextAction } from './nextAction';
 import { explainBuildFailure } from './explain';
 import { integrate } from './integrate';
 import { buildAgentPrompt } from './agentPrompt';
+import { beginRun, beginTool, endTool, finishRun, readRunState, setRunActor } from './runState';
 
 const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 CI 用的无界面接口
 
@@ -449,10 +450,10 @@ async function upgradeCommand(args: Args): Promise<number> {
       progress('还没有扫描结果：先执行 scan（或 scan --only trivy），再生成升级计划');
       return 2;
     }
-    if (args.flags['--reuse'] !== true && args.flags['--replace'] !== true) {
+    if (args.flags['--replace'] !== true) {
       try {
         const active = checkUpgradePlan(root);
-        if (active.state === 'pending' || active.state === 'partial') {
+        if (active.state === 'partial' || (active.state === 'pending' && args.flags['--reuse'] !== true)) {
           progress(
             `已有进行中的升级计划 ${active.planId}（${active.appliedCount ?? 0}/${active.total ?? '?'}）。` +
               '先继续 apply / check，确需替换再加 --replace。'
@@ -742,12 +743,7 @@ async function statusCommand(args: Args): Promise<number> {
   return 0;
 }
 
-async function main(): Promise<number> {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.flags['--version'] === true || args.command === 'version') {
-    process.stdout.write(`${packageVersion()}\n`);
-    return 0;
-  }
+async function dispatch(args: ReturnType<typeof parseArgs>): Promise<number> {
   switch (args.command) {
     case 'scan':
       return scanCommand(args);
@@ -784,6 +780,39 @@ async function main(): Promise<number> {
     default:
       process.stdout.write(HELP);
       return 3;
+  }
+}
+
+async function main(): Promise<number> {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.flags['--version'] === true || args.command === 'version') {
+    process.stdout.write(`${packageVersion()}\n`);
+    return 0;
+  }
+  const root = targetRoot(args);
+  const writes = new Set(['scan', 'build', 'fix', 'upgrade', 'integrate']);
+  const tracked = writes.has(args.command) && fs.existsSync(root) && args.command !== 'integrate';
+  const startedAt = Date.now();
+  if (tracked) {
+    setRunActor({ kind: 'cli' });
+    if (!readRunState(root)) {
+      beginRun(root, 'manual');
+    }
+    beginTool(root, `cli:${args.command}`, { root });
+  }
+  let code = 3;
+  try {
+    code = await dispatch(args);
+    return code;
+  } finally {
+    if (tracked) {
+      endTool(root, `cli:${args.command}`, {
+        ok: code === 0 || code === 1,
+        durationMs: Date.now() - startedAt,
+        errorCode: code === 2 ? 'blocked' : undefined
+      });
+      finishRun(root, code === 2 ? 'blocked' : 'done');
+    }
   }
 }
 

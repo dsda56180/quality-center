@@ -20,6 +20,7 @@ import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '..
 import { loadPolicy } from '../upgradePolicy';
 import { buildAgentPrompt } from '../agentPrompt';
 import { McpStatus, probeMcp } from '../mcpStatus';
+import { readRunState, runSnapshot, setRunActor } from '../runState';
 import {
   applyUpgradePlan,
   checkUpgradePlan,
@@ -237,6 +238,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     active: []
   };
   private output?: vscode.OutputChannel;
+  /** 外部 MCP/CLI 改动 .quality-center 时，面板靠监听文件回到同一份事实 */
+  private watchers: vscode.Disposable[] = [];
+  private watchRoot = '';
+  private watchTimer?: NodeJS.Timeout;
+  private lastRunRevision = '';
   /** MCP 接入状态：面板只显示缓存，真正的检测由按钮/初始化触发 */
   private mcpStatus: McpStatus = {
     state: 'checking',
@@ -246,10 +252,87 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   /** 本次面板会话只提醒一次，避免每次 push 都弹 */
   private mcpPrompted = false;
 
-  constructor(private readonly runner: ScanRunner) {}
+  constructor(private readonly runner: ScanRunner) {
+    setRunActor({ kind: 'panel' });
+  }
 
   dispose(): void {
+    this.disposeWatchers();
     this.output?.dispose();
+  }
+
+  private disposeWatchers(): void {
+    this.watchers.splice(0).forEach((watcher) => watcher.dispose());
+    this.watchRoot = '';
+    if (this.watchTimer) {
+      clearTimeout(this.watchTimer);
+      this.watchTimer = undefined;
+    }
+  }
+
+  /**
+   * 监听事实文件而不是监听 MCP 进程：MCP 与扩展是不同进程，文件是唯一稳定的事件总线。
+   * 写盘频繁时 250ms 合并成一次重建，避免面板被半截 JSON 或多次刷新打断。
+   */
+  private ensureWatchers(root: string): void {
+    if (!root || (this.watchRoot === root && this.watchers.length > 0)) {
+      return;
+    }
+    this.disposeWatchers();
+    this.watchRoot = root;
+    const patterns = [
+      '.quality-center/run-state.json',
+      '.quality-center/events.jsonl',
+      '.quality-center/mcp-calls.jsonl',
+      '.quality-center/issues.json',
+      '.quality-center/scan-digest.json',
+      '.quality-center/scan-baseline.json',
+      '.quality-center/build-result.json',
+      '.quality-center/handoff.md',
+      '.quality-center/upgrade/**/plan.json',
+      '.quality-center/upgrade/**/steps.json',
+      '.quality-center/upgrade/**/applied.json',
+      '.quality-center/upgrade/**/reverted.json',
+      'pom.xml'
+    ];
+    for (const pattern of patterns) {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(root, pattern)
+      );
+      const schedule = () => this.scheduleExternalRefresh();
+      watcher.onDidChange(schedule);
+      watcher.onDidCreate(schedule);
+      watcher.onDidDelete(schedule);
+      this.watchers.push(watcher);
+    }
+  }
+
+  private scheduleExternalRefresh(): void {
+    if (this.runner.isRunning || this.deepFixState) {
+      return;
+    }
+    if (this.watchTimer) {
+      clearTimeout(this.watchTimer);
+    }
+    this.watchTimer = setTimeout(() => {
+      this.watchTimer = undefined;
+      const root = this.runner.root();
+      if (!root) {
+        return;
+      }
+      this.runner.reloadLedger();
+      this.push();
+    }, 250);
+  }
+
+  /** AI 正在推进时，面板的写操作必须让位，避免两个写入口互相覆盖 */
+  private runLocked(): boolean {
+    const root = this.runner.root();
+    if (!root) {
+      return false;
+    }
+    const state = readRunState(root);
+    return !!state && state.status === 'running' && Date.now() - Date.parse(state.updatedAt) < 30 * 60_000;
   }
 
   private log(message: string): void {
@@ -285,6 +368,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     view.onDidDispose(() => {
       this.view = undefined;
     });
+    const root = this.runner.root();
+    if (root) {
+      this.ensureWatchers(root);
+    }
     this.push();
     void this.refreshMcpStatus();
     this.maybeDiscover();
@@ -300,6 +387,17 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     tool?: string;
     options?: ScanSettingsInput;
   }): Promise<void> {
+    const readOnly = new Set([
+      'copy', 'copyIssue', 'openAgent', 'copySuggestion', 'explainBuild', 'openHandoff',
+      'copyDrivePrompt', 'checkMcp', 'openMcpConfig', 'open', 'openLink', 'saveSettings',
+      'pauseScan', 'stopScan'
+    ]);
+    if (message.type && !readOnly.has(message.type) && this.runLocked()) {
+      void vscode.window.showWarningMessage(
+        'Trae AI 正在通过 MCP 执行质量任务，面板写操作已锁定；等 AI 当前阶段结束或接管后再操作。'
+      );
+      return;
+    }
     switch (message.type) {
       case 'installTool':
         if (message.tool) {
@@ -2581,6 +2679,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     const result = this.runner.result;
     const root = this.runner.root() ?? '';
+    if (root) {
+      this.ensureWatchers(root);
+    }
     const config = vscode.workspace.getConfiguration('qualityCenter');
     const toSnapshot = (issue: Issue, index: number): SnapshotIssue => {
       const relative = issue.file ? path.relative(root, issue.file) : '';
@@ -2623,6 +2724,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     const snapshot: Snapshot = {
       type: 'state',
+      run: root ? runSnapshot(root) : undefined,
       scanning: override ? override.scanning : this.runner.isRunning,
       paused: this.runner.isPaused,
       deepFix: this.deepFixState,

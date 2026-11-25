@@ -121,6 +121,8 @@ export interface ApplyPlanResult {
   nextGroup?: PlanGroup;
   /** 本次涉及跨大版本候选，需 allowCrossLine 才允许写 */
   crossLine?: string[];
+  /** 当前策略拒绝的候选，不会被写入 */
+  blocked?: { packageName: string; reason: string }[];
 }
 
 export interface RevertPlanResult {
@@ -141,6 +143,8 @@ export interface CheckPlanResult {
   appliedCount?: number;
   total?: number;
   nextGroup?: PlanGroup;
+  /** 当前策略拒绝、不能再落盘的候选（例如未授权 dependencyManagement） */
+  blocked?: { packageName: string; reason: string }[];
 }
 
 export function hashText(text: string): string {
@@ -734,8 +738,16 @@ export function applyUpgradePlan(
 
   const appliedBefore = new Set(steps.flatMap((step) => step.packages));
   selected = selected.filter((item) => !appliedBefore.has(item.packageName));
+  const policy = loadPolicy(root).policy;
+  const blocked = policyBlockedCandidates(plan, policy.allowDependencyManagement);
+  const blockedNames = new Set(blocked.map((item) => item.packageName));
+  const blockedNow = selected.filter((item) => blockedNames.has(item.packageName));
+  selected = selected.filter((item) => !blockedNames.has(item.packageName));
   const remainingGroups = PLAN_GROUP_ORDER.filter((name) =>
-    plan.candidates.some((item) => item.group === name && !appliedBefore.has(item.packageName))
+    plan.candidates.some(
+      (item) =>
+        item.group === name && !appliedBefore.has(item.packageName) && !blockedNames.has(item.packageName)
+    )
   );
   if (selected.length === 0) {
     return {
@@ -746,10 +758,14 @@ export function applyUpgradePlan(
       patch: '',
       applied: [],
       partial: remainingGroups.length > 0,
-      reason: '选中的候选已经在上一步落盘，无需重复写入',
+      reason:
+        blockedNow.length > 0
+          ? `策略拒绝 ${blockedNow.map((item) => item.packageName).join(', ')}：需要新增 dependencyManagement，当前策略未授权；已跳过，继续 ${remainingGroups[0] ?? '收尾'}`
+          : '选中的候选已经在上一步落盘，无需重复写入',
       hashBefore,
       hashAfter: hashBefore,
-      nextGroup: remainingGroups[0]
+      nextGroup: remainingGroups[0],
+      blocked
     };
   }
 
@@ -782,7 +798,10 @@ export function applyUpgradePlan(
   const appliedNames = selected.map((item) => item.packageName);
   const cumulative = [...appliedBefore, ...appliedNames];
   const nextGroup = PLAN_GROUP_ORDER.find((name) =>
-    plan.candidates.some((item) => item.group === name && !cumulative.includes(item.packageName))
+    plan.candidates.some(
+      (item) =>
+        item.group === name && !cumulative.includes(item.packageName) && !blockedNames.has(item.packageName)
+    )
   );
   const partial = !!nextGroup;
 
@@ -830,7 +849,8 @@ export function applyUpgradePlan(
     applied: appliedNames,
     partial,
     nextGroup,
-    crossLine: crossLinePkgs.length > 0 ? crossLinePkgs : undefined
+    crossLine: crossLinePkgs.length > 0 ? crossLinePkgs : undefined,
+    blocked: blocked.length > 0 ? blocked : undefined
   };
 }
 
@@ -871,6 +891,22 @@ export function revertUpgradePlan(root: string, planId?: string): RevertPlanResu
   return { ok: true, planId: plan.planId, hashBefore, hashAfter: hashText(restored) };
 }
 
+/** 当前策略下的不可落盘候选：manage 需要用 dependencyManagement，未授权时只报告 */
+function policyBlockedCandidates(
+  plan: UpgradePlanFile,
+  allowDependencyManagement: boolean
+): { packageName: string; reason: string }[] {
+  if (allowDependencyManagement) {
+    return [];
+  }
+  return plan.candidates
+    .filter((item) => item.mode === 'manage')
+    .map((item) => ({
+      packageName: item.packageName,
+      reason: '需新增 dependencyManagement 固定传递依赖，策略 allowDependencyManagement=false'
+    }));
+}
+
 /** CI 门禁：计划是否仍然有效、当前 pom 是否与计划一致 */
 export function checkUpgradePlan(root: string, planId?: string): CheckPlanResult {
   const plan = readUpgradePlan(root, planId);
@@ -880,10 +916,15 @@ export function checkUpgradePlan(root: string, planId?: string): CheckPlanResult
   const total = plan.candidates.length;
   const steps = readSteps(root, plan.planId);
   const appliedCount = new Set(steps.flatMap((step) => step.packages)).size;
-  const nextGroup = PLAN_GROUP_ORDER.find((name) => {
-    const applied = new Set(steps.flatMap((step) => step.packages));
-    return plan.candidates.some((item) => item.group === name && !applied.has(item.packageName));
-  });
+  const appliedNames = new Set(steps.flatMap((step) => step.packages));
+  const blocked = policyBlockedCandidates(plan, loadPolicy(root).policy.allowDependencyManagement);
+  const blockedNames = new Set(blocked.map((item) => item.packageName));
+  const nextGroup = PLAN_GROUP_ORDER.find((name) =>
+    plan.candidates.some(
+      (item) =>
+        item.group === name && !appliedNames.has(item.packageName) && !blockedNames.has(item.packageName)
+    )
+  );
   if (actualHash === plan.pomHash) {
     return {
       ok: false,
@@ -894,7 +935,8 @@ export function checkUpgradePlan(root: string, planId?: string): CheckPlanResult
       actualHash,
       appliedCount: 0,
       total,
-      nextGroup
+      nextGroup,
+      blocked
     };
   }
   if (actualHash !== plan.pomHashAfter) {
@@ -909,7 +951,8 @@ export function checkUpgradePlan(root: string, planId?: string): CheckPlanResult
         actualHash,
         appliedCount,
         total,
-        nextGroup
+        nextGroup,
+        blocked
       };
     }
     return {
@@ -944,6 +987,7 @@ export function checkUpgradePlan(root: string, planId?: string): CheckPlanResult
     expectedHash: plan.pomHashAfter,
     actualHash,
     appliedCount,
-    total
+    total,
+    blocked
   };
 }

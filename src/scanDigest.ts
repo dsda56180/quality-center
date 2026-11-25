@@ -12,9 +12,12 @@ export interface ScanDigest {
   generatedAt: string;
   total: number;
   keys: string[];
+  /** 生成时的按来源/严重度计数，用于基线/最终对比不靠 AI 自己数 */
+  summary?: Record<string, number>;
 }
 
 const DIGEST_REL = path.join('.quality-center', 'scan-digest.json');
+const BASELINE_REL = path.join('.quality-center', 'scan-baseline.json');
 
 function issueKey(issue: AgentIssue): string {
   return [issue.source, issue.rule, issue.package ?? '', issue.file ?? '', issue.line ?? 0].join('|');
@@ -33,6 +36,37 @@ export function readDigest(root: string): ScanDigest | undefined {
   }
 }
 
+export function readScanBaseline(root: string): ScanDigest | undefined {
+  try {
+    const file = path.join(root, BASELINE_REL);
+    if (!fs.existsSync(file)) {
+      return undefined;
+    }
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as ScanDigest;
+    return Array.isArray(parsed.keys) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 一次运行只认第一份基线：后续复扫不能把基线悄悄换成“刚扫完”的结果 */
+export function ensureScanBaseline(root: string, payload: AgentPayload): ScanDigest {
+  const existing = readScanBaseline(root);
+  if (existing) {
+    return existing;
+  }
+  const digest: ScanDigest = {
+    generatedAt: payload.generatedAt,
+    total: payload.issues.length,
+    summary: payload.summary,
+    keys: payload.issues.map(issueKey)
+  };
+  const file = path.join(root, BASELINE_REL);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(digest, null, 2)}\n`, 'utf8');
+  return digest;
+}
+
 function writeDigest(root: string, payload: AgentPayload): void {
   const file = path.join(root, DIGEST_REL);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -42,6 +76,7 @@ function writeDigest(root: string, payload: AgentPayload): void {
       {
         generatedAt: payload.generatedAt,
         total: payload.issues.length,
+        summary: payload.summary,
         keys: payload.issues.map(issueKey)
       },
       null,

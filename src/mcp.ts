@@ -14,6 +14,7 @@ import {
   packageVersion,
   parseBuildErrors,
   readReport,
+  rollbackFixProject,
   ReportFormat,
   scanProject,
   toolsStatusPayload
@@ -24,6 +25,7 @@ import {
   applyUpgradePlan,
   checkUpgradePlan,
   createUpgradePlan,
+  hashText,
   readIssues,
   revertUpgradePlan
 } from './upgradePlanFile';
@@ -32,6 +34,17 @@ import { projectStatus } from './status';
 import { buildNextAction } from './nextAction';
 import { buildAgentPrompt } from './agentPrompt';
 import { explainBuildFailure } from './explain';
+import { finalizeRun } from './finalize';
+import {
+  beginRun,
+  beginTool,
+  endTool,
+  patchRun,
+  readRunState,
+  setRunActor,
+  type RunMode,
+  type RunPhase
+} from './runState';
 
 interface RpcRequest {
   jsonrpc: '2.0';
@@ -68,6 +81,37 @@ function writeClientHeartbeat(event: string, detail?: Record<string, unknown>): 
   } catch {
     // 心跳失败不影响 MCP 主流程
   }
+}
+
+/** 调用审计：MCP 只保留最后一次心跳，长期任务需要逐次记录才能复盘“AI 到底做了什么” */
+function writeToolAudit(
+  root: string,
+  entry: { at: string; tool: string; ok: boolean; ms: number; blocked?: boolean; error?: string }
+): void {
+  try {
+    const dir = path.join(root, '.quality-center');
+    if (!fs.existsSync(dir)) {
+      return;
+    }
+    fs.appendFileSync(
+      path.join(dir, 'mcp-calls.jsonl'),
+      `${JSON.stringify({ client: clientInfo.name, pid: process.pid, ...entry })}\n`,
+      'utf8'
+    );
+  } catch {
+    // 审计失败不影响主流程
+  }
+}
+
+/** 只有非空 blocked 数组 / 明确状态才算阻塞，避免把 `"blocked":[]` 误判成失败 */
+function looksBlocked(text: string): boolean {
+  return (
+    /"blocked"\s*:\s*\[\s*[^\]\s]/.test(text) ||
+    /"state"\s*:\s*"blocked"/.test(text) ||
+    /"status"\s*:\s*"blocked"/.test(text) ||
+    /"needs-confirm"\s*:\s*true/.test(text) ||
+    /"requires-confirm"\s*:\s*true/.test(text)
+  );
 }
 
 const log = (message: string): void => {
@@ -191,7 +235,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'quality_build',
     description:
-      '执行 mvn -B -DskipTests package 生成 target 产物（Trivy 依赖清单与 SpotBugs 字节码扫描的前置条件），返回是否成功、耗时与 jar 列表，失败给末尾原因。',
+      '执行构建生成 target 产物（Trivy 依赖清单与 SpotBugs 字节码扫描的前置条件）。默认按策略跑测试；返回是否成功、耗时、tests 状态（executed/skipped）、pom 是否偏离活动计划（drift）与 jar 列表。drift=true 或 tests=skipped 时结果不能当作验收证据。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -244,6 +288,18 @@ const TOOLS: ToolDef[] = [
     }
   },
   {
+    name: 'quality_fix_rollback',
+    description:
+      '回滚某次确定性修复：从 .quality-center/fix/<fixId>/before/ 恢复文件，并校验文件仍是修复后的哈希；修复后又被手工改过的文件拒绝覆盖。fixId 缺省读 .quality-center/fix-result.json 的最近一次。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: PATH_PROP,
+        fixId: { type: 'string', description: '修复审计 ID，例如 fix-20261125165800；缺省使用最近一次' }
+      }
+    }
+  },
+  {
     name: 'quality_upgrade_plan',
     description:
       '生成依赖升级计划：只读 pom.xml 与扫描结果，把候选、分组、跳过原因与 pom 补丁（unified diff）落到 .quality-center/upgrade/<planId>/，不会修改 pom。默认只返回分组概览 + 当前首组候选（避免一次列出几十条），要看别的组传 group，要全量传 detail=full。pom 与扫描结果都没变且 plan 未落盘时传 reuse=true 会复用已有计划而不是新建。',
@@ -263,6 +319,11 @@ const TOOLS: ToolDef[] = [
           type: 'boolean',
           description:
             '明确允许在已有「进行中」计划上生成第二个计划；默认 false。autopilot 收尾阶段不应传 true；只有策略变更导致确实需要换计划时才用。'
+        },
+        allowUnbuilt: {
+          type: 'boolean',
+          description:
+            '允许在缺少当前 pom 成功构建记录时生成计划。autopilot 不应使用：没有构建会让 trivy/SpotBugs 口径不完整，计划会漏掉传递依赖。'
         }
       }
     }
@@ -319,6 +380,33 @@ const TOOLS: ToolDef[] = [
         planId: { type: 'string', description: '计划 ID，缺省取最新一份计划' }
       }
     }
+  },
+  {
+    name: 'quality_phase',
+    description:
+      '显式推进运行阶段（phase），让面板与事件日志知道 AI 现在做的是静态修复还是复扫。阶段：baseline_build / baseline_scan / fix / plan / apply / static_fix / rescan / finalize；只改状态，不执行动作。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: PATH_PROP,
+        phase: {
+          type: 'string',
+          enum: ['baseline_build', 'baseline_scan', 'fix', 'plan', 'apply', 'static_fix', 'rescan', 'finalize']
+        }
+      },
+      required: ['phase']
+    }
+  },
+  {
+    name: 'quality_finalize',
+    description:
+      '收尾验收：插件从固定的基线快照、当前 issues.json、计划 steps、build-result 计算修复前/后与按来源变化，写入 .quality-center/final-report.json / final-report.md。AI 直接转述，不要自己数。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: PATH_PROP
+      }
+    }
   }
 ];
 
@@ -347,6 +435,7 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       }
       const next = buildNextAction(root, { writeHandoff: true });
       const mode = params?.mode === 'autopilot' ? 'autopilot' : 'drive';
+      beginRun(root, mode as RunMode);
       return asText({
         prompt: buildAgentPrompt(root, { mode }),
         next
@@ -409,6 +498,9 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         exitCode: outcome.code,
         seconds: Number(outcome.seconds.toFixed(1)),
         gate: outcome.gate,
+        tests: outcome.tests,
+        drift: outcome.drift,
+        planId: outcome.planId,
         jars: outcome.jars,
         reason: outcome.tail,
         errors: outcome.errors ?? parseBuildErrors(outcome.tail),
@@ -478,6 +570,32 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
           : '这只是预览：确认无误后传 write=true 落盘'
       });
     }
+    case 'quality_fix_rollback': {
+      if (!fs.existsSync(root)) {
+        return asText({ error: `目录不存在：${root}` }, true);
+      }
+      let fixId = typeof params.fixId === 'string' ? params.fixId : '';
+      if (!fixId) {
+        try {
+          const latest = JSON.parse(fs.readFileSync(path.join(root, '.quality-center', 'fix-result.json'), 'utf8')) as {
+            fixId?: string;
+          };
+          fixId = latest.fixId ?? '';
+        } catch {
+          fixId = '';
+        }
+      }
+      if (!fixId) {
+        return asText({ error: '没有可回滚的修复记录：先执行 quality_fix write=true' }, true);
+      }
+      const result = rollbackFixProject(root, fixId);
+      patchRun(root, { phase: 'fix' }, 'fix.rollback', {
+        fixId,
+        restored: result.restored.length,
+        refused: result.refused.length
+      });
+      return asText({ ...result, nextStep: result.ok ? '已回滚：重新 quality_scan 确认计数' : '查看 refused 后手工处理' }, !result.ok);
+    }
     case 'quality_upgrade_plan': {
       if (!fs.existsSync(root)) {
         return asText({ error: `目录不存在：${root}` }, true);
@@ -486,10 +604,12 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       if (!fs.existsSync(issuesFile)) {
         return asText({ error: '还没有扫描结果：先调用 quality_scan（可只跑 trivy）' }, true);
       }
+      let reusablePlan = false;
       if (params.replace !== true) {
         try {
           const active = checkUpgradePlan(root);
-          if (active.state === 'pending' || active.state === 'partial') {
+          reusablePlan = true;
+          if (active.state === 'partial' || (active.state === 'pending' && params.reuse !== true)) {
             return asText(
               {
                 error: `已有进行中的升级计划 ${active.planId}（${active.appliedCount ?? 0}/${active.total ?? '?'}，下一组 ${active.nextGroup ?? '无'}）。先继续 apply 该计划或 revert，再考虑新计划；确需替换请传 replace=true。`,
@@ -500,6 +620,36 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
           }
         } catch {
           // 没有旧计划：继续正常生成
+        }
+      }
+      const activeRun = readRunState(root);
+      const runActive =
+        !!activeRun &&
+        activeRun.status !== 'done' &&
+        Date.now() - Date.parse(activeRun.updatedAt) < 30 * 60_000;
+      if (!reusablePlan && activeRun && runActive && activeRun.mode !== 'manual' && params.allowUnbuilt !== true) {
+        const currentHash = hashText(fs.readFileSync(path.join(root, 'pom.xml'), 'utf8'));
+        let build: { ok?: boolean; pomHash?: string; at?: string } | undefined;
+        try {
+          build = JSON.parse(fs.readFileSync(path.join(root, '.quality-center', 'build-result.json'), 'utf8')) as {
+            ok?: boolean;
+            pomHash?: string;
+            at?: string;
+          };
+        } catch {
+          build = undefined;
+        }
+        if (!build || build.ok !== true || build.pomHash !== currentHash) {
+          return asText(
+            {
+              error:
+                '当前 pom 还没有成功构建记录：先跑 quality_build，再生成升级计划。' +
+                '没有 target 时 trivy 只按源码解析、SpotBugs 为 0，计划会漏掉传递依赖，后面会逼出第二个计划。',
+              build: build ?? null,
+              currentPomHash: currentHash
+            },
+            true
+          );
         }
       }
       const issues = readIssues(root);
@@ -514,6 +664,18 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
           hint: '没有可升级的依赖，未生成计划。确认已跑全量 quality_scan；跨大版本项需人工评估。'
         });
       }
+      patchRun(
+        root,
+        { planId: result.plan.planId, phase: 'plan', status: 'running' },
+        'plan.created',
+        {
+          planId: result.plan.planId,
+          candidates: result.plan.candidates.length,
+          groups: result.plan.groups.map((group) => ({ name: group.name, total: group.candidates.length })),
+          skipped: result.plan.skipped.length,
+          reused: result.reused === true
+        }
+      );
       const detail = params.detail === 'full';
       const requestedGroup = typeof params.group === 'string' ? params.group : undefined;
       const shownGroup = requestedGroup ?? result.plan.groups[0]?.name;
@@ -591,6 +753,20 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
           true
         );
       }
+      if (write) {
+        patchRun(
+          root,
+          { planId: outcome.planId, phase: 'apply', status: 'running' },
+          'plan.applied',
+          {
+            planId: outcome.planId,
+            applied: outcome.applied,
+            partial: outcome.partial,
+            nextGroup: outcome.nextGroup,
+            hashAfter: outcome.hashAfter
+          }
+        );
+      }
       return asText({
         planId: outcome.planId,
         mode: outcome.mode,
@@ -602,9 +778,11 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         hashAfter: outcome.hashAfter,
         patch: write ? undefined : outcome.patch,
         nextStep: write
-          ? outcome.partial
-            ? `本组已落盘：先跑 quality_build 门禁，通过后再应用 ${outcome.nextGroup ?? '剩余'} 组；失败可调用 quality_upgrade_revert 回滚`
-            : '全部候选已落盘：跑 quality_build 后 quality_scan --only trivy 复扫，并用 quality_upgrade_check 确认 applied'
+          ? outcome.blocked && outcome.blocked.length > 0
+            ? `策略拒绝 ${outcome.blocked.map((item) => item.packageName).join(', ')}，已跳过；下一组 ${outcome.nextGroup ?? '收尾'}`
+            : outcome.partial
+              ? `本组已落盘：先跑 quality_build 门禁，通过后再应用 ${outcome.nextGroup ?? '剩余'} 组；失败可调用 quality_upgrade_revert 回滚`
+              : '全部候选已落盘：跑 quality_build 后 quality_scan --only trivy 复扫，并用 quality_upgrade_check 确认 applied'
           : '这是预览：确认 diff 无误后传 write=true 落盘'
       });
     }
@@ -626,6 +804,14 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
     case 'quality_upgrade_revert': {
       const planId = typeof params.planId === 'string' && params.planId.trim() ? params.planId.trim() : undefined;
       const outcome = revertUpgradePlan(root, planId);
+      if (outcome.ok) {
+        patchRun(
+          root,
+          { planId: outcome.planId, phase: 'plan', status: 'running' },
+          'plan.reverted',
+          { planId: outcome.planId, hashAfter: outcome.hashAfter }
+        );
+      }
       return asText(
         {
           ...outcome,
@@ -635,6 +821,27 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         },
         !outcome.ok
       );
+    }
+    case 'quality_phase': {
+      const phase = typeof params.phase === 'string' ? params.phase : '';
+      const allowed = ['baseline_build', 'baseline_scan', 'fix', 'plan', 'apply', 'static_fix', 'rescan', 'finalize'];
+      if (!allowed.includes(phase)) {
+        return asText({ error: `未知阶段：${phase}（可选 ${allowed.join(' / ')}）` }, true);
+      }
+      if (!readRunState(root)) {
+        return asText({ error: '当前没有运行记录：先调用 quality_agent_brief 启动一次运行' }, true);
+      }
+      const state = patchRun(
+        root,
+        { phase: phase as RunPhase },
+        'phase.changed',
+        { phase }
+      );
+      return asText({ ok: true, phase, runId: state?.runId, nextStep: '继续执行该阶段动作，不要只改状态不干活' });
+    }
+    case 'quality_finalize': {
+      const result = finalizeRun(root);
+      return asText(result, !result.ok);
     }
     default:
       return asText({ error: `未知工具：${name}` }, true);
@@ -678,11 +885,69 @@ async function handle(request: RpcRequest): Promise<void> {
         replyError(id, -32602, `未知工具：${name}`);
         return;
       }
+      const root = path.resolve(
+        typeof args.path === 'string' && args.path.trim() ? args.path : process.cwd()
+      );
+      const actor = {
+        kind: 'mcp' as const,
+        client: clientInfo.name,
+        tool: name
+      };
+      setRunActor(actor);
+      if (fs.existsSync(root)) {
+        if (name === 'quality_agent_brief') {
+          const mode: RunMode = args.mode === 'autopilot' ? 'autopilot' : 'drive';
+          beginRun(root, mode, { phase: 'baseline_build', actor });
+        }
+        const readOnlyTool = new Set([
+          'quality_status',
+          'quality_next',
+          'quality_report',
+          'quality_explain',
+          'quality_upgrade_check',
+          'tools_status'
+        ]);
+        // 只读工具不新起运行，避免“AI 只是查了一下状态”被面板显示成正在执行
+        if (!readOnlyTool.has(name) || readRunState(root)) {
+          beginTool(root, name, args);
+        }
+      }
+      const startedAt = Date.now();
       try {
         const result = await callTool(name, args);
+        if (fs.existsSync(root)) {
+          const text = JSON.stringify(result);
+          endTool(root, name, {
+            ok: result.isError !== true,
+            durationMs: Date.now() - startedAt,
+            error: result.isError === true ? text.slice(0, 240) : undefined,
+            errorCode: looksBlocked(text) ? 'blocked' : undefined
+          });
+          writeToolAudit(root, {
+            at: new Date().toISOString(),
+            tool: name,
+            ok: result.isError !== true,
+            ms: Date.now() - startedAt,
+            blocked: looksBlocked(text) || undefined
+          });
+        }
         reply(id, result);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (fs.existsSync(root)) {
+          endTool(root, name, {
+            ok: false,
+            durationMs: Date.now() - startedAt,
+            error: message
+          });
+          writeToolAudit(root, {
+            at: new Date().toISOString(),
+            tool: name,
+            ok: false,
+            ms: Date.now() - startedAt,
+            error: message.slice(0, 240)
+          });
+        }
         rpcError(`${name} 执行失败：${message}`);
         replyError(id, -32603, message);
       }

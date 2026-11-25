@@ -82,6 +82,7 @@ export interface NextActionPayload {
     total: number;
     nextGroup?: PlanGroup;
     nextLabel?: string;
+    blocked?: { packageName: string; reason: string }[];
     javaVersion?: string;
     frameworkVersion?: string;
     frameworkTarget?: string;
@@ -319,6 +320,7 @@ function computeNextAction(root: string): NextActionPayload {
     total: check.total ?? 0,
     nextGroup: check.nextGroup,
     nextLabel: check.nextGroup ? PLAN_GROUP_LABEL[check.nextGroup] : undefined,
+    blocked: check.blocked ?? [],
     javaVersion: plan.project.javaVersion,
     frameworkVersion: plan.project.frameworkVersion,
     frameworkTarget: plan.project.frameworkTarget,
@@ -450,6 +452,29 @@ function computeNextAction(root: string): NextActionPayload {
   }
 
   const nextGroup = check.nextGroup;
+  if (!nextGroup && (check.blocked?.length ?? 0) > 0) {
+    for (const item of check.blocked ?? []) {
+      blockers.push({
+        code: 'policy-blocked',
+        severity: 'blocking',
+        message: `${item.packageName}: ${item.reason}`,
+        suggestion: '这是需要新增 dependencyManagement 或人工决策的项；不要手改 pom 绕过，先问用户处理/跳过'
+      });
+    }
+    return {
+      ...base,
+      state: 'blocked',
+      title: `计划 ${plan.planId} 剩余候选被策略阻塞`,
+      action: 'none',
+      command: '',
+      why: '剩余候选都需要新增 dependencyManagement 固定传递依赖，当前策略未授权；继续 apply 只会反复空转。',
+      progress: `已落盘 ${check.appliedCount ?? 0}/${check.total ?? 0}`,
+      plan: planInfo,
+      pom: status.pom,
+      scan,
+      policy
+    };
+  }
   if (!nextGroup) {
     return {
       ...base,

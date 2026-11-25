@@ -9,11 +9,13 @@ import * as path from 'path';
 import { toolsStatusPayload } from './agentOps';
 import { checkUpgradePlan, hashText } from './upgradePlanFile';
 import { readDigest } from './scanDigest';
+import { readRunState } from './runState';
 
 export interface ProjectStatus {
   tools: { id: string; found: boolean; path: string; installable: boolean }[];
   scan: Record<string, unknown>;
   upgradePlan: Record<string, unknown> | null;
+  run: Record<string, unknown> | null;
   pom: { file: string; hash: string };
   nextStep: string;
 }
@@ -69,8 +71,25 @@ export function projectStatus(root: string): ProjectStatus {
     pomHash = '';
   }
 
+  const runState = readRunState(root);
+  const run = runState
+    ? {
+        runId: runState.runId,
+        mode: runState.mode,
+        phase: runState.phase,
+        status: runState.status,
+        updatedAt: runState.updatedAt,
+        lastTool: runState.lastTool,
+        blocked: runState.blocked,
+        baselineTotal: runState.baselineTotal,
+        build: runState.build
+      }
+    : null;
+
   let nextStep = '';
-  if (!scan.hasResult) {
+  if (runState?.status !== 'done' && runState?.blocked.length) {
+    nextStep = `运行已阻塞：${runState.blocked.map((item) => item.message).join('；')}`;
+  } else if (!scan.hasResult) {
     nextStep = '还没有扫描结果：先跑一次全量 scan，再生成升级计划';
   } else if ((scan.total ?? 0) === 0) {
     nextStep = '最近一次扫描 0 条问题：无需依赖升级；改过 pom 后再复扫确认';
@@ -88,6 +107,7 @@ export function projectStatus(root: string): ProjectStatus {
     tools,
     scan,
     upgradePlan,
+    run,
     pom: { file: 'pom.xml', hash: pomHash },
     nextStep
   };

@@ -431,6 +431,38 @@ async function main() {
   check('MCP status 带工具状态', Array.isArray(status.tools) && status.tools.length > 0);
   check('MCP status 带扫描计数', status.scan?.hasResult === true && status.scan?.total === 3);
   check('MCP status 带计划进度', status.upgradePlan?.state === 'applied');
+  check('MCP status 带运行态（事件快照）', typeof status.run?.runId === 'string' && status.run?.status === 'running');
+  check(
+    'MCP 工具包含 quality_finalize',
+    names.includes('quality_finalize') && names.includes('quality_fix_rollback')
+  );
+
+  const baselineDigest = {
+    generatedAt: new Date().toISOString(),
+    total: ISSUES.issues.length,
+    summary: { total: ISSUES.issues.length, trivy: ISSUES.issues.length, high: 2, critical: 1 },
+    keys: ISSUES.issues.map((issue) => [issue.source, issue.rule, issue.package ?? '', issue.file ?? '', issue.line ?? 0].join('|'))
+  };
+  fs.writeFileSync(
+    path.join(dir, '.quality-center', 'scan-baseline.json'),
+    JSON.stringify(baselineDigest, null, 2),
+    'utf8'
+  );
+  const finalizeCall = await client.request('tools/call', {
+    name: 'quality_finalize',
+    arguments: { path: dir }
+  });
+  const finalized = JSON.parse(finalizeCall.result?.content?.[0]?.text ?? '{}');
+  check(
+    'finalize 由插件算基线/最终计数',
+    finalized.ok === true && finalized.baseline?.total === 3 && finalized.current?.total === 3,
+    JSON.stringify({ ok: finalized.ok, baseline: finalized.baseline?.total, current: finalized.current?.total, reason: finalized.reason })
+  );
+  check(
+    'finalize 落盘 final-report.json / md',
+    fs.existsSync(path.join(dir, '.quality-center', 'final-report.json')) &&
+      fs.existsSync(path.join(dir, '.quality-center', 'final-report.md'))
+  );
 
   const grouped = await client.request('tools/call', {
     name: 'quality_upgrade_plan',
