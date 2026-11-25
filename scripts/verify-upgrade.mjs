@@ -330,6 +330,8 @@ async function main() {
   check('tools/list 含 quality_upgrade_apply', names.includes('quality_upgrade_apply'));
   check('tools/list 含 quality_upgrade_check', names.includes('quality_upgrade_check'));
   check('tools/list 含 quality_upgrade_revert', names.includes('quality_upgrade_revert'));
+  check('tools/list 含 quality_next', names.includes('quality_next'));
+  check('tools/list 含 quality_explain', names.includes('quality_explain'));
   const badCall = await client.request('tools/call', {
     name: 'quality_upgrade_apply',
     arguments: { path: dir, planId: plan.planId, pomHash: 'sha256:deadbeef', write: false }
@@ -487,6 +489,128 @@ async function main() {
   check('status 未扫描时 hasResult=false', projectStat.scan.hasResult === false);
   check('status 未扫描时引导先扫描', projectStat.nextStep.includes('扫描'), projectStat.nextStep);
   fs.rmSync(statusDir, { recursive: true, force: true });
+
+  console.log('10) 下一动作状态机 + 交接文件 + 失败翻译');
+  const nextDir = prepare();
+  const next1 = JSON.parse(run(['next', nextDir, '--json']).out);
+  check(
+    '未计划时 next 指向 plan',
+    next1.state === 'no-plan' && next1.action === 'plan' && next1.command.includes('upgrade plan'),
+    JSON.stringify({ state: next1.state, action: next1.action })
+  );
+  check('next 刷新 handoff.md', fs.existsSync(path.join(nextDir, '.quality-center', 'handoff.md')));
+  const handoff = fs.readFileSync(path.join(nextDir, '.quality-center', 'handoff.md'), 'utf8');
+  check('handoff 含下一步与硬性规则', handoff.includes('## 下一步') && handoff.includes('一次只推进一组'));
+
+  run(['upgrade', 'plan', nextDir, '--reuse', '--json']);
+  const next2 = JSON.parse(run(['next', nextDir, '--json']).out);
+  check(
+    '计划后 next 只指向 framework 组',
+    next2.action === 'apply' &&
+      next2.plan?.nextGroup === 'framework' &&
+      next2.command.includes('--group framework') &&
+      next2.command.includes('--write'),
+    JSON.stringify({ action: next2.action, group: next2.plan?.nextGroup })
+  );
+  check('next 命令带当前 pomHash', next2.command.includes(next2.pom.hash));
+
+  const overrideDir = prepare();
+  fs.writeFileSync(
+    path.join(overrideDir, 'pom.xml'),
+    POM.replace('<java.version>8</java.version>', '<java.version>8</java.version>\n    <okhttp.version>4.1.0</okhttp.version>'),
+    'utf8'
+  );
+  run(['upgrade', 'plan', overrideDir, '--reuse', '--json']);
+  const overrideNext = JSON.parse(run(['next', overrideDir, '--json']).out);
+  check(
+    '框架组落盘前预检属性覆盖',
+    overrideNext.warnings?.some((item) => item.code === 'property-override' && item.message.includes('okhttp.version')),
+    JSON.stringify(overrideNext.warnings)
+  );
+
+  const explainDir = prepare();
+  fs.writeFileSync(
+    path.join(explainDir, '.quality-center', 'build.log'),
+    [
+      '[INFO] BUILD FAILURE',
+      '[ERROR] Non-resolvable import POM: Could not find artifact com.squareup.okhttp3:okhttp-bom:pom:4.1.0 in central',
+      '[ERROR] @ org.springframework.boot:spring-boot-dependencies:2.7.18'
+    ].join('\n'),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(explainDir, 'pom.xml'),
+    POM.replace('<java.version>8</java.version>', '<java.version>8</java.version>\n    <okhttp.version>4.1.0</okhttp.version>'),
+    'utf8'
+  );
+  const explain = JSON.parse(run(['explain', explainDir, '--json']).out);
+  check(
+    'explain 识别属性覆盖 BOM',
+    explain.kind === 'property-collision' && explain.cause.includes('okhttp.version') && explain.suggestion.includes('family'),
+    JSON.stringify({ kind: explain.kind, cause: explain.cause })
+  );
+
+  const failureDir = prepare();
+  const failurePlan = JSON.parse(run(['upgrade', 'plan', failureDir, '--json']).out);
+  run([
+    'upgrade',
+    'apply',
+    failureDir,
+    '--plan',
+    failurePlan.planId,
+    '--hash',
+    failurePlan.pomHash,
+    '--write',
+    '--allow-cross-line'
+  ]);
+  fs.writeFileSync(
+    path.join(failureDir, '.quality-center', 'build-result.json'),
+    JSON.stringify({
+      ok: false,
+      code: 1,
+      at: new Date().toISOString(),
+      seconds: 1,
+      pomHash: sha256(fs.readFileSync(path.join(failureDir, 'pom.xml'), 'utf8'))
+    }),
+    'utf8'
+  );
+  const nextFail = JSON.parse(run(['next', failureDir, '--json']).out);
+  check(
+    '构建失败时 next 先给 explain',
+    nextFail.state === 'build-failed' && nextFail.action === 'explain',
+    JSON.stringify({ state: nextFail.state, action: nextFail.action })
+  );
+
+  const verifyDir = prepare();
+  const verifyPlan = JSON.parse(run(['upgrade', 'plan', verifyDir, '--json']).out);
+  run([
+    'upgrade',
+    'apply',
+    verifyDir,
+    '--plan',
+    verifyPlan.planId,
+    '--hash',
+    verifyPlan.pomHash,
+    '--write',
+    '--allow-cross-line'
+  ]);
+  fs.writeFileSync(
+    path.join(verifyDir, '.quality-center', 'build-result.json'),
+    JSON.stringify({
+      ok: true,
+      code: 0,
+      at: new Date().toISOString(),
+      seconds: 1,
+      pomHash: sha256(fs.readFileSync(path.join(verifyDir, 'pom.xml'), 'utf8'))
+    }),
+    'utf8'
+  );
+  const nextVerify = JSON.parse(run(['next', verifyDir, '--json']).out);
+  check(
+    '构建通过后 next 指向复扫验收',
+    nextVerify.state === 'verify' && nextVerify.action === 'rescan',
+    JSON.stringify({ state: nextVerify.state, action: nextVerify.action })
+  );
 
   console.log(`\n结果：${passed} 通过，${failures.length} 失败`);
   if (failures.length) {

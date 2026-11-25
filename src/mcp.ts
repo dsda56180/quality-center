@@ -29,6 +29,8 @@ import {
 } from './upgradePlanFile';
 import { digestScan } from './scanDigest';
 import { projectStatus } from './status';
+import { buildNextAction } from './nextAction';
+import { explainBuildFailure } from './explain';
 
 interface RpcRequest {
   jsonrpc: '2.0';
@@ -116,6 +118,31 @@ const TOOLS: ToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: { path: PATH_PROP }
+    }
+  },
+  {
+    name: 'quality_next',
+    description:
+      '唯一状态机：返回现在到哪（state）、下一步只做什么（action + command）、为什么、阻塞与警告，并刷新 .quality-center/handoff.md。新会话或换了一个 Agent 时先调它，不要读一堆文档再自己推断流程。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: PATH_PROP,
+        writeHandoff: { type: 'boolean', description: '是否刷新 .quality-center/handoff.md，默认 true' }
+      }
+    }
+  },
+  {
+    name: 'quality_explain',
+    description:
+      '把构建失败翻译成「原因 / 影响 / 建议」：覆盖项目属性覆盖 BOM（Non-resolvable import POM）、坐标不存在、依赖解析失败、编译错误（文件/行号）、依赖收敛冲突。构建失败后先调它，不要直接读整份 Maven 日志。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: PATH_PROP,
+        text: { type: 'string', description: '直接传入失败日志文本；缺省读 .quality-center/build.log' },
+        logFile: { type: 'string', description: '指定日志文件路径（绝对路径或相对项目根目录）' }
+      }
     }
   },
   {
@@ -266,6 +293,22 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       }
       return asText(projectStatus(root));
     }
+    case 'quality_next': {
+      if (!fs.existsSync(root)) {
+        return asText({ error: `目录不存在：${root}` }, true);
+      }
+      return asText(buildNextAction(root, { writeHandoff: params.writeHandoff !== false }));
+    }
+    case 'quality_explain': {
+      if (!fs.existsSync(root)) {
+        return asText({ error: `目录不存在：${root}` }, true);
+      }
+      const text = typeof params.text === 'string' && params.text.trim() ? params.text : undefined;
+      const rawLog = typeof params.logFile === 'string' && params.logFile.trim() ? params.logFile : undefined;
+      const logFile = rawLog ? path.resolve(root, rawLog) : undefined;
+      const explanation = explainBuildFailure(root, text, logFile);
+      return asText(explanation, !explanation.ok);
+    }
     case 'quality_scan': {
       const only = Array.isArray(params.only)
         ? (params.only as string[]).filter((item) => item in { checkstyle: 1, gitleaks: 1, trivy: 1, spotbugs: 1 })
@@ -306,13 +349,26 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         ok: outcome.ok,
         exitCode: outcome.code,
         seconds: Number(outcome.seconds.toFixed(1)),
+        gate: outcome.gate,
         jars: outcome.jars,
         reason: outcome.tail,
         errors: outcome.errors ?? parseBuildErrors(outcome.tail),
         logFile: outcome.logFile ? path.relative(root, outcome.logFile) : undefined,
+        explain: outcome.ok
+          ? undefined
+          : (() => {
+              const explanation = explainBuildFailure(root);
+              return {
+                kind: explanation.kind,
+                cause: explanation.cause,
+                impact: explanation.impact,
+                suggestion: explanation.suggestion,
+                evidence: explanation.evidence
+              };
+            })(),
         nextStep: outcome.ok
-          ? '产物已就绪：现在调用 quality_scan(delta=true) 复扫，确认目标 CVE 消失'
-          : `构建失败：errors 已给出文件/行号（共 ${outcome.errors?.length ?? 0} 条），完整日志在 ${outcome.logFile ? path.relative(root, outcome.logFile) : '输出中'}`
+          ? '产物已就绪：现在调用 quality_next 看下一步（通常是复扫或继续下一组）'
+          : '构建失败：先调用 quality_explain 或读这里的 explain，按建议处理后再 quality_next；不要跳过门禁'
       };
       if (timeoutSec && Date.now() - started > timeoutSec * 1000) {
         (result as Record<string, unknown>).note = '超时设置只作提示，实际超时为 30 分钟';
@@ -520,7 +576,7 @@ async function handle(request: RpcRequest): Promise<void> {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: SERVER_NAME, version: VERSION },
         instructions:
-          'quality-center 提供六类扫描（checkstyle / gitleaks / trivy / spotbugs / qcsec / astgrep）、Maven 构建、外部工具安装与确定性修复。先调 quality_tools_status 确认工具就绪，再用 quality_scan 拿结构化结果。'
+          'quality-center 提供六类扫描、Maven 构建、外部工具安装、确定性修复与依赖升级计划。开始或换会话时先调 quality_next 拿唯一状态与下一步命令（同时刷新 .quality-center/handoff.md）；构建失败先调 quality_explain；不要自己推断流程或手改 pom。'
       });
       return;
     case 'notifications/initialized':

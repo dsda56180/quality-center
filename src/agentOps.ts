@@ -3,6 +3,7 @@
  * 由 cli.ts（人读 + 退出码）和 mcp.ts（JSON-RPC 工具）各自做展示，
  * 保证同一条能力不会在两处实现出不同行为。
  */
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -19,6 +20,7 @@ import { resolveBinary, runStreaming, stripAnsi } from './exec';
 import { applyFixesToContent, FIXABLE_RULES } from './fixerCore';
 import { Issue, IssueSource, ScanResult, Severity } from './model';
 import { EXTERNAL_TOOLS, installLocation, installPlan, ToolId } from './tools';
+import { loadPolicy } from './upgradePolicy';
 
 export const PACKAGE_ROOT = path.resolve(__dirname, '..');
 
@@ -129,6 +131,8 @@ export interface BuildOutcome {
   errors?: BuildError[];
   /** 完整构建日志落盘位置 */
   logFile?: string;
+  /** 本次实际使用的门禁（compile / package / test） */
+  gate?: string;
 }
 
 /** 把 Maven 输出拆成结构化编译错误，便于定向修复 */
@@ -171,17 +175,70 @@ export function tailLines(stdout: string, stderr: string, count = 6): string {
     .join('\n');
 }
 
-/** 执行 mvn package；onLine 收实时输出行（调用方自行过滤噪声） */
+/** 项目 pom 的当前哈希：构建台账用它判断「这次结果是不是针对当前 pom」 */
+function pomHashOf(root: string): string {
+  try {
+    const text = fs.readFileSync(path.join(root, 'pom.xml'), 'utf8');
+    return `sha256:${crypto.createHash('sha256').update(text, 'utf8').digest('hex')}`;
+  } catch {
+    return '';
+  }
+}
+
+/** 每次构建都把结果写进 build-result.json：成功也写，避免 next 只能靠 build.log 的时间猜 */
+function recordBuild(root: string, outcome: BuildOutcome, gate: string, args: string[]): BuildOutcome {
+  try {
+    const file = path.join(root, '.quality-center', 'build-result.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      `${JSON.stringify(
+        {
+          ok: outcome.ok,
+          code: outcome.code,
+          at: new Date().toISOString(),
+          seconds: Number(outcome.seconds.toFixed(2)),
+          pomHash: pomHashOf(root),
+          gate,
+          args,
+          logFile: outcome.logFile ? path.relative(root, outcome.logFile) : undefined
+        },
+        null,
+        2
+      )}\n`,
+      'utf8'
+    );
+  } catch {
+    // 台账写不进去不影响构建本身
+  }
+  return outcome;
+}
+
+/** 执行构建门禁；门禁级别与 mavenArgs 来自 .quality-center/upgrade-policy.json */
 export async function buildProject(
   root: string,
   onLine?: (line: string) => void
 ): Promise<BuildOutcome> {
+  const loaded = loadPolicy(root);
+  const gate = loaded.policy.buildGate;
+  const goal = gate === 'compile' ? 'compile' : gate === 'test' ? 'test' : 'package';
+  const args = ['-B', ...loaded.policy.mavenArgs];
+  if (goal !== 'test') {
+    args.push('-DskipTests');
+  }
+  args.push(goal);
+
   const mvn = resolveBinary('mvn');
   if (!mvn) {
-    return { ok: false, code: 2, seconds: 0, jars: [], tail: '没有找到 mvn，先执行 tools install mvn' };
+    return recordBuild(
+      root,
+      { ok: false, code: 2, seconds: 0, jars: [], tail: '没有找到 mvn，先执行 tools install mvn', gate },
+      gate,
+      args
+    );
   }
   const startedAt = Date.now();
-  const handle = runStreaming(mvn, ['-B', '-DskipTests', 'package'], root, 30 * 60_000, {
+  const handle = runStreaming(mvn, args, root, 30 * 60_000, {
     onLine: (line) => {
       if (onLine) {
         onLine(stripAnsi(line));
@@ -204,17 +261,28 @@ export async function buildProject(
     } catch {
       logFile = undefined;
     }
-    return {
-      ok: false,
-      code: outcome.code,
-      seconds,
-      jars: [],
-      tail: tailLines(outcome.stdout, outcome.stderr, 8),
-      errors,
-      logFile
-    };
+    return recordBuild(
+      root,
+      {
+        ok: false,
+        code: outcome.code,
+        seconds,
+        jars: [],
+        tail: tailLines(outcome.stdout, outcome.stderr, 8),
+        errors,
+        logFile,
+        gate
+      },
+      gate,
+      args
+    );
   }
-  return { ok: true, code: 0, seconds, jars: artifactJars(root), tail: '' };
+  return recordBuild(
+    root,
+    { ok: true, code: 0, seconds, jars: artifactJars(root), tail: '', gate },
+    gate,
+    args
+  );
 }
 
 export interface ToolsStatusPayload {

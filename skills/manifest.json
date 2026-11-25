@@ -10,6 +10,8 @@
     "commands": [
       "scan",
       "status",
+      "next",
+      "explain",
       "build",
       "fix",
       "tools status",
@@ -28,6 +30,8 @@
       ".quality-center/issues.json",
       ".quality-center/scan-digest.json",
       ".quality-center/build.log",
+      ".quality-center/build-result.json",
+      ".quality-center/handoff.md",
       ".quality-center/report.md"
     ],
     "exitCodes": {
@@ -47,8 +51,16 @@
     "protocolVersion": "2024-11-05",
     "tools": [
       {
+        "name": "quality_next",
+        "purpose": "唯一状态机：现在到哪、下一步只做什么、命令、阻塞与警告，并刷新 .quality-center/handoff.md；开局/换会话先调它"
+      },
+      {
         "name": "quality_status",
-        "purpose": "一屏拿全局：工具就绪、最近扫描计数与基线、升级计划分组进度、pom hash，开局先调它"
+        "purpose": "一屏拿全局细节：工具就绪、最近扫描计数与基线、升级计划分组进度、pom hash"
+      },
+      {
+        "name": "quality_explain",
+        "purpose": "构建失败翻译：原因/影响/建议（属性覆盖 BOM、坐标不存在、依赖解析、编译错误、收敛冲突）"
       },
       {
         "name": "quality_scan",
@@ -56,7 +68,7 @@
       },
       {
         "name": "quality_build",
-        "purpose": "mvn -B -DskipTests package，返回 jar 列表、失败原因与结构化 errors（文件/行号）"
+        "purpose": "按策略 buildGate 构建（默认 package），返回 jar 列表、结构化 errors、失败翻译与 build-result.json 台账"
       },
       {
         "name": "quality_tools_status",

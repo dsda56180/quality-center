@@ -159,6 +159,17 @@ code --install-extension dsda56180.quality-center
 2. **CLI**：`out/cli.js` 的各子命令，适合脚本与 CI。
 3. **Skills**：`skills/` 下可加载的 Skill 包 + `manifest.json` 清单。
 
+### AI 时代，插件负责什么
+
+AI 已经能读 pom、跑 mvn、改文件；插件不再和模型比“会不会改”，而是补它补不了的四件事：
+
+- **记忆**：`.quality-center/` 是仓库内的账本（扫描、计划、步骤、构建结果），换会话、换 Agent 都能从 `handoff.md` 一页接上。
+- **边界**：策略是契约，`planId + pomHash` 是许可证，`qc propose/validate`（规划中）让 AI 只能提议、不能绕过计划直接写 pom。
+- **签证**：构建门禁与 `upgrade check` 产出前后哈希、退出码、日志，把“已升级完成”变成可核验的事实。
+- **上下文经济**：摘要 / 增量 / 分组计划 / 失败翻译，让 Agent 读 10 行而不是 1000 行。
+
+一句话：**不给 AI 加能力，给 AI 加边界和记忆；边界越清楚，它才越敢放手做。**
+
 ### MCP 配置
 
 把下面这段加到 MCP 客户端（Trae / Claude Desktop / Cursor 等）的配置里，`args` 第一项换成你的扩展目录：
@@ -178,9 +189,11 @@ code --install-extension dsda56180.quality-center
 
 | 工具 | 作用 |
 | --- | --- |
-| `quality_status` | 一次返回工具就绪、最近扫描计数、升级计划分组进度与 pom hash，开局先调它 |
+| `quality_next` | **唯一状态机**：现在到哪、下一步只做什么、命令、阻塞与警告，并刷新 `.quality-center/handoff.md`；开局/换会话先调它 |
+| `quality_status` | 一次返回工具就绪、最近扫描计数、升级计划分组进度与 pom hash，需要细节时再调 |
+| `quality_explain` | 把构建失败翻译成原因/影响/建议（属性覆盖 BOM、坐标不存在、依赖解析、编译错误、收敛冲突） |
 | `quality_scan` | 六类扫描；默认摘要 + Top N（`detail=full` 才给全量），`delta=true` 只比新增/消失 |
-| `quality_build` | `mvn -B -DskipTests package`，失败时给结构化 `errors`（文件/行号）与 `.quality-center/build.log` |
+| `quality_build` | 按策略 `buildGate` 执行构建（默认 `package`，可配 `compile`/`test`），失败给结构化 `errors`、`explain` 与 `.quality-center/build.log` |
 | `quality_tools_status` | 工具是否就绪、解析到的路径、能否自动安装 |
 | `quality_tools_install` | 按当前系统自动安装 mvn / gitleaks / trivy |
 | `quality_report` | 读取已落盘的 issues.json / report.md，不重新扫描 |
@@ -195,13 +208,16 @@ code --install-extension dsda56180.quality-center
 ### CLI
 
 ```bash
+node <扩展目录>/out/cli.js next <项目>                   # 唯一下一步 + 刷新 handoff.md
+node <扩展目录>/out/cli.js next <项目> --json            # 状态机 JSON（command/blockers/handoffFile）
+node <扩展目录>/out/cli.js explain <项目>                # 构建失败 → 原因/影响/建议
 node <扩展目录>/out/cli.js scan --json --fail-on high   # 六类扫描，JSON 到 stdout
 node <扩展目录>/out/cli.js scan --json --detail summary --top 10   # 只给计数 + Top N
 node <扩展目录>/out/cli.js scan --json --only trivy --delta        # 复扫只看新增/消失
 node <扩展目录>/out/cli.js scan --only trivy,spotbugs   # 只跑指定扫描器
 node <扩展目录>/out/cli.js scan --only qcsec            # 只跑配置层规则（无需 mvn/trivy）
 node <扩展目录>/out/cli.js scan --only astgrep          # 只跑 AST 语义规则（无需 mvn/trivy）
-node <扩展目录>/out/cli.js build <项目>                 # mvn -B -DskipTests package
+node <扩展目录>/out/cli.js build <项目>                 # 按策略 buildGate 构建（默认 package）
 node <扩展目录>/out/cli.js fix <项目>                   # 确定性修复，默认只预览
 node <扩展目录>/out/cli.js fix <项目> --write           # 写回文件，改完需复扫
 node <扩展目录>/out/cli.js tools status --json          # 工具是否就绪
@@ -225,7 +241,10 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 ```
 
 - 目标版本由 `.quality-center/upgrade-policy.json` 的 `frameworkTargets` 按 Java 版本推导，不再写死版本号；Java 17 未声明上限时只跳过框架层并给出原因，不会静默跳 3.x。
+- **`qc next` / `quality_next` 是唯一入口**：它把扫描、计划、步骤、构建结果收敛成「一个状态 + 一个命令 + 为什么」，同时刷新 `.quality-center/handoff.md`；新会话或新 Agent 读这一页就能接上，不用自己推断流程。
+- **构建失败先 `qc explain` / `quality_explain`**：把 `Non-resolvable import POM`、坐标不存在、依赖解析失败、编译错误、收敛冲突翻译成原因/影响/建议；`build-result.json` 记录每次构建（成功也记），`next` 不会靠日志时间猜。
 - 候选带 `group`：`framework → family → independent → cross-line`，AI/CI 一组一组推进；一组没通过构建就停在 `partial`，不会把整条依赖链一次性怼进 pom。
+- 升级前会告警“项目属性覆盖框架 BOM”（如 `okhttp.version`、`kotlin.version`），这是框架组落盘后最常见的 `Non-resolvable import POM` 来源。
 - `apply` 必须带当前 `pomHash`，不一致直接拒绝；整份计划一次落盘时，结果还要与 `pomHashAfter` 逐字节一致。
 - 跨大版本（poi 4→5、mssql 8→13 等）默认拒绝写入，需要显式 `--allow-cross-line` 或人工处理。
 - 每次落盘都记录 `steps.json` 与 `pom.before.xml`，`upgrade revert` 可回到计划前状态；手工改过 pom 时回滚会被拒绝。

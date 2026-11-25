@@ -8,13 +8,17 @@ description: 按 quality-center 的标准化流程完成一次 Java 项目依赖
 本 Skill 只写「必须判断」的部分。执行顺序、写回方式由 `.quality-center/upgrade/<planId>/plan.json` 与
 `.quality-center/bin/qc.cjs` 保证，**不要自己重排流程，也不要手写 pom**。
 
-## 0. 前置
+## 0. 前置：先问状态机，不要自己推断流程
 
-先调一次 `quality_status`（CLI: `qc status`）拿全局：工具就绪、最近扫描计数、计划分组进度、pom hash。不要分别调 report/check 去猜状态。
+先执行 `qc next`（MCP: `quality_next`），它会把扫描、计划、步骤、构建结果收敛成
+`state / action / command / why / blockers`，并刷新 `.quality-center/handoff.md`。
+**按它给出的那一条命令做**；需要细节时再 `qc status`。不要先读一堆文档再自己排流程。
 
 ```bash
-node .quality-center/bin/qc.cjs scan . --json --detail summary --top 10   # 只给计数 + Top N（或 quality_scan）
-node .quality-center/bin/qc.cjs upgrade plan . --reuse                    # 同 hash 复用计划，不新建目录
+node .quality-center/bin/qc.cjs next .                 # 唯一入口；同时写 handoff.md
+node .quality-center/bin/qc.cjs status . --json        # 需要工具/扫描/计划细节时
+node .quality-center/bin/qc.cjs scan . --json --detail summary --top 10   # 仅当 next 说 not-scanned
+node .quality-center/bin/qc.cjs upgrade plan . --reuse                    # 仅当 next 说 no-plan
 ```
 
 计划里出现 `frameworkTarget: null` 或 `skipped` 提示「未声明框架目标版本」时：向用户确认该 Java 版本允许的
@@ -65,8 +69,8 @@ node .quality-center/bin/qc.cjs upgrade plan . --reuse                    # 同 
 # 1) 框架先落地并验证
 node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <当前 pomHash> --group framework --write
 node .quality-center/bin/qc.cjs upgrade check . --plan <planId>        # partial = 还有分组未落盘
-node .quality-center/bin/qc.cjs build .                                # 失败只读 errors 的 file/line，全文在 .quality-center/build.log
-node .quality-center/bin/qc.cjs scan . --json --only trivy --delta      # 复扫只看新增/消失，别要全量
+node .quality-center/bin/qc.cjs build .                                # 按策略 buildGate 构建（默认 package）
+node .quality-center/bin/qc.cjs explain .                              # 失败才用：原因/影响/建议，别自己扒日志
 
 # 2) 通过后继续下一组；--hash 用上一步返回的 hashAfter
 node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <上一步 hashAfter> --group family --write
@@ -81,8 +85,8 @@ node .quality-center/bin/qc.cjs upgrade apply . --plan <planId> --hash <hash> --
 node .quality-center/bin/qc.cjs upgrade revert . --plan <planId>
 ```
 
-MCP 等价：`quality_upgrade_plan` → `quality_upgrade_apply(group=…, write=false)` → `write=true` → `quality_build`
-（`errors` 已解析出文件/行号）→ `quality_upgrade_check`（组后应为 `partial` 且 `appliedCount` 增加；
+MCP 等价：`quality_next` → `quality_upgrade_plan` → `quality_upgrade_apply(group=…, write=false)` → `write=true` → `quality_build`
+（失败先 `quality_explain`）→ `quality_upgrade_check`（组后应为 `partial` 且 `appliedCount` 增加；
 全部组落盘后才是 `applied`）→ 失败时 `quality_upgrade_revert`。
 
 验收四条，缺一条不算完成：**全部组完成后** `upgrade check` 退出码 0；每组后构建成功；目标 CVE 在复扫中消失；`errors` 为空。
@@ -91,9 +95,13 @@ MCP 等价：`quality_upgrade_plan` → `quality_upgrade_apply(group=…, write=
 ### 3.1 止损规则（硬性）
 
 - 一轮只推进一组；这组没通过构建，不允许开下一组。
+- 构建失败的第一步是 `qc explain`（MCP: `quality_explain`）：按「原因 / 影响 / 建议」处理。
+  看到 `Non-resolvable import POM` 时先查「项目属性是否覆盖 BOM」（如 `okhttp.version`、`kotlin.version`），
+  不要先怀疑网络或镜像。
 - 同一组连续两次构建失败：停手，回滚到该组之前，说明两次失败差异与判断，**不要继续换版本碰运气**。
 - 构建报错只按 `errors` 里的文件/行号定向修；禁止 `sed` 或批量替换 pom 版本号。
 - 手工改过 pom 会让 `upgrade check` 变成 `drift`；此时必须停下来重新 `upgrade plan`，不得继续 `apply`。
+- `upgrade revert` 回到的是「计划生成前」，不是只退回某一组；要保留已完成组时，先记录 `steps.json` 再决定。
 
 ## 4. 汇报
 

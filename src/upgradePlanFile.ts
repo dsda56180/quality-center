@@ -601,7 +601,7 @@ function toCandidate(plan: UpgradePlanFile, item: PlanCandidate): UpgradeCandida
 }
 
 /** 每一步落盘的记录：按组/按包推进时保留完整轨迹，便于 check 与 revert */
-interface PlanStep {
+export interface PlanStep {
   at: string;
   hashBefore: string;
   hashAfter: string;
@@ -624,6 +624,11 @@ function readSteps(root: string, planId: string): PlanStep[] {
   } catch {
     return [];
   }
+}
+
+/** 只读导出：交接文件、状态机需要展示「哪一步在什么时候落的盘」 */
+export function readPlanSteps(root: string, planId: string): PlanStep[] {
+  return readSteps(root, planId);
 }
 
 function writeJson(file: string, value: unknown): void {

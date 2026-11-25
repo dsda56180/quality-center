@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.27.15
+
+**把“下一步做什么”收敛成唯一状态机，并给每个新会话留一页交接。**
+
+- 新增 `qc next` / MCP `quality_next`：把扫描、计划、步骤、构建结果收敛成 `state / action / command / why / blockers / warnings`，同时刷新 `.quality-center/handoff.md`；面板、CLI、AI 不再各推一套流程
+- 新增 `.quality-center/handoff.md`：做到哪、下一步命令、已落盘步骤、阻塞与硬性规则，新 Agent 读一页即可接上
+- 新增 `qc explain` / MCP `quality_explain`：把构建失败翻译成「原因 / 影响 / 建议」，覆盖属性覆盖 BOM（`Non-resolvable import POM`）、坐标不存在、依赖解析失败、编译错误（文件/行号）、依赖收敛冲突
+- 新增 `.quality-center/build-result.json`：每次构建都写（成功也写），`next` 不再靠 `build.log` 的时间猜“这次构建是不是针对当前 pom”
+- `build` 真正读取策略：`buildGate`（compile/package/test）与 `mavenArgs` 驱动实际命令；失败输出直接给翻译后的三段结论
+- 框架组落盘前预检项目属性覆盖：`okhttp.version`、`kotlin.version`、`mysql.version` 等会提前告警，避免“升完框架才发现 BOM 解析失败”
+- 修正边界：还没落任何一组时，基线构建失败只告警，不误报成“上一组失败”
+- Skill / agentPrompt / README / manifest 的入口统一为 `qc next`，构建失败先 `qc explain`
+- 自检扩到 **96 通过 / 0 失败**（新增状态机、交接文件、属性预检、失败翻译、构建失败/通过后的下一步断言）
+
 ## 0.26.0
 
 **把两条已有规则的数据流补上，再加两条配置组合。**

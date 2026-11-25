@@ -28,6 +28,8 @@ import { EXTERNAL_TOOLS, ToolId } from './tools';
 import { applyUpgradePlan, checkUpgradePlan, createUpgradePlan, readIssues, revertUpgradePlan } from './upgradePlanFile';
 import { digestScan } from './scanDigest';
 import { projectStatus } from './status';
+import { buildNextAction } from './nextAction';
+import { explainBuildFailure } from './explain';
 import { integrate } from './integrate';
 
 const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 CI 用的无界面接口
@@ -35,7 +37,9 @@ const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 
 用法:
   quality-center scan [目录] [选项]      跑六类扫描，输出结构化结果
   quality-center status [目录] [--json]  一屏看工具/扫描/升级计划/pom 状态
-  quality-center build [目录]            执行 mvn package 生成 target 产物
+  quality-center next [目录] [--json]    给出唯一下一步，并刷新 .quality-center/handoff.md
+  quality-center explain [目录] [--json] 翻译构建失败：原因/影响/建议
+  quality-center build [目录]            执行策略门禁构建（默认 mvn package）
   quality-center fix [目录] [--write]    应用确定性修复（默认只预览）
   quality-center tools status [--json]   查看外部工具安装状态
   quality-center tools install <id>      自动安装 mvn / gitleaks / trivy
@@ -63,6 +67,14 @@ fix 选项:
   --write                真正写回文件（默认只预览，输出改动清单）
   --json                 以 JSON 输出改动清单
 
+next 选项:
+  --json                 以 JSON 输出状态机（含 command / blockers / handoffFile）
+  --no-handoff           只读计算，不写 .quality-center/handoff.md
+
+explain 选项:
+  --json                 以 JSON 输出原因/影响/建议
+  --log <文件>           指定日志，缺省读 .quality-center/build.log
+
 upgrade 选项:
   --plan <planId>        指定计划，缺省用最新一份
   --hash <pomHash>       落盘前校验 pom 哈希，防止计划过期后误写
@@ -89,7 +101,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
   const flags: Record<string, string | true> = {};
   const positional: string[] = [];
-  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group', '--detail', '--top']);
+  const takesValue = new Set(['--only', '--fail-on', '--out', '--path', '--plan', '--hash', '--group', '--detail', '--top', '--log']);
   for (let i = 0; i < argv.length; i += 1) {
     const item = argv[i];
     if (item.startsWith('--')) {
@@ -246,6 +258,7 @@ async function buildCommand(args: Args): Promise<number> {
       log(args, line.replace(/^\[INFO\]\s*/, ''));
     }
   });
+  const explanation = outcome.ok ? undefined : explainBuildFailure(root);
   if (args.flags['--json'] === true) {
     process.stdout.write(
       `${JSON.stringify(
@@ -253,10 +266,20 @@ async function buildCommand(args: Args): Promise<number> {
           ok: outcome.ok,
           code: outcome.code,
           seconds: outcome.seconds,
+          gate: outcome.gate,
           jars: outcome.jars,
           errors: outcome.errors ?? [],
           tail: outcome.tail ?? '',
-          logFile: outcome.logFile ? path.relative(root, outcome.logFile) : null
+          logFile: outcome.logFile ? path.relative(root, outcome.logFile) : null,
+          explain: explanation
+            ? {
+                kind: explanation.kind,
+                cause: explanation.cause,
+                impact: explanation.impact,
+                suggestion: explanation.suggestion,
+                evidence: explanation.evidence
+              }
+            : undefined
         },
         null,
         2
@@ -265,21 +288,20 @@ async function buildCommand(args: Args): Promise<number> {
     return outcome.ok ? 0 : 2;
   }
   if (!outcome.ok) {
-    const errors = outcome.errors ?? [];
-    process.stdout.write(
-      `构建失败（退出码 ${outcome.code}，用时 ${outcome.seconds.toFixed(1)} 秒）\n${outcome.tail || '无可用错误输出'}\n`
-    );
-    if (errors.length > 0) {
-      process.stdout.write(
-        `编译错误 ${errors.length} 条：${errors
-          .slice(0, 3)
-          .map((item) => `${item.file}:${item.line} ${item.message}`)
-          .join('；')}\n`
-      );
+    const lines = [
+      `构建失败（退出码 ${outcome.code}，用时 ${outcome.seconds.toFixed(1)} 秒）`,
+      `原因：${explanation?.cause ?? '日志里没有可识别的错误模式'}`,
+      `影响：${explanation?.impact ?? '本次落盘没有通过门禁，不能当成已完成'}`,
+      `建议：${explanation?.suggestion ?? '查看完整日志，或把日志尾部交给 AI'}`
+    ];
+    if (explanation?.evidence.length) {
+      lines.push(`现场：${explanation.evidence.join(' / ')}`);
     }
     if (outcome.logFile) {
-      process.stdout.write(`完整日志：${path.relative(root, outcome.logFile)}\n`);
+      lines.push(`完整日志：${path.relative(root, outcome.logFile)}`);
     }
+    lines.push('下一步：先处理好上面这条原因，再执行 qc next；不要跳过门禁继续下一组');
+    process.stdout.write(`${lines.join('\n')}\n`);
     return 2;
   }
   process.stdout.write(
@@ -548,6 +570,74 @@ function integrateCommand(args: Args): number {
   return 0;
 }
 
+async function nextCommand(args: Args): Promise<number> {
+  const root = targetRoot(args);
+  if (!fs.existsSync(root)) {
+    progress(`目录不存在：${root}`);
+    return 2;
+  }
+  const payload = buildNextAction(root, { writeHandoff: args.flags['--no-handoff'] !== true });
+  if (args.flags['--json'] === true) {
+    process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return 0;
+  }
+  const lines = [`[${payload.state}] ${payload.title}`];
+  if (payload.progress) {
+    lines.push(`进度：${payload.progress}`);
+  }
+  lines.push(`下一步：${payload.command || '无需操作'}`);
+  lines.push(`为什么：${payload.why}`);
+  for (const item of payload.blockers) {
+    lines.push(`阻塞：${item.message}`, `      建议：${item.suggestion}`);
+  }
+  for (const item of payload.warnings) {
+    lines.push(`注意：${item.message}`, `      建议：${item.suggestion}`);
+  }
+  if (payload.handoffFile) {
+    lines.push(`交接：${payload.handoffFile}`);
+  }
+  process.stdout.write(`${lines.join('\n')}\n`);
+  return 0;
+}
+
+async function explainCommand(args: Args): Promise<number> {
+  const root = targetRoot(args);
+  if (!fs.existsSync(root)) {
+    progress(`目录不存在：${root}`);
+    return 2;
+  }
+  const rawLog = typeof args.flags['--log'] === 'string' ? String(args.flags['--log']) : '';
+  const logFile = rawLog ? path.resolve(root, rawLog) : undefined;
+  const explanation = explainBuildFailure(root, undefined, logFile);
+  if (args.flags['--json'] === true) {
+    process.stdout.write(`${JSON.stringify(explanation, null, 2)}\n`);
+    return explanation.ok ? 0 : 1;
+  }
+  const lines = [
+    `原因：${explanation.cause}`,
+    `影响：${explanation.impact}`,
+    `建议：${explanation.suggestion}`
+  ];
+  if (explanation.evidence.length > 0) {
+    lines.push('现场：');
+    for (const item of explanation.evidence) {
+      lines.push(`  ${item}`);
+    }
+  }
+  if (explanation.errors && explanation.errors.length > 0) {
+    lines.push(`编译错误 ${explanation.errors.length} 条：`);
+    for (const error of explanation.errors.slice(0, 5)) {
+      lines.push(`  ${error.file}:${error.line} ${error.message}`);
+    }
+  }
+  if (explanation.logFile) {
+    lines.push(`完整日志：${path.relative(root, explanation.logFile)}`);
+  }
+  lines.push('下一步：按上面的建议处理；处理完执行 qc next 回到主线，不要继续叠改动');
+  process.stdout.write(`${lines.join('\n')}\n`);
+  return explanation.ok ? 0 : 1;
+}
+
 async function statusCommand(args: Args): Promise<number> {
   const root = targetRoot(args);
   if (!fs.existsSync(root)) {
@@ -585,6 +675,10 @@ async function main(): Promise<number> {
       return scanCommand(args);
     case 'status':
       return statusCommand(args);
+    case 'next':
+      return nextCommand(args);
+    case 'explain':
+      return explainCommand(args);
     case 'build':
       return buildCommand(args);
     case 'fix':
