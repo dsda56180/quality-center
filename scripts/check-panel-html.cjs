@@ -4,7 +4,9 @@ const checks = {
   aiBusy: h.includes('body.ai-busy'),
   aiStatus: h.includes('id="aistatus"'),
   aiBeforeSummary: h.indexOf('id="aistatus"') >= 0 && h.indexOf('id="aistatus"') < h.indexOf('id="summary"'),
-  mcpIcon: h.includes('id="mcpdot"'),
+  mcpButton: h.includes('id="mcpbtn"') && h.includes('>MCP</button>'),
+  msgBar: h.includes('id="msgbar"'),
+  msgBarBeforeAi: h.indexOf('id="msgbar"') >= 0 && h.indexOf('id="msgbar"') < h.indexOf('id="aistatus"'),
   progressSeparated: h.includes('progressBusy'),
   catFallback: h.includes('猫咪正在准备扫描'),
   finalReport: h.includes('最终验收')

@@ -308,6 +308,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   };
   /** 本次面板会话只提醒一次，避免每次 push 都弹 */
   private mcpPrompted = false;
+  private mcpRefreshTimer?: NodeJS.Timeout;
 
   constructor(private readonly runner: ScanRunner) {
     setRunActor({ kind: 'panel' });
@@ -324,6 +325,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
       this.watchTimer = undefined;
+    }
+    if (this.mcpRefreshTimer) {
+      clearTimeout(this.mcpRefreshTimer);
+      this.mcpRefreshTimer = undefined;
     }
   }
 
@@ -363,6 +368,25 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       watcher.onDidDelete(schedule);
       this.watchers.push(watcher);
     }
+    // Trae 真正握手后会写 mcp-client.json；监听它把“已配置”升级成“已接入”，无需用户手动点。
+    const clientWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(root, '.quality-center/mcp-client.json')
+    );
+    const onClient = () => this.scheduleMcpRefresh();
+    clientWatcher.onDidChange(onClient);
+    clientWatcher.onDidCreate(onClient);
+    clientWatcher.onDidDelete(onClient);
+    this.watchers.push(clientWatcher);
+  }
+
+  private scheduleMcpRefresh(): void {
+    if (this.mcpRefreshTimer) {
+      clearTimeout(this.mcpRefreshTimer);
+    }
+    this.mcpRefreshTimer = setTimeout(() => {
+      this.mcpRefreshTimer = undefined;
+      void this.refreshMcpStatus();
+    }, 400);
   }
 
   private scheduleExternalRefresh(): void {
@@ -425,6 +449,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     });
     view.onDidDispose(() => {
       this.view = undefined;
+    });
+    view.onDidChangeVisibility(() => {
+      if (view.visible && this.mcpStatus.state !== 'ready') {
+        void this.refreshMcpStatus();
+      }
     });
     const root = this.runner.root();
     if (root) {

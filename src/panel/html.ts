@@ -191,16 +191,27 @@ export function getHtml(nonce: string): string {
     background: #8a8a8a;
   }
   .mcpbar.ready .mcp-dot,
-  #mcpdot.ready .mcp-dot { background: #2ea043; }
+  #mcpbtn.ready .mcp-dot { background: #2ea043; }
   .mcpbar.configured .mcp-dot,
-  #mcpdot.configured .mcp-dot { background: #d29922; }
+  #mcpbtn.configured .mcp-dot { background: #d29922; }
   .mcpbar.broken .mcp-dot,
-  #mcpdot.broken .mcp-dot { background: #f85149; }
+  #mcpbtn.broken .mcp-dot { background: #f85149; }
   .mcpbar.checking .mcp-dot,
-  #mcpdot.checking .mcp-dot { background: #58a6ff; }
-  #mcpdot.missing .mcp-dot { background: #8a8a8a; }
-  #mcpdot { width: 22px; height: 22px; margin-right: 2px; border: 0; background: transparent; }
-  #mcpdot .mcp-dot { width: 8px; height: 8px; }
+  #mcpbtn.checking .mcp-dot { background: #58a6ff; }
+  #mcpbtn.missing .mcp-dot { background: #8a8a8a; }
+  .mcp-status-btn {
+    flex: 0 0 auto; height: 23px; padding: 0 7px; display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; font-weight: 600; letter-spacing: .02em; border-radius: 10px;
+    border: 1px solid var(--vscode-panel-border); background: transparent;
+    color: var(--vscode-descriptionForeground);
+  }
+  .mcp-status-btn.ready { color: #2ea043; border-color: #2ea043; background: rgba(46,160,67,.12); }
+  .mcp-status-btn.configured { color: #d29922; border-color: #d29922; background: rgba(210,153,34,.12); }
+  .mcp-status-btn.broken { color: #f85149; border-color: #f85149; background: rgba(248,81,73,.12); }
+  .mcp-status-btn.checking { color: #58a6ff; border-color: #58a6ff; background: rgba(88,166,255,.12); }
+  .mcp-status-btn.missing { color: #9a9a9a; border-color: #9a9a9a; }
+  .mcp-status-btn .mcp-dot { width: 7px; height: 7px; }
+  .mcp-status-btn:hover { filter: brightness(1.15); }
   .mcpbar .mcp-text { flex: 1 1 auto; min-width: 0; cursor: default; }
   .mcpbar .mcp-label { color: var(--vscode-foreground); }
   .mcpbar button { flex: 0 0 auto; padding: 2px 6px; font-size: 10px; }
@@ -245,7 +256,7 @@ export function getHtml(nonce: string): string {
     background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.1));
   }
   /* AI 执行时用状态卡替换所有写操作入口，避免“面板按钮”和“AI 动作”同时可点 */
-  body.ai-busy .toolbar button:not(.mcp-dot-btn),
+  body.ai-busy .toolbar button:not(.mcp-status-btn),
   body.ai-busy #fixbar,
   body.ai-busy #buildbar,
   body.ai-busy #wizard,
@@ -413,12 +424,33 @@ export function getHtml(nonce: string): string {
   .loc { margin-top: 3px; font-size: 11px; color: var(--vscode-descriptionForeground); word-break: break-all; }
   .msg { margin-top: 2px; line-height: 1.45; word-break: break-word; }
   .empty, .hint { color: var(--vscode-descriptionForeground); padding: 8px 0; line-height: 1.6; }
-  .notice { margin-top: 8px; font-size: 11px; color: var(--vscode-descriptionForeground); line-height: 1.6; }
-  .notice .tool-link {
+  .msgbar { display: none; margin: 0 0 8px; font-size: 11px; line-height: 1.5; }
+  .msgbar.on { display: block; }
+  .msgline {
+    display: flex; gap: 6px; align-items: flex-start; margin-bottom: 4px; padding: 5px 7px;
+    border-radius: 3px; border-left: 3px solid var(--vscode-panel-border);
+    background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.08));
+  }
+  .msgline.info { border-left-color: #58a6ff; }
+  .msgline.ok { border-left-color: #2ea043; }
+  .msgline.warn { border-left-color: #d29922; }
+  .msgline.error { border-left-color: #f85149; }
+  .msgline .msg-text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+  .msgline .msg-sub { color: var(--vscode-descriptionForeground); }
+  .msgline .msg-actions { flex: 0 0 auto; display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  .msg-action {
+    padding: 1px 6px; font-size: 10px; border-radius: 3px;
+    border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
+    background: var(--vscode-button-secondaryBackground, transparent);
+    color: var(--vscode-button-secondaryForeground, var(--vscode-textLink-foreground));
+    cursor: pointer;
+  }
+  .msg-action:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.18)); }
+  .msgbar .tool-link {
     margin-left: 4px; color: var(--vscode-textLink-foreground);
     text-decoration: underline; cursor: pointer;
   }
-  .notice .tool-link:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)); }
+  .msgbar .tool-link:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground)); }
   .sug {
     padding: 8px 10px; margin-bottom: 8px; border-radius: 4px;
     background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.08));
@@ -544,7 +576,7 @@ export function getHtml(nonce: string): string {
     <button id="resume" class="icon-btn" title="继续扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 2l8 5-8 5z"/></svg></button>
     <button id="pause" class="icon-btn secondary" title="暂停扫描：当前扫描器结束后不再启动新的扫描器" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 2h3v10H3zM8 2h3v10H8z"/></svg></button>
     <button id="stop" class="icon-btn secondary" title="终止扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 3h8v8H3z"/></svg></button>
-    <button id="mcpdot" class="icon-btn mcp-dot-btn checking" title="MCP 检测中"><span class="mcp-dot"></span></button>
+    <button id="mcpbtn" class="mcp-status-btn checking" title="MCP 检测中"><span class="mcp-dot"></span>MCP</button>
     <span class="spacer"></span>
     <button id="deepfix" class="icon-btn secondary" title="深度修复"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg></button>
     <button id="upgrade" class="icon-btn secondary" title="升级依赖"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M5 4v2h14V4H5zm0 10h4v6h6v-6h4l-7-7-7 7z"/></svg></button>
@@ -561,6 +593,7 @@ export function getHtml(nonce: string): string {
     <button id="mcpcheck" class="secondary" title="重新检测 MCP 配置与服务">检测</button>
     <button id="mcpsetup" class="secondary" title="生成/修复编辑器 MCP 配置">接入</button>
   </div>
+  <div id="msgbar" class="msgbar"></div>
   <div id="catbar" class="catbar">
     <div class="cat-stage">
       <div class="cat-track"><div class="cat-fill"></div></div>
@@ -582,7 +615,6 @@ export function getHtml(nonce: string): string {
     <button class="tab" data-tab="suggest">建议</button>
   </div>
   <input type="search" id="q" placeholder="搜索文件、规则或描述">
-  <div id="notice" class="notice"></div>
   <div id="fixbar" class="fixbar" style="display:none">
     <span id="fixtip"></span>
     <button id="fixall">一键修复</button>
@@ -1024,28 +1056,71 @@ export function getHtml(nonce: string): string {
     return value.length > 260 ? value.slice(0, 260) + '…' : value;
   }
 
-  /** 面板顶部的提示行：进行中的长任务 + 扫描异常 + 已跳过的扫描器 */
-  function renderNotice() {
-    const notes = [];
+  /** 顶部消息栏：只放用户需要知悉或需要操作的事情，按严重度着色并带动作 */
+  function renderMessages() {
+    var bar = document.getElementById('msgbar');
+    if (!bar) return;
+    var items = [];
+    function action(label, type, title) {
+      return '<button class="msg-action" data-msg="' + type + '" title="' + esc(title || label) + '">' + label + '</button>';
+    }
+    function add(level, text, actions) {
+      items.push(
+        '<div class="msgline ' + level + '">' +
+        '<span class="msg-text">' + text + '</span>' +
+        (actions ? '<span class="msg-actions">' + actions + '</span>' : '') +
+        '</div>'
+      );
+    }
+
+    var mcp = state.mcp || { state: 'checking', label: '检测 MCP…', detail: '' };
+    if (mcp.state === 'checking') {
+      add('info', '⏳ 正在检测 MCP 配置与服务…');
+    } else if (mcp.state === 'ready') {
+      add('ok', '🟢 ' + esc(mcp.label) + (mcp.tools ? ' · ' + mcp.tools + ' 个工具' : ''),
+        action('重新检测', 'checkMcp', '重新做一次 MCP 协议自检'));
+    } else if (mcp.state === 'configured') {
+      add('warn',
+        '🟡 ' + esc(mcp.label) + '：' + esc(mcp.detail),
+        action('重新检测', 'checkMcp', 'Trae 已启用项目级 MCP 后，重新检测是否握手成功') +
+        action('查看配置', 'openMcpConfig', '打开项目 MCP 配置文件'));
+    } else if (mcp.state === 'broken') {
+      add('error',
+        '🔴 ' + esc(mcp.label) + '：' + esc(mcp.detail),
+        action('修复配置', 'setupMcp', '重新生成可用的项目 MCP 配置') +
+        (mcp.configFile ? action('查看配置', 'openMcpConfig', '打开项目 MCP 配置文件') : ''));
+    } else {
+      add('error',
+        '⚪ ' + esc(mcp.label) + (mcp.detail ? '：' + esc(mcp.detail) : ''),
+        action('一键接入', 'setupMcp', '生成项目 MCP 配置'));
+    }
+
+    if (state.run && state.run.lastToolError && state.run.status !== 'done') {
+      add('warn', '⚠ AI 最近一次工具失败：' + esc(shortError(state.run.lastToolError)));
+    }
     if (state.task) {
       var sec = Math.max(0, Math.floor((Date.now() - state.task.startedAt) / 1000));
-      notes.push('⏳ ' + esc(state.task.label) + '：' + esc(state.task.stage) + ' · 已用 ' + sec + ' 秒');
+      add('info', '⏳ ' + esc(state.task.label) + '：' + esc(state.task.stage) + ' · 已用 ' + sec + ' 秒');
     }
     if (state.final) {
       var f = state.final;
-      notes.push('🧾 最终验收：' + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
+      add('info', '🧾 最终验收：' + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
         (f.totalChange >= 0 ? '+' : '') + f.totalChange + '，新增 ' + f.added + ' / 消失 ' + f.removed + '）' +
         (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
         (f.tests === 'skipped' ? ' · ⚠ 构建跳过测试' : ''));
     }
-    (state.errors || []).forEach(function (e) { notes.push('⚠ ' + (SRC_LABEL[e.source] || e.source) + ' 扫描异常：' + esc(e.message)); });
+    (state.errors || []).forEach(function (e) {
+      add('warn', '⚠ ' + (SRC_LABEL[e.source] || e.source) + ' 扫描异常：' + esc(e.message));
+    });
     (state.skipped || []).forEach(function (s) {
       var install = s.tool
         ? ' <a class="tool-link" data-install="' + esc(s.tool) + '">安装</a>'
         : '';
-      notes.push('· 已跳过 ' + (SRC_LABEL[s.source] || s.source) + '：' + esc(s.reason) + install);
+      add('info', '· 已跳过 ' + (SRC_LABEL[s.source] || s.source) + '：' + esc(s.reason) + install);
     });
-    document.getElementById('notice').innerHTML = notes.join('<br>');
+
+    bar.innerHTML = items.join('');
+    bar.className = 'msgbar' + (items.length ? ' on' : '');
   }
 
   function renderWizard() {
@@ -1213,10 +1288,10 @@ export function getHtml(nonce: string): string {
       setup.style.display = mcp.state === 'ready' ? 'none' : '';
       setup.textContent = mcp.state === 'configured' ? '查看配置' : (mcp.state === 'broken' ? '修复' : '接入');
     }
-    var dot = document.getElementById('mcpdot');
-    if (dot) {
-      dot.className = 'icon-btn mcp-dot-btn ' + mcp.state;
-      dot.title = 'MCP：' + mcp.label + (mcp.detail ? ' · ' + mcp.detail : '');
+    var btn = document.getElementById('mcpbtn');
+    if (btn) {
+      btn.className = 'mcp-status-btn ' + mcp.state;
+      btn.title = 'MCP：' + mcp.label + (mcp.detail ? ' · ' + mcp.detail : '');
     }
   }
 
@@ -1417,7 +1492,7 @@ export function getHtml(nonce: string): string {
       }
     }
 
-    renderNotice();
+    renderMessages();
 
     const fixable = (state.issues || []).filter(function (i) { return i.fixable; }).length;
     const bar = document.getElementById('fixbar');
@@ -1466,13 +1541,8 @@ export function getHtml(nonce: string): string {
   document.getElementById('mcpcheck').addEventListener('click', function () {
     vscode.postMessage({ type: 'checkMcp' });
   });
-  document.getElementById('mcpdot').addEventListener('click', function () {
-    var mcp = state.mcp || { state: 'missing' };
-    if (mcp.state === 'ready') {
-      document.getElementById('mcpcheck').click();
-    } else {
-      document.getElementById('mcpsetup').click();
-    }
+  document.getElementById('mcpbtn').addEventListener('click', function () {
+    vscode.postMessage({ type: 'checkMcp' });
   });
   document.getElementById('mcpsetup').addEventListener('click', function () {
     var mcp = state.mcp || { state: 'missing' };
@@ -1702,8 +1772,13 @@ export function getHtml(nonce: string): string {
   document.getElementById('build').addEventListener('click', function () {
     vscode.postMessage({ type: 'buildAndScan' });
   });
-  document.getElementById('notice').addEventListener('click', function (e) {
+  document.getElementById('msgbar').addEventListener('click', function (e) {
     const target = e.target;
+    const action = target && target.closest ? target.closest('[data-msg]') : null;
+    if (action) {
+      vscode.postMessage({ type: action.getAttribute('data-msg') });
+      return;
+    }
     const tool = target && target.getAttribute ? target.getAttribute('data-install') : null;
     if (tool) {
       vscode.postMessage({ type: 'installTool', tool: tool });
@@ -1808,7 +1883,7 @@ export function getHtml(nonce: string): string {
       renderAiStatus();
     }
     if (state.task || (state.run && ['running', 'blocked', 'needs_confirm'].indexOf(state.run.status) >= 0)) {
-      renderNotice();
+      renderMessages();
     }
     if (!state.scanning && !state.deepFix) {
       return;
