@@ -48,7 +48,18 @@ export interface SnapshotNext {
     total: number;
     nextGroup?: string;
     nextLabel?: string;
+    cveTotal?: number;
+    skippedCount?: number;
     groups: { name: string; label: string; total: number; applied: number; state: string }[];
+    candidates?: {
+      packageName: string;
+      from: string;
+      to: string;
+      group: string;
+      groupLabel: string;
+      cveCount: number;
+      crossLine: boolean;
+    }[];
   };
   blockers: { code: string; message: string; suggestion: string }[];
   warnings: { code: string; message: string; suggestion: string }[];
@@ -423,6 +434,11 @@ export function getHtml(nonce: string): string {
     cursor: pointer;
   }
   .msg-action:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.18)); }
+  .msg-action.primary {
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+    border-color: var(--vscode-button-background); font-weight: 600;
+  }
+  .msg-action.primary:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
   .msgbar .tool-link {
     margin-left: 4px; color: var(--vscode-textLink-foreground);
     text-decoration: underline; cursor: pointer;
@@ -473,6 +489,31 @@ export function getHtml(nonce: string): string {
     min-height: 24px; cursor: pointer;
   }
   .wz-actions .wz-primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .wz-plan { margin-top: 7px; border-top: 1px dashed var(--vscode-panel-border); padding-top: 6px; }
+  .wz-plan-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+    font-size: 10px; color: var(--vscode-descriptionForeground);
+  }
+  .wz-plan-toggle {
+    padding: 0; border: 0; background: transparent; cursor: pointer;
+    color: var(--vscode-textLink-foreground); font-size: 10px;
+  }
+  .wz-plan-toggle:hover { text-decoration: underline; }
+  .wz-plan-list { margin-top: 5px; max-height: 210px; overflow-y: auto; }
+  .wz-plan-group { margin-bottom: 5px; }
+  .wz-plan-group-title {
+    font-size: 10px; font-weight: 600; color: var(--vscode-foreground);
+    margin-bottom: 1px;
+  }
+  .wz-plan-row {
+    display: flex; gap: 6px; align-items: baseline; line-height: 1.55;
+    font-size: 10px; color: var(--vscode-descriptionForeground);
+  }
+  .wz-plan-row .pkg { flex: 1 1 auto; min-width: 0; word-break: break-all; }
+  .wz-plan-row .ver { flex: none; color: var(--vscode-foreground); }
+  .wz-plan-row .cve { flex: none; color: var(--vscode-editorWarning-foreground, #d29922); }
+  .wz-plan-row.done { opacity: .65; }
+  .wz-plan-note { margin-top: 4px; font-size: 10px; color: var(--vscode-descriptionForeground); }
   .msg.clamp {
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
     overflow: hidden;
@@ -580,6 +621,7 @@ export function getHtml(nonce: string): string {
   </div>
   <div id="aistatus" class="aistatus"></div>
   <div id="summary" class="summary"><span class="hint">尚未扫描</span></div>
+  <div id="wizard" class="wizard" style="display:none"></div>
   <div class="tabs" id="tabs">
     <button class="tab active" data-tab="all">全部</button>
     <button class="tab" data-tab="checkstyle">代码质量</button>
@@ -592,7 +634,6 @@ export function getHtml(nonce: string): string {
     <button class="tab" data-tab="suggest">建议</button>
   </div>
   <input type="search" id="q" placeholder="搜索文件、规则或描述">
-  <div id="wizard" class="wizard" style="display:none"></div>
   </div>
   <div id="list"><div class="empty">点击「▶」开始扫描</div></div>
   <div id="mask" class="mask">
@@ -1030,8 +1071,9 @@ export function getHtml(nonce: string): string {
     var bar = document.getElementById('msgbar');
     if (!bar) return;
     var items = [];
-    function action(label, type, title) {
-      return '<button class="msg-action" data-msg="' + type + '" title="' + esc(title || label) + '">' + label + '</button>';
+    function action(label, type, title, primary) {
+      return '<button class="msg-action' + (primary ? ' primary' : '') + '" data-msg="' + type + '" title="' +
+        esc(title || label) + '">' + label + '</button>';
     }
     function wizard(label, key, title) {
       return '<button class="msg-action" data-wz="' + key + '" title="' + esc(title || label) + '">' + label + '</button>';
@@ -1090,38 +1132,22 @@ export function getHtml(nonce: string): string {
     }
 
     // 修复与优化：人工可执行的动作统一进消息栏，不再使用独立 fixbar
+    var n = state.next;
+    var planPending = Boolean(n && ['apply', 'confirm', 'build', 'explain', 'rescan'].indexOf(n.action) >= 0);
     var fixable = (state.issues || []).filter(function (i) { return i.fixable; }).length;
-    if (!busy && fixable > 0) {
+    if (!busy && fixable > 0 && !planPending) {
       add('info',
         '🔧 可自动修复 ' + fixable + ' 项（无用导入 / 冗余导入 / 修饰符顺序 / 布尔表达式简化）',
         action('一键修复', 'fixAll'));
     }
-    var n = state.next;
     if (!busy && n) {
-      var nextLabel = n.plan && n.plan.nextLabel ? n.plan.nextLabel : '当前组';
       if (n.action === 'scan') {
         add('info', '还没有扫描结果，先扫描项目才能给出修复与升级建议。', wizard('开始扫描', 'scan'));
       } else if (n.action === 'plan') {
         add('info',
-          '有 ' + (state.issues || []).length + ' 项问题，还没有升级计划；先生成计划，不会直接改 pom。',
-          wizard('生成升级计划', 'createPlan') +
-          action('复制给 AI', 'copyDrivePrompt', '复制完整任务提示，交给 AI 驱动修复与升级流程'));
-      } else if (n.action === 'confirm') {
-        add('warn',
-          '升级计划有一组跨大版本，等待你确认：' + esc(nextLabel),
-          wizard('确认并执行', 'upgradeNext') + focus('查看计划', 'wizard'));
-      } else if (n.action === 'apply') {
-        add('info',
-          '升级计划待执行：' + esc(nextLabel),
-          wizard('执行下一组', 'upgradeNext') + focus('查看计划', 'wizard'));
-      } else if (n.action === 'build') {
-        add('info', '升级已落盘，构建门禁待跑。',
-          wizard('跑构建门禁', 'buildGate') + focus('查看计划', 'wizard'));
-      } else if (n.action === 'explain') {
-        add('warn', '上一组已落盘但构建未通过，先定位原因。',
-          wizard('查看失败原因', 'explainBuild') + wizard('回滚', 'revertPlan'));
-      } else if (n.action === 'rescan') {
-        add('info', '构建已通过，复扫验收待跑。', wizard('复扫验收', 'scan'));
+          '有 ' + (state.issues || []).length + ' 项问题，还没有升级计划；交给 AI 生成并执行，计划阶段不会改 pom。',
+          action('复制给 AI', 'copyDrivePrompt', '复制完整任务提示，由 AI 生成计划并驱动后续步骤', true) +
+          wizard('生成计划', 'createPlan'));
       }
     }
     if (!busy && state.finishedAt && state.buildHint) {
@@ -1174,21 +1200,24 @@ export function getHtml(nonce: string): string {
     });
     var label = n.plan && n.plan.nextLabel ? n.plan.nextLabel : '当前组';
     var title = n.title;
+    var meta = n.progress || '';
     if ((n.action === 'apply' || n.action === 'confirm') && n.plan) {
-      title = n.plan.state === 'partial' ? '升级建议执行中' : '升级建议已生成';
+      title = n.plan.state === 'partial' ? '升级计划执行中' : '升级计划已生成';
       if (state.final) {
         title = n.plan.state === 'partial' ? '本次 AI 修复已收尾 · 剩余组需人工确认' : '本次 AI 修复已收尾';
       }
+      meta = n.plan.groups.length + ' 组 · ' + n.plan.total + ' 个依赖' +
+        (n.plan.cveTotal ? ' · 覆盖 ' + n.plan.cveTotal + ' 条漏洞' : '') +
+        (n.plan.skippedCount ? ' · 跳过 ' + n.plan.skippedCount + ' 项' : '') +
+        ' · 已落盘 ' + n.plan.appliedCount + '/' + n.plan.total;
     }
     var purpose = '';
     if (n.action === 'apply' || n.action === 'confirm') {
-      var issueCount = (state.issues || []).length;
       purpose =
-        '根据' + (issueCount ? ' ' + issueCount + ' 项' : '') +
-        '扫描结果给出的升级建议，按风险分组。' +
-        (n.action === 'confirm'
-          ? '这一组含跨大版本，执行前需要你确认。'
-          : '你可以直接执行，或复制给 AI 驱动整个流程。');
+        '按风险从低到高拆成 ' + (n.plan ? n.plan.groups.length : 0) + ' 组（' +
+        (n.plan ? n.plan.groups.map(function (g) { return g.label; }).join(' → ') : '') +
+        '）。每组落盘后自动跑构建门禁，失败只处理这一组。' +
+        (n.action === 'confirm' ? '当前组含跨大版本，执行前需要确认。' : '');
       if (state.final) {
         purpose = '本次 AI 修复已生成最终验收（' + state.final.baselineTotal + ' → ' + state.final.currentTotal +
           ' 项）。剩下的组需要你确认后才进入下一轮，不代表 AI 还在执行。';
@@ -1206,6 +1235,33 @@ export function getHtml(nonce: string): string {
     } else if (n.action === 'none') {
       purpose = '升级与验证已完成，剩余项按报告人工评估。';
     }
+    // 计划明细：面板内直接回答“升什么、升到哪”，不再让人读 handoff.md
+    var planDetail = '';
+    if (n.plan && n.plan.candidates && n.plan.candidates.length &&
+        (n.action === 'apply' || n.action === 'confirm' || n.action === 'build' ||
+         n.action === 'explain' || n.action === 'rescan')) {
+      var rows = '';
+      (n.plan.groups || []).forEach(function (g) {
+        var items = (n.plan.candidates || []).filter(function (c) { return c.group === g.name; });
+        if (!items.length) return;
+        rows += '<div class="wz-plan-group"><div class="wz-plan-group-title">' +
+          esc(g.label) + ' · ' + items.length + ' 项' + (g.state === 'done' ? ' · 已完成' : '') + '</div>';
+        items.forEach(function (c) {
+          rows += '<div class="wz-plan-row' + (g.state === 'done' ? ' done' : '') + '">' +
+            '<span class="pkg">' + esc(c.packageName) + '</span>' +
+            '<span class="ver">' + esc(c.from || '?') + ' → ' + esc(c.to) + '</span>' +
+            (c.cveCount ? '<span class="cve">' + c.cveCount + ' 漏洞</span>' : '') +
+            '</div>';
+        });
+        rows += '</div>';
+      });
+      planDetail = '<div class="wz-plan"><div class="wz-plan-head"><span>计划明细</span><span>' +
+        n.plan.total + ' 个依赖</span></div><div class="wz-plan-list">' + rows + '</div>' +
+        (n.plan.skippedCount
+          ? '<div class="wz-plan-note">另有 ' + n.plan.skippedCount +
+            ' 项未纳入：策略未授权或需人工处理，已记录在计划文件。</div>'
+          : '') + '</div>';
+    }
     function btn(key, text, primary) {
       return '<button class="' + (primary ? 'wz-primary' : 'secondary') + '" data-wz="' + key + '">' + esc(text) + '</button>';
     }
@@ -1215,22 +1271,22 @@ export function getHtml(nonce: string): string {
         actions = btn('scan', '开始扫描', true);
         break;
       case 'plan':
-        actions = btn('createPlan', '生成升级计划', true);
+        actions = btn('copyDrive', '复制给 AI 执行', true) + btn('createPlan', '生成升级计划');
         break;
       case 'apply':
-        actions = btn('upgradeNext', '执行「' + label + '」', true);
+        actions = btn('copyDrive', '复制给 AI 执行', true) + btn('upgradeNext', '手动执行「' + label + '」');
         break;
       case 'confirm':
-        actions = btn('upgradeNext', '确认并执行「' + label + '」', true);
+        actions = btn('copyDrive', '复制给 AI 执行', true) + btn('upgradeNext', '确认并手动执行「' + label + '」');
         break;
       case 'build':
-        actions = btn('buildGate', '跑构建门禁', true);
+        actions = btn('buildGate', '跑构建门禁', true) + btn('copyDrive', '复制给 AI 执行');
         break;
       case 'explain':
-        actions = btn('explainBuild', '查看失败原因', true) + btn('revertPlan', '回滚到计划前');
+        actions = btn('explainBuild', '查看失败原因', true) + btn('revertPlan', '回滚到计划前') + btn('copyDrive', '复制给 AI 执行');
         break;
       case 'rescan':
-        actions = btn('scan', '复扫验收', true);
+        actions = btn('scan', '复扫验收', true) + btn('copyDrive', '复制给 AI 执行');
         break;
       case 'install':
         actions = btn('install-mvn', '安装 Maven', true);
@@ -1241,15 +1297,10 @@ export function getHtml(nonce: string): string {
       default:
         actions = btn('openHandoff', '打开交接');
     }
-    if (['apply', 'confirm', 'plan', 'build', 'explain', 'rescan'].indexOf(n.action) >= 0) {
-      actions += btn('copyDrive', '复制给 AI 执行');
-    }
     el.innerHTML = '<div class="wz-title">' + esc(title) + '</div>'
-      + (n.progress
-        ? '<div class="wz-meta">' + esc((n.plan && (n.action === 'apply' || n.action === 'confirm') ? '计划 ' + n.plan.planId + ' · ' : '') + n.progress) + '</div>'
-        : '')
+      + (meta ? '<div class="wz-meta">' + esc(meta) + '</div>' : '')
       + (purpose ? '<div class="wz-purpose">' + esc(purpose) + '</div>' : '')
-      + groups + notes + '<div class="wz-actions">' + actions + '</div>';
+      + groups + planDetail + notes + '<div class="wz-actions">' + actions + '</div>';
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
       button.type = 'button';

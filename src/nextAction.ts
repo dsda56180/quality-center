@@ -86,7 +86,19 @@ export interface NextActionPayload {
     javaVersion?: string;
     frameworkVersion?: string;
     frameworkTarget?: string;
+    cveTotal?: number;
+    skippedCount?: number;
     groups: NextGroupStatus[];
+    /** 面板只读明细：让人直接看懂“升什么、升到哪”，不用打开 handoff.md */
+    candidates?: {
+      packageName: string;
+      from: string;
+      to: string;
+      group: PlanGroup;
+      groupLabel: string;
+      cveCount: number;
+      crossLine: boolean;
+    }[];
   };
   scan?: {
     total: number;
@@ -324,7 +336,18 @@ function computeNextAction(root: string): NextActionPayload {
     javaVersion: plan.project.javaVersion,
     frameworkVersion: plan.project.frameworkVersion,
     frameworkTarget: plan.project.frameworkTarget,
-    groups
+    groups,
+    cveTotal: plan.candidates.reduce((sum, item) => sum + (item.cveCount || 0), 0),
+    skippedCount: plan.skipped.length,
+    candidates: plan.candidates.map((item) => ({
+      packageName: item.packageName,
+      from: item.from,
+      to: item.to,
+      group: item.group,
+      groupLabel: PLAN_GROUP_LABEL[item.group],
+      cveCount: item.cveCount || 0,
+      crossLine: Boolean(item.crossLine)
+    }))
   };
 
   // 计划已全部落盘：构建 → 复扫 → 完成

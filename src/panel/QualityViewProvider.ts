@@ -1779,17 +1779,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         return;
       }
       const groups = plan.groups.map((group) => `${group.label} ${group.candidates.length} 项`).join(' · ');
-      const first = plan.groups[0];
-      const pick = await vscode.window.showInformationMessage(
-        `计划 ${plan.planId} 已生成：${groups}。建议先升级「${first ? PLAN_GROUP_LABEL[first.name] : ''}」。`,
-        '升级第一组',
-        '打开交接'
+      void vscode.window.showInformationMessage(
+        `升级计划已生成：${groups}。面板已展开每个依赖和版本，可直接复制给 AI 执行。`
       );
-      if (pick === '升级第一组') {
-        await this.upgradeNextGroup();
-      } else if (pick === '打开交接') {
-        await this.openHandoffFile();
-      }
     } catch (error) {
       void vscode.window.showErrorMessage(
         `生成升级计划失败：${error instanceof Error ? error.message : String(error)}`
@@ -2189,13 +2181,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         '默认 Java 8、package 门禁，允许属性覆盖与最小代码修复；只有 JDK 11/17/21、Spring Boot 3、跨线无兼容版本等硬阻塞才再次询问，最后必须 quality_scan 复验。' +
         '没有 MCP 时运行 node .quality-center/bin/qc.cjs prompt . --drive 后照它执行。'
     );
-    const pick = await vscode.window.showInformationMessage(
-      '已复制 MCP 入口：AI 会先做一次目标确认，然后按 autopilot 连续执行并在最后复扫。',
-      '打开交接'
+    void vscode.window.showInformationMessage(
+      '已复制 MCP 入口：AI 会先做一次目标确认，然后按 autopilot 连续执行并在最后复扫。'
     );
-    if (pick === '打开交接') {
-      await this.openHandoffFile();
-    }
   }
 
   /** 失败时要打开真正的构建日志文件，而不是插件输出通道 */
