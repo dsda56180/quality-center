@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.27.22
+
+- 合并 main 上的 0.27.0–0.27.2：保留升级向导与状态机，同时带回 SARIF / GitHub Actions 注解 / 单规则静音 / 同文件聚合 / SpotBugs 失败恢复
+
 ## 0.27.21
 
 - 重开 / 重载 IDE 后优先从 `.quality-center/issues.json` 恢复上一次扫描结果与升级向导，仓库内事实源优先于扩展 storage 缓存
