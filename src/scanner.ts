@@ -91,12 +91,17 @@ export class ScanRunner {
   /** 扫描器结果缓存：文件指纹一致时跳过 Maven/Trivy 调用 */
   private caches = new Map<string, { sig: string; value: unknown }>();
   private cacheLoaded = false;
+  private ledgerLoaded = false;
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
   get result(): ScanResult | undefined {
     if (!this.lastResult) {
       this.loadPersisted();
+    }
+    if (!this.lastResult) {
+      // 缓存没命中时，退回仓库内单一事实源：.quality-center/issues.json
+      this.loadLedger();
     }
     return this.lastResult;
   }
@@ -135,6 +140,13 @@ export class ScanRunner {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   }
 
+  private sameRoot(left: string, right: string): boolean {
+    if (process.platform === 'win32') {
+      return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+    }
+    return path.resolve(left) === path.resolve(right);
+  }
+
   private cacheFile(): string | undefined {
     const base = this.context.storageUri?.fsPath ?? this.context.globalStorageUri?.fsPath;
     return base ? path.join(base, 'scan-cache.json') : undefined;
@@ -142,22 +154,27 @@ export class ScanRunner {
 
   /** 载入上一次扫描结果与扫描器缓存，打开面板即可先看到旧结果 */
   private loadPersisted(): void {
-    if (this.cacheLoaded) {
+    if (this.cacheLoaded || this.lastResult) {
+      return;
+    }
+    const file = this.cacheFile();
+    const root = this.root();
+    if (!file || !root) {
+      // 扩展刚激活时 storageUri / workspaceFolders 可能还没就位，下次 getter 再试
+      return;
+    }
+    if (!fs.existsSync(file)) {
+      this.cacheLoaded = true;
       return;
     }
     this.cacheLoaded = true;
-    const file = this.cacheFile();
-    const root = this.root();
-    if (!file || !root || !fs.existsSync(file)) {
-      return;
-    }
     try {
       const data = JSON.parse(fs.readFileSync(file, 'utf8')) as {
         root?: string;
         result?: ScanResult;
         scanners?: Record<string, { sig: string; value: unknown }>;
       };
-      if (data.root !== root) {
+      if (!data.root || !this.sameRoot(data.root, root)) {
         return;
       }
       this.lastResult = data.result;
@@ -168,6 +185,58 @@ export class ScanRunner {
       });
     } catch {
       // 缓存损坏时忽略，按无缓存处理
+    }
+  }
+
+  /**
+   * 缓存未命中（例如换了机器、清过 storage）时，从仓库内事实源恢复：
+   * .quality-center/issues.json 是扫描导出的完整结果，重开 IDE 不必重扫。
+   */
+  private loadLedger(): void {
+    if (this.ledgerLoaded || this.lastResult) {
+      return;
+    }
+    const root = this.root();
+    if (!root) {
+      return;
+    }
+    this.ledgerLoaded = true;
+    const file = path.join(root, '.quality-center', 'issues.json');
+    if (!fs.existsSync(file)) {
+      return;
+    }
+    try {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+        generatedAt?: string;
+        projectRoot?: string;
+        issues?: Issue[];
+        errors?: ScanResult['errors'];
+        skipped?: ScanResult['skipped'];
+        suggestions?: ScanResult['suggestions'];
+        buildHint?: string;
+      };
+      if (data.projectRoot && !this.sameRoot(data.projectRoot, root)) {
+        return;
+      }
+      const finishedAt = Date.parse(data.generatedAt ?? '') || Date.now();
+      const issues = (data.issues ?? []).map((issue) =>
+        issue.file && !path.isAbsolute(issue.file)
+          ? { ...issue, file: path.resolve(root, issue.file) }
+          : issue
+      );
+      this.lastResult = {
+        startedAt: finishedAt,
+        finishedAt,
+        issues,
+        ignored: [],
+        errors: data.errors ?? [],
+        skipped: data.skipped ?? [],
+        missingTools: [],
+        suggestions: data.suggestions ?? [],
+        buildHint: data.buildHint
+      };
+    } catch {
+      // issues.json 损坏时按未扫描处理
     }
   }
 

@@ -3,6 +3,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import * as vscode from 'vscode';
+import { buildNextAction } from '../nextAction';
+import { explainBuildFailure } from '../explain';
+import { buildProject } from '../agentOps';
 import { exportForAgent, formatIssueForCopy } from '../agentExport';
 import { resolveBinary, run, runStreaming, StreamHandle, tailMessage } from '../exec';
 import { applyAutoFixes, isFixable } from '../fixer';
@@ -20,7 +23,10 @@ import {
   applyUpgradePlan,
   checkUpgradePlan,
   createUpgradePlan,
+  hashText,
+  PLAN_GROUP_LABEL,
   planCandidateToUpgrade,
+  readUpgradePlan,
   revertUpgradePlan
 } from '../upgradePlanFile';
 import { indexBomManagement, localRepository, parseBomRefs, parseDependencyTree } from '../dependencies';
@@ -339,6 +345,24 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'upgradeDeps':
         await this.upgradeDependencies(message.pkg);
+        break;
+      case 'upgradeNext':
+        await this.upgradeNextGroup();
+        break;
+      case 'createUpgradePlan':
+        await this.createPlanOnly();
+        break;
+      case 'buildGate':
+        await this.buildGate();
+        break;
+      case 'explainBuild':
+        await this.showBuildExplanation();
+        break;
+      case 'revertPlan':
+        await this.revertLatestPlan();
+        break;
+      case 'openHandoff':
+        await this.openHandoffFile();
         break;
       case 'saveSettings':
         await this.saveScanSettings(message.options);
@@ -1532,6 +1556,393 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   /**
+   * 向导第 1 步：只生成计划，不碰 pom。
+   * 与 CLI/MCP 共用 createUpgradePlan，避免面板另起一套候选算法。
+   */
+  private async createPlanOnly(): Promise<void> {
+    const root = this.runner.root();
+    const result = this.runner.result;
+    if (!root || !result) {
+      void vscode.window.showInformationMessage('还没有扫描结果，请先执行扫描。');
+      return;
+    }
+    try {
+      const plan = createUpgradePlan(root, result.issues, { reuse: true }).plan;
+      if (plan.candidates.length === 0) {
+        const detail = plan.skipped.slice(0, 5).map((item) => `· ${item.packageName}：${item.reason}`).join('\n');
+        void vscode.window.showInformationMessage(`没有可直接升级的依赖${detail ? `：\n${detail}` : ''}`);
+        return;
+      }
+      const groups = plan.groups.map((group) => `${group.label} ${group.candidates.length} 项`).join(' · ');
+      const first = plan.groups[0];
+      const pick = await vscode.window.showInformationMessage(
+        `计划 ${plan.planId} 已生成：${groups}。建议先升级「${first ? PLAN_GROUP_LABEL[first.name] : ''}」。`,
+        '升级第一组',
+        '打开交接'
+      );
+      if (pick === '升级第一组') {
+        await this.upgradeNextGroup();
+      } else if (pick === '打开交接') {
+        await this.openHandoffFile();
+      }
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `生成升级计划失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    this.push();
+  }
+
+  /**
+   * 向导主入口：只升级当前一组，组后立刻跑策略门禁。
+   * 成功自动提示下一组；失败保留现场，并把 Maven 报错翻译成原因/影响/建议。
+   */
+  private async upgradeNextGroup(): Promise<void> {
+    this.log('向导：收到「只升级当前组」');
+    const root = this.runner.root();
+    const result = this.runner.result;
+    if (!root || !result) {
+      void vscode.window.showInformationMessage('还没有扫描结果，请先执行扫描。');
+      return;
+    }
+    if (this.deepFixState) {
+      void vscode.window.showInformationMessage('当前有修复任务在执行，请稍后再试。');
+      return;
+    }
+    if (this.previewPanel) {
+      this.previewPanel.reveal();
+      void vscode.window.showInformationMessage('已有预览窗口打开，请先应用或取消。');
+      return;
+    }
+    const pomFile = path.join(root, 'pom.xml');
+    const openPom = vscode.workspace.textDocuments.find(
+      (document) => document.uri.fsPath.toLowerCase() === pomFile.toLowerCase()
+    );
+    if (openPom?.isDirty) {
+      void vscode.window.showWarningMessage('pom.xml 有未保存的修改，请先保存后再执行升级。');
+      return;
+    }
+
+    let planFile: ReturnType<typeof createUpgradePlan>['plan'];
+    try {
+      planFile = createUpgradePlan(root, result.issues, { reuse: true }).plan;
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `生成升级计划失败：${error instanceof Error ? error.message : String(error)}`
+      );
+      return;
+    }
+    if (planFile.candidates.length === 0) {
+      void vscode.window.showInformationMessage('没有可直接升级的依赖，先重新扫描确认。');
+      return;
+    }
+
+    const state = checkUpgradePlan(root, planFile.planId);
+    const group = state.nextGroup;
+    if (!group) {
+      const pick = await vscode.window.showInformationMessage(
+        `计划 ${planFile.planId} 的候选都已落盘，下一步是构建门禁。`,
+        '跑构建门禁',
+        '打开交接'
+      );
+      if (pick === '跑构建门禁') {
+        await this.buildGate();
+      } else if (pick === '打开交接') {
+        await this.openHandoffFile();
+      }
+      return;
+    }
+
+    const groupCandidates = planFile.candidates.filter((item) => item.group === group);
+    const cveCount = groupCandidates.reduce((sum, item) => sum + item.cveCount, 0);
+    const label = PLAN_GROUP_LABEL[group];
+    const crossLine = group === 'cross-line';
+    const actionLabel = crossLine ? '已确认跨大版本，继续' : '升级这一组';
+    const confirm = await vscode.window.showWarningMessage(
+      `只升级「${label}」：${groupCandidates.length} 项，涉及 ${cveCount} 条漏洞。` +
+        `写入后会跑构建门禁；失败会保留现场并给出原因。`,
+      { modal: true },
+      actionLabel,
+      '稍后'
+    );
+    if (confirm !== actionLabel) {
+      return;
+    }
+
+    const current = fs.readFileSync(pomFile, 'utf8');
+    this.beginDeepFix('写入 pom', 2);
+    this.log(
+      `向导升级「${label}」：${groupCandidates.map((item) => `${item.packageName} ${item.from}→${item.to}`).join(', ')}`
+    );
+    try {
+      const applied = applyUpgradePlan(root, {
+        planId: planFile.planId,
+        write: true,
+        expectedHash: hashText(current),
+        group,
+        allowCrossLine: crossLine
+      });
+      if (!applied.ok) {
+        this.deepFixState = null;
+        this.push();
+        void vscode.window.showErrorMessage(`写入 pom 失败：${applied.reason ?? '未知原因'}`);
+        return;
+      }
+
+      this.setDeepFixStage('构建门禁');
+      const build = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `质量中心：「${label}」已写入，正在跑构建门禁…`,
+          cancellable: false
+        },
+        () =>
+          buildProject(root, (line) => {
+            if (/^\[INFO\] (Building|BUILD|---)|^\[ERROR\]/.test(line)) {
+              this.log(line.replace(/^\[INFO\]\s*/, ''));
+            }
+          })
+      );
+      this.deepFixState = null;
+      this.push();
+
+      if (!build.ok) {
+        const explanation = explainBuildFailure(root);
+        this.log(`「${label}」构建失败：${explanation.cause}\n${explanation.suggestion}`);
+        const pick = await vscode.window.showErrorMessage(
+          `「${label}」构建失败，已保留现场（未自动回滚）。\n` +
+            `原因：${explanation.cause}\n影响：${explanation.impact}\n建议：${explanation.suggestion}`,
+          { modal: true },
+          '回滚到计划前',
+          '查看日志',
+          '复制给 AI'
+        );
+        if (pick === '回滚到计划前') {
+          await this.rollbackPlan(planFile.planId);
+        } else if (pick === '查看日志') {
+          await this.openBuildLog();
+        } else if (pick === '复制给 AI') {
+          await vscode.env.clipboard.writeText(
+            buildAgentPrompt(root, {
+              failure: `「${label}」构建失败。原因：${explanation.cause}\n影响：${explanation.impact}\n建议：${explanation.suggestion}`
+            })
+          );
+          void vscode.window.showInformationMessage('已复制给 AI：包含失败原因、当前计划与「一次一组」的硬性规则。');
+        }
+        return;
+      }
+
+      const after = checkUpgradePlan(root, planFile.planId);
+      await this.scanAndPush();
+      if (after.state === 'applied') {
+        const pick = await vscode.window.showInformationMessage(
+          `「${label}」已升级并通过构建，计划全部落盘。下一步复扫验收。`,
+          '复扫验收',
+          '打开交接'
+        );
+        if (pick === '复扫验收') {
+          await this.scanAndPush(true);
+        } else if (pick === '打开交接') {
+          await this.openHandoffFile();
+        }
+      } else {
+        const nextGroup = after.nextGroup;
+        const nextCount = nextGroup
+          ? planFile.candidates.filter((item) => item.group === nextGroup).length
+          : 0;
+        const pick = await vscode.window.showInformationMessage(
+          `「${label}」已升级并通过构建（${after.appliedCount ?? 0}/${after.total ?? 0}）。` +
+            `${nextGroup ? `下一组：${PLAN_GROUP_LABEL[nextGroup]}（${nextCount} 项）。` : ''}`,
+          '继续下一组',
+          '打开交接',
+          '稍后'
+        );
+        if (pick === '继续下一组') {
+          await this.upgradeNextGroup();
+        } else if (pick === '打开交接') {
+          await this.openHandoffFile();
+        }
+      }
+    } finally {
+      if (this.deepFixState) {
+        this.deepFixState = null;
+        this.push();
+      }
+    }
+  }
+
+  /** 单独跑一次策略门禁：构建 + 写 build-result.json，失败给翻译 */
+  private async buildGate(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      void vscode.window.showInformationMessage('还没有打开项目。');
+      return;
+    }
+    if (this.deepFixState) {
+      void vscode.window.showInformationMessage('当前有任务在执行，请稍后再试。');
+      return;
+    }
+    const build = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: '质量中心：跑构建门禁…',
+        cancellable: false
+      },
+      () =>
+        buildProject(root, (line) => {
+          if (/^\[INFO\] (Building|BUILD|---)|^\[ERROR\]/.test(line)) {
+            this.log(line.replace(/^\[INFO\]\s*/, ''));
+          }
+        })
+    );
+    this.push();
+    if (!build.ok) {
+      const explanation = explainBuildFailure(root);
+      const pick = await vscode.window.showErrorMessage(
+        `构建失败。\n原因：${explanation.cause}\n影响：${explanation.impact}\n建议：${explanation.suggestion}`,
+        { modal: true },
+        '查看日志'
+      );
+      if (pick === '查看日志') {
+        await this.openBuildLog();
+      }
+      return;
+    }
+    const pick = await vscode.window.showInformationMessage(
+      `构建通过（${build.seconds.toFixed(1)} 秒，门禁 ${build.gate ?? 'package'}）。`,
+      '复扫验收',
+      '打开交接'
+    );
+    if (pick === '复扫验收') {
+      await this.scanAndPush(true);
+    } else if (pick === '打开交接') {
+      await this.openHandoffFile();
+    }
+  }
+
+  /** 把最近一次构建失败翻译成三段，而不是让用户自己读 Maven 日志 */
+  private async showBuildExplanation(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      return;
+    }
+    const explanation = explainBuildFailure(root);
+    if (explanation.ok) {
+      void vscode.window.showInformationMessage(explanation.cause);
+      return;
+    }
+    const pick = await vscode.window.showErrorMessage(
+      `原因：${explanation.cause}\n影响：${explanation.impact}\n建议：${explanation.suggestion}`,
+      { modal: true },
+      '回滚到计划前',
+      '查看日志',
+      '复制给 AI'
+    );
+    if (pick === '回滚到计划前') {
+      let planId = '';
+      try {
+        planId = checkUpgradePlan(root).planId;
+      } catch {
+        planId = '';
+      }
+      if (planId) {
+        await this.rollbackPlan(planId);
+      } else {
+        void vscode.window.showInformationMessage('没有可回滚的升级计划。');
+      }
+    } else if (pick === '查看日志') {
+      await this.openBuildLog();
+    } else if (pick === '复制给 AI') {
+      await vscode.env.clipboard.writeText(
+        buildAgentPrompt(root, {
+          failure: `原因：${explanation.cause}\n影响：${explanation.impact}\n建议：${explanation.suggestion}`
+        })
+      );
+      void vscode.window.showInformationMessage('已复制给 AI。');
+    }
+  }
+
+  private async rollbackPlan(planId: string): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      return;
+    }
+    const confirm = await vscode.window.showWarningMessage(
+      '回滚会把 pom.xml 恢复到「计划生成前」，已完成的分组也会一起退回。确认继续？',
+      { modal: true },
+      '回滚到计划前',
+      '先不回滚'
+    );
+    if (confirm !== '回滚到计划前') {
+      return;
+    }
+    const result = revertUpgradePlan(root, planId);
+    this.push();
+    if (!result.ok) {
+      void vscode.window.showErrorMessage(`回滚失败：${result.reason ?? '未知原因'}`);
+      return;
+    }
+    void vscode.window.showInformationMessage('已回滚到计划前快照。重新扫描后会给出新的计划。');
+  }
+
+  private async revertLatestPlan(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      return;
+    }
+    try {
+      const plan = readUpgradePlan(root);
+      await this.rollbackPlan(plan.planId);
+    } catch (error) {
+      void vscode.window.showInformationMessage(
+        `没有可回滚的计划：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /** 失败时要打开真正的构建日志文件，而不是插件输出通道 */
+  private async openBuildLog(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      return;
+    }
+    const explanation = explainBuildFailure(root);
+    if (!explanation.logFile) {
+      this.output?.show(true);
+      return;
+    }
+    const file = path.resolve(root, explanation.logFile);
+    try {
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+      await vscode.window.showTextDocument(document, { preview: false });
+    } catch {
+      this.output?.show(true);
+    }
+  }
+
+  /** 打开/生成一页交接：新会话、新 Agent 或人接手时先看它 */
+  private async openHandoffFile(): Promise<void> {
+    this.log('向导：收到「打开交接」');
+    const root = this.runner.root();
+    if (!root) {
+      return;
+    }
+    try {
+      const next = buildNextAction(root, { writeHandoff: true });
+      if (!next.handoffFile) {
+        return;
+      }
+      const file = path.resolve(root, next.handoffFile);
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+      await vscode.window.showTextDocument(document, { preview: false });
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `打开交接文件失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
    * 依赖树 + BOM 索引，用于判断版本来源与联动关系。
    * 按 pom 内容哈希缓存，避免每次打开预览都重新跑 Maven。
    */
@@ -2081,12 +2492,22 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     };
     const issues: SnapshotIssue[] = (result?.issues ?? []).map(toSnapshot);
     const ignored: SnapshotIssue[] = (result?.ignored ?? []).map(toSnapshot);
+    let next: ReturnType<typeof buildNextAction> | undefined;
+    if (root && fs.existsSync(path.join(root, 'pom.xml'))) {
+      try {
+        // 只算不写：面板每次 push 都刷新，但 handoff.md 由用户点「打开交接」或 AI 调 quality_next 时再落盘
+        next = buildNextAction(root, { writeHandoff: false });
+      } catch {
+        next = undefined;
+      }
+    }
     const snapshot: Snapshot = {
       type: 'state',
       scanning: override ? override.scanning : this.runner.isRunning,
       paused: this.runner.isPaused,
       deepFix: this.deepFixState,
       task: this.taskState,
+      next,
       scanStartedAt: this.scanStartedAt,
       scanProgress: this.scanProgress,
       finishedAt: result?.finishedAt ?? null,

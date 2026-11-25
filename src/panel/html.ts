@@ -33,9 +33,33 @@ export interface SnapshotSuggestion {
   impact: number;
 }
 
+/** 与 CLI/MCP 同一个状态机；面板只渲染，不另算一套进度 */
+export interface SnapshotNext {
+  state: string;
+  title: string;
+  action: string;
+  command: string;
+  why: string;
+  progress?: string;
+  plan?: {
+    planId: string;
+    state: string;
+    appliedCount: number;
+    total: number;
+    nextGroup?: string;
+    nextLabel?: string;
+    groups: { name: string; label: string; total: number; applied: number; state: string }[];
+  };
+  blockers: { code: string; message: string; suggestion: string }[];
+  warnings: { code: string; message: string; suggestion: string }[];
+  handoffFile?: string;
+}
+
 export interface Snapshot {
   type: 'state';
   scanning: boolean;
+  /** 唯一状态机：现在到哪、下一步只做什么 */
+  next?: SnapshotNext;
   deepFix?: { stage: string; startedAt: number; total?: number; done?: number } | null;
   /** 安装外部工具 / 构建 jar 等长任务的实时进度 */
   task?: { label: string; stage: string; startedAt: number } | null;
@@ -307,6 +331,31 @@ export function getHtml(nonce: string): string {
     border: 1px solid var(--vscode-panel-border); border-radius: 3px;
   }
   .copy-sug:hover { background: var(--vscode-list-hoverBackground); }
+  .wizard {
+    margin-top: 8px; padding: 8px 10px; border-radius: 4px;
+    background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.08));
+    border: 1px solid var(--vscode-panel-border);
+    border-left: 3px solid var(--vscode-focusBorder, #007acc);
+  }
+  .wz-title { font-weight: 600; line-height: 1.45; }
+  .wz-meta { margin-top: 3px; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .wz-groups { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .wz-chip {
+    font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    border: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-descriptionForeground);
+  }
+  .wz-chip.done { border-color: var(--vscode-testing-iconPassed, #3fb950); color: var(--vscode-testing-iconPassed, #3fb950); }
+  .wz-chip.doing { border-color: var(--vscode-focusBorder, #007acc); color: var(--vscode-textLink-foreground); }
+  .wz-note { margin-top: 5px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
+  .wz-note.warn { color: var(--vscode-editorWarning-foreground, #d29922); }
+  .wz-note.block { color: var(--vscode-editorError-foreground, #f85149); }
+  .wz-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .wz-actions button {
+    flex: 0 0 auto; padding: 4px 10px; font-size: 11px; line-height: 1.4;
+    min-height: 24px; cursor: pointer;
+  }
+  .wz-actions .wz-primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   .msg.clamp {
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
     overflow: hidden;
@@ -423,6 +472,7 @@ export function getHtml(nonce: string): string {
     <span id="buildtip"></span>
     <button id="build">构建并扫描</button>
   </div>
+  <div id="wizard" class="wizard" style="display:none"></div>
   </div>
   <div id="list"><div class="empty">点击「▶」开始扫描</div></div>
   <div id="mask" class="mask">
@@ -776,8 +826,104 @@ export function getHtml(nonce: string): string {
     document.getElementById('notice').innerHTML = notes.join('<br>');
   }
 
+  function renderWizard() {
+    var el = document.getElementById('wizard');
+    if (!el) return;
+    var n = state.next;
+    if (!n) {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      return;
+    }
+    el.style.display = 'block';
+    var groups = '';
+    if (n.plan && n.plan.groups) {
+      groups = '<div class="wz-groups">' + n.plan.groups.map(function (g) {
+        return '<span class="wz-chip ' + esc(g.state) + '">' + esc(g.label) + ' ' + g.applied + '/' + g.total + '</span>';
+      }).join('') + '</div>';
+    }
+    var notes = '';
+    (n.blockers || []).slice(0, 2).forEach(function (b) {
+      notes += '<div class="wz-note block">阻塞：' + esc(b.message) + '</div>';
+    });
+    (n.warnings || []).slice(0, 2).forEach(function (w) {
+      notes += '<div class="wz-note warn">注意：' + esc(w.message) + '</div>';
+    });
+    var label = n.plan && n.plan.nextLabel ? n.plan.nextLabel : '当前组';
+    function btn(key, text, primary) {
+      return '<button class="' + (primary ? 'wz-primary' : 'secondary') + '" data-wz="' + key + '">' + esc(text) + '</button>';
+    }
+    var actions = '';
+    switch (n.action) {
+      case 'scan':
+        actions = btn('scan', '开始扫描', true);
+        break;
+      case 'plan':
+        actions = btn('createPlan', '生成升级计划', true) + btn('openHandoff', '打开交接');
+        break;
+      case 'apply':
+        actions = btn('upgradeNext', '只升级「' + label + '」', true) + btn('openHandoff', '打开交接');
+        break;
+      case 'confirm':
+        actions = btn('upgradeNext', '确认后升级「' + label + '」', true) + btn('openHandoff', '打开交接');
+        break;
+      case 'build':
+        actions = btn('buildGate', '跑构建门禁', true) + btn('openHandoff', '打开交接');
+        break;
+      case 'explain':
+        actions = btn('explainBuild', '查看失败原因', true) + btn('revertPlan', '回滚到计划前') + btn('openHandoff', '打开交接');
+        break;
+      case 'rescan':
+        actions = btn('scan', '复扫验收', true) + btn('openHandoff', '打开交接');
+        break;
+      case 'install':
+        actions = btn('install-mvn', '安装 Maven', true);
+        break;
+      case 'revert':
+        actions = btn('revertPlan', '回滚到计划前', true) + btn('openHandoff', '打开交接');
+        break;
+      default:
+        actions = btn('openHandoff', '打开交接');
+    }
+    el.innerHTML = '<div class="wz-title">' + esc(n.title) + '</div>'
+      + (n.progress ? '<div class="wz-meta">' + esc(n.progress) + '</div>' : '')
+      + (n.why ? '<div class="wz-meta">' + esc(n.why) + '</div>' : '')
+      + groups + notes + '<div class="wz-actions">' + actions + '</div>';
+    // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
+    Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
+      button.type = 'button';
+      button.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        handleWizardAction(button.getAttribute('data-wz'));
+      });
+    });
+  }
+
+  function handleWizardAction(key) {
+    if (!key) return;
+    if (key === 'scan') {
+      vscode.postMessage({ type: 'scan' });
+    } else if (key === 'createPlan') {
+      vscode.postMessage({ type: 'createUpgradePlan' });
+    } else if (key === 'upgradeNext') {
+      vscode.postMessage({ type: 'upgradeNext' });
+    } else if (key === 'buildGate') {
+      vscode.postMessage({ type: 'buildGate' });
+    } else if (key === 'explainBuild') {
+      vscode.postMessage({ type: 'explainBuild' });
+    } else if (key === 'revertPlan') {
+      vscode.postMessage({ type: 'revertPlan' });
+    } else if (key === 'openHandoff') {
+      vscode.postMessage({ type: 'openHandoff' });
+    } else if (key === 'install-mvn') {
+      vscode.postMessage({ type: 'installTool', tool: 'mvn' });
+    }
+  }
+
   function render() {
     updateTabs();
+    renderWizard();
     var upgradeBtn = document.getElementById('upgrade');
     if (upgradeBtn) {
       upgradeBtn.style.display = state.upgradeEnabled === false ? 'none' : '';
@@ -1026,6 +1172,14 @@ export function getHtml(nonce: string): string {
   document.getElementById('upgrade').addEventListener('click', function () {
     vscode.postMessage({ type: 'upgradeDeps' });
   });
+  var wizardEl = document.getElementById('wizard');
+  if (wizardEl) {
+    wizardEl.addEventListener('click', function (e) {
+      var target = e.target && e.target.closest ? e.target.closest('[data-wz]') : null;
+      if (!target) return;
+      handleWizardAction(target.getAttribute('data-wz'));
+    });
+  }
 
   var SETTING_KEYS = ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec', 'astgrep'];
   var RECIPE_BOXES = [];
