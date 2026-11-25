@@ -10,6 +10,7 @@ const checks = {
   msgBarBeforeAi: h.indexOf('id="msgbar"') >= 0 && h.indexOf('id="msgbar"') < h.indexOf('id="aistatus"'),
   noFixBar: !h.includes('id="fixbar"') && !h.includes('id="buildbar"'),
   msgBarActions: h.includes("wizard('生成升级计划'") || h.includes("wizard('确认并执行'"),
+  msgBarCopyAi: h.includes("action('复制给 AI', 'copyDrivePrompt'"),
   mcpReadyHidden: !h.includes("if (mcp.state === 'ready')"),
   progressSeparated: h.includes('progressBusy'),
   catFallback: h.includes('猫咪正在准备扫描'),

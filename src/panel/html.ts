@@ -1112,7 +1112,8 @@ export function getHtml(nonce: string): string {
       } else if (n.action === 'plan') {
         add('info',
           '有 ' + (state.issues || []).length + ' 项问题，还没有升级计划；先生成计划，不会直接改 pom。',
-          wizard('生成升级计划', 'createPlan'));
+          wizard('生成升级计划', 'createPlan') +
+          action('复制给 AI', 'copyDrivePrompt', '复制完整任务提示，交给 AI 驱动修复与升级流程'));
       } else if (n.action === 'confirm') {
         add('warn',
           '升级计划有一组跨大版本，等待你确认：' + esc(nextLabel),
