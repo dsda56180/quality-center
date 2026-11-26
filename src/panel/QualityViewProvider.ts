@@ -15,6 +15,8 @@ import { EXTERNAL_TOOLS, ExternalTool, installLocation, installPlan, InstallPlan
 import { detectProjectProfile, ProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
+import { discoverWorkspaceProjects } from '../workspaceProjects';
+import { DiscoveredProject, projectForPath } from '../projectDiscovery';
 import { mavenMirrorArgs } from '../maven';
 import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, UpgradePreviewEntry, UpgradePreviewSkipped } from './deepFixPanel';
 import { AutoFixPreviewItem, buildAutoFixPreviewHtml } from './autoFixPreview';
@@ -285,6 +287,19 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   public static readonly viewId = 'qualityCenter.main';
 
   private view?: vscode.WebviewView;
+  /** 工作区里的项目列表；单项目时长度 1，面板不显示切换器 */
+  private projects: DiscoveredProject[] = [];
+  private activeProjectId = '';
+  private projectSummaryCache = new Map<string, {
+    mtime: number;
+    total: number;
+    critical: number;
+    high: number;
+    scanAt?: string;
+  }>();
+  /** 非当前项目里保存过文件：列表上标“有改动”，但不自动切换项目 */
+  private projectDirty = new Set<string>();
+  private projectListener?: vscode.Disposable;
   private agentFile?: string;
   /** 最近一次扫描的人可读报告；由扫描结果直接生成，不依赖 exportForAgent */
   private scanReportFile?: string;
@@ -324,13 +339,176 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   private mcpPrompted = false;
   private mcpRefreshTimer?: NodeJS.Timeout;
 
-  constructor(private readonly runner: ScanRunner) {
+  constructor(
+    private readonly runner: ScanRunner,
+    private readonly context: vscode.ExtensionContext
+  ) {
     setRunActor({ kind: 'panel' });
+    this.initProjects();
+    this.projectListener = vscode.workspace.onDidChangeWorkspaceFolders(() => this.refreshProjects());
   }
 
   dispose(): void {
+    this.projectListener?.dispose();
     this.disposeWatchers();
     this.output?.dispose();
+  }
+
+  /** 当前项目根：多项目工作区由选择器决定，单项目时仍是原来的工作区根 */
+  activeRoot(): string | undefined {
+    return this.runner.root();
+  }
+
+  private workspaceStateKey(): string {
+    const folders = (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.toString()).join('|');
+    const workspaceFile = vscode.workspace.workspaceFile?.toString() ?? '';
+    const hash = createHash('sha1').update(`${workspaceFile}|${folders}`).digest('hex').slice(0, 8);
+    return `qualityCenter.activeProject:${hash}`;
+  }
+
+  /** 首次激活时确定当前项目；单项目不会显示选择器，多项目恢复上次选择 */
+  private initProjects(): void {
+    if (this.projects.length > 0 && this.activeProjectId) {
+      return;
+    }
+    const projects = discoverWorkspaceProjects();
+    const saved = this.context.workspaceState.get<string>(this.workspaceStateKey());
+    const activeId =
+      projects.find((project) => project.id === saved)?.id ?? projects[0]?.id ?? '';
+    this.projects = projects;
+    this.activeProjectId = activeId;
+    const active = projects.find((project) => project.id === activeId);
+    this.runner.setActiveRoot(active?.root);
+  }
+
+  private refreshProjects(): void {
+    const previous = this.activeProjectId;
+    const projects = discoverWorkspaceProjects();
+    const saved = this.context.workspaceState.get<string>(this.workspaceStateKey());
+    const activeId =
+      projects.find((project) => project.id === previous)?.id ??
+      projects.find((project) => project.id === saved)?.id ??
+      projects[0]?.id ??
+      '';
+    this.projects = projects;
+    this.activeProjectId = activeId;
+    const active = projects.find((project) => project.id === activeId);
+    this.runner.setActiveRoot(active?.root);
+    if (this.view) {
+      this.ensureWatchers(active?.root ?? '');
+      this.push();
+    }
+  }
+
+  /** 用户主动切换项目；扫描/构建/写操作进行中时不允许切，避免结果和控制台串项目 */
+  setActiveProject(id: string): void {
+    if (!id || id === this.activeProjectId) {
+      return;
+    }
+    const project = this.projects.find((item) => item.id === id);
+    if (!project) {
+      return;
+    }
+    if (this.runner.isRunning || this.deepFixState || this.taskState || this.runLocked()) {
+      void vscode.window.showWarningMessage('当前项目正在扫描、构建或写入，完成后再切换项目。');
+      return;
+    }
+    this.activeProjectId = id;
+    this.runner.setActiveRoot(project.root);
+    this.deepScanResult = null;
+    this.fixCache = undefined;
+    this.scanStartedAt = null;
+    this.scanProgress = { done: 0, total: 0, active: [] };
+    void this.context.workspaceState.update(this.workspaceStateKey(), id);
+    this.disposeWatchers();
+    this.ensureWatchers(project.root);
+    this.push();
+    void this.refreshMcpStatus();
+  }
+
+  /** 命令面板入口：直接弹项目列表 */
+  async pickProject(): Promise<void> {
+    if (this.projects.length <= 1) {
+      void vscode.window.showInformationMessage('当前工作区只有一个项目，无需切换。');
+      return;
+    }
+    const items = this.projects.map((project) => ({
+      label: project.label,
+      description: project.root === this.runner.root() ? '当前项目' : project.root,
+      project
+    }));
+    const picked = await vscode.window.showQuickPick(items, {
+      title: '切换质量中心项目',
+      placeHolder: '选择要扫描、修复和升级的项目'
+    });
+    if (picked) {
+      this.setActiveProject(picked.project.id);
+    }
+  }
+
+  /**
+   * 保存文件时调用：只扫描当前项目的文件。非当前项目只标“有改动”，
+   * 不自动切换，避免用户正在看 A 时面板突然跳到 B。
+   */
+  shouldScanFile(file: string): boolean {
+    const owner = projectForPath(this.projects, file);
+    if (!owner) {
+      return false;
+    }
+    if (owner.id !== this.activeProjectId) {
+      if (!this.projectDirty.has(owner.id)) {
+        this.projectDirty.add(owner.id);
+        this.push();
+      }
+      return false;
+    }
+    this.projectDirty.delete(owner.id);
+    return true;
+  }
+
+  private readProjectSummary(project: DiscoveredProject): {
+    total: number;
+    critical: number;
+    high: number;
+    scanAt?: string;
+    hasResult: boolean;
+  } {
+    if (project.id === this.activeProjectId) {
+      const result = this.runner.result;
+      if (result) {
+        return {
+          total: result.issues.length,
+          critical: result.issues.filter((issue) => issue.severity === 'critical').length,
+          high: result.issues.filter((issue) => issue.severity === 'high').length,
+          scanAt: new Date(result.finishedAt).toISOString(),
+          hasResult: true
+        };
+      }
+    }
+    const file = path.join(project.root, '.quality-center', 'issues.json');
+    try {
+      const mtime = fs.statSync(file).mtimeMs;
+      const cached = this.projectSummaryCache.get(project.id);
+      if (cached && cached.mtime === mtime) {
+        return { ...cached, hasResult: true };
+      }
+      const data = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+        generatedAt?: string;
+        issues?: { severity?: string }[];
+      };
+      const issues = Array.isArray(data.issues) ? data.issues : [];
+      const summary = {
+        mtime,
+        total: issues.length,
+        critical: issues.filter((issue) => issue.severity === 'critical').length,
+        high: issues.filter((issue) => issue.severity === 'high').length,
+        scanAt: data.generatedAt
+      };
+      this.projectSummaryCache.set(project.id, summary);
+      return { ...summary, hasResult: true };
+    } catch {
+      return { total: 0, critical: 0, high: 0, hasResult: false };
+    }
   }
 
   private disposeWatchers(): void {
@@ -455,6 +633,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
+    this.initProjects();
     this.view = view;
     view.webview.options = { enableScripts: true };
     view.webview.html = getHtml(createNonce());
@@ -490,6 +669,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     scopes?: string[];
     minSeverity?: string;
     options?: ScanSettingsInput;
+    projectId?: string;
   }): Promise<void> {
     const readOnly = new Set([
       'copy', 'copyIssue', 'openAgent', 'copySuggestion', 'explainBuild', 'openHandoff',
@@ -503,6 +683,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
     switch (message.type) {
+      case 'selectProject':
+        if (message.projectId) {
+          this.setActiveProject(message.projectId);
+        }
+        break;
       case 'installTool':
         if (message.tool) {
           await this.installTool(message.tool as ToolId);
@@ -661,6 +846,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       this.writeAgentFiles();
       if (result) {
         completed = true;
+        this.projectDirty.delete(this.activeProjectId);
         this.log(
           `扫描完成：${result.issues.length} 项问题，用时 ${((result.finishedAt - result.startedAt) / 1000).toFixed(1)} 秒`
         );
@@ -3382,10 +3568,30 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     const run = root ? runSnapshot(root) : undefined;
     const final = root ? readFinalSummary(root, run) : undefined;
+    const activeProject = this.projects.find((project) => project.id === this.activeProjectId);
+    const projectSummaries = this.projects.map((project) => {
+      const summary = this.readProjectSummary(project);
+      return {
+        id: project.id,
+        label: project.label,
+        kind: project.kind,
+        total: summary.total,
+        critical: summary.critical,
+        high: summary.high,
+        scanAt: summary.scanAt,
+        hasResult: summary.hasResult,
+        dirty: this.projectDirty.has(project.id),
+        active: project.id === this.activeProjectId
+      };
+    });
     const snapshot: Snapshot = {
       type: 'state',
       run,
       final,
+      projects: projectSummaries,
+      activeProject: activeProject
+        ? { id: activeProject.id, label: activeProject.label, kind: activeProject.kind }
+        : undefined,
       scanning: override ? override.scanning : this.runner.isRunning,
       paused: this.runner.isPaused,
       deepFix: this.deepFixState,

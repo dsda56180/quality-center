@@ -86,6 +86,8 @@ export interface ScanProgress {
 export class ScanRunner {
   private running = false;
   private lastResult?: ScanResult;
+  /** 多项目工作区当前选中的项目根；未设置时退回第一个工作区目录，保持旧行为 */
+  private activeRoot?: string;
   /** 扫描队列暂停：当前扫描器结束后不再启动新的扫描器 */
   private paused = false;
   private cancelled = false;
@@ -147,7 +149,28 @@ export class ScanRunner {
   }
 
   root(): string | undefined {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    return this.activeRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  /**
+   * 面板切换项目时调用。切换必须丢弃内存里的结果和扫描器缓存，再从新项目的
+   * .quality-center/issues.json / 独立缓存恢复，避免把 A 项目的结果显示到 B 项目。
+   */
+  setActiveRoot(root: string | undefined): void {
+    const next = root ? path.resolve(root) : undefined;
+    const current = this.activeRoot;
+    if (next && current && this.sameRoot(current, next)) {
+      return;
+    }
+    this.activeRoot = next;
+    this.lastResult = undefined;
+    this.caches.clear();
+    this.cacheLoaded = false;
+    this.ledgerLoaded = false;
+  }
+
+  private hashRoot(root: string): string {
+    return createHash('sha1').update(path.resolve(root)).digest('hex').slice(0, 8);
   }
 
   private sameRoot(left: string, right: string): boolean {
@@ -157,9 +180,9 @@ export class ScanRunner {
     return path.resolve(left) === path.resolve(right);
   }
 
-  private cacheFile(): string | undefined {
+  private cacheFile(root: string): string | undefined {
     const base = this.context.storageUri?.fsPath ?? this.context.globalStorageUri?.fsPath;
-    return base ? path.join(base, 'scan-cache.json') : undefined;
+    return base ? path.join(base, 'scan-cache', `${this.hashRoot(root)}.json`) : undefined;
   }
 
   /** 载入上一次扫描结果与扫描器缓存，打开面板即可先看到旧结果 */
@@ -167,10 +190,13 @@ export class ScanRunner {
     if (this.cacheLoaded || this.lastResult) {
       return;
     }
-    const file = this.cacheFile();
     const root = this.root();
-    if (!file || !root) {
+    if (!root) {
       // 扩展刚激活时 storageUri / workspaceFolders 可能还没就位，下次 getter 再试
+      return;
+    }
+    const file = this.cacheFile(root);
+    if (!file) {
       return;
     }
     if (!fs.existsSync(file)) {
@@ -257,9 +283,12 @@ export class ScanRunner {
   }
 
   private persist(): void {
-    const file = this.cacheFile();
     const root = this.root();
-    if (!file || !root || !this.lastResult) {
+    if (!root || !this.lastResult) {
+      return;
+    }
+    const file = this.cacheFile(root);
+    if (!file) {
       return;
     }
     try {
@@ -294,7 +323,7 @@ export class ScanRunner {
 
   private outputDir(root: string): string {
     const base = this.context.storageUri?.fsPath ?? path.join(os.tmpdir(), 'quality-center');
-    return path.join(base, 'reports', path.basename(root));
+    return path.join(base, 'reports', `${path.basename(root)}-${this.hashRoot(root)}`);
   }
 
   async scan(onProgress?: (progress: ScanProgress) => void): Promise<ScanResult | undefined> {

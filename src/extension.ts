@@ -81,7 +81,7 @@ async function maybePromptSetup(context: vscode.ExtensionContext, root: string):
 export function activate(context: vscode.ExtensionContext): void {
   initMaven(context.storageUri?.fsPath ?? context.globalStorageUri?.fsPath);
   const runner = new ScanRunner(context);
-  const provider = new QualityViewProvider(runner);
+  const provider = new QualityViewProvider(runner, context);
 
   context.subscriptions.push(provider);
   context.subscriptions.push(
@@ -90,7 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  const projectRoot = (): string | undefined => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const projectRoot = (): string | undefined => provider.activeRoot();
 
   context.subscriptions.push(
     vscode.commands.registerCommand('qualityCenter.scan', () => provider.scanAndPush(true)),
@@ -108,6 +108,7 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.commands.executeCommand('workbench.action.openSettings', 'qualityCenter')
     ),
     vscode.commands.registerCommand('qualityCenter.upgradeDeps', () => provider.upgradeDependencies()),
+    vscode.commands.registerCommand('qualityCenter.switchProject', () => provider.pickProject()),
     vscode.commands.registerCommand('qualityCenter.integrate', async () => {
       const root = projectRoot();
       if (!root) {
@@ -168,8 +169,11 @@ export function activate(context: vscode.ExtensionContext): void {
       if (document.uri.scheme !== 'file' || !SAVE_SCAN_EXT.test(document.uri.fsPath)) {
         return;
       }
-      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const root = provider.activeRoot();
       if (!root) {
+        return;
+      }
+      if (!provider.shouldScanFile(document.uri.fsPath)) {
         return;
       }
       const relative = path.relative(root, document.uri.fsPath);
@@ -182,8 +186,11 @@ export function activate(context: vscode.ExtensionContext): void {
       if (timer) {
         clearTimeout(timer);
       }
+      const savedFile = document.uri.fsPath;
       timer = setTimeout(() => {
-        void provider.scanAndPush();
+        if (provider.shouldScanFile(savedFile)) {
+          void provider.scanAndPush();
+        }
       }, 1500);
     })
   );

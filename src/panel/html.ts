@@ -34,6 +34,19 @@ export interface SnapshotSuggestion {
   impactLabel?: string;
 }
 
+export interface SnapshotProject {
+  id: string;
+  label: string;
+  kind: string;
+  total: number;
+  critical: number;
+  high: number;
+  scanAt?: string;
+  hasResult: boolean;
+  dirty: boolean;
+  active: boolean;
+}
+
 /** 与 CLI/MCP 同一个状态机；面板只渲染，不另算一套进度 */
 export interface SnapshotNext {
   state: string;
@@ -69,6 +82,9 @@ export interface SnapshotNext {
 
 export interface Snapshot {
   type: 'state';
+  /** 工作区项目列表；单项目时长度 1，不显示切换器 */
+  projects?: SnapshotProject[];
+  activeProject?: { id: string; label: string; kind: string };
   /** AI / CLI 当前运行态：由扩展读 .quality-center/run-state.json 投影，面板不自己维护 */
   run?: {
     runId: string;
@@ -195,6 +211,22 @@ export function getHtml(nonce: string): string {
   }
   .head { flex: 0 0 auto; }
   #list { overflow: visible; }
+  .projectbar {
+    display: none; align-items: center; gap: 6px; margin: 0 0 7px;
+    min-width: 0; font-size: 11px; color: var(--vscode-descriptionForeground);
+  }
+  .projectbar .proj-label { flex: 0 0 auto; font-weight: 600; color: var(--vscode-foreground); }
+  #project-select {
+    flex: 1 1 auto; min-width: 0; max-width: 58%; height: 24px;
+    padding: 0 4px; border-radius: 3px; font-size: 11px;
+    color: var(--vscode-foreground); background: var(--vscode-dropdown-background);
+    border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+  }
+  #project-select:disabled { opacity: .6; }
+  #projectmeta {
+    flex: 0 0 auto; max-width: 42%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 10px; color: var(--vscode-descriptionForeground);
+  }
   .toolbar { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
   .toolbar .spacer { flex: 1 1 auto; }
   .mcpbar {
@@ -870,6 +902,11 @@ export function getHtml(nonce: string): string {
 </head>
 <body>
   <div class="head">
+  <div id="projectbar" class="projectbar">
+    <span class="proj-label">项目</span>
+    <select id="project-select" title="切换要扫描和修复的项目"></select>
+    <span id="projectmeta"></span>
+  </div>
   <div class="toolbar">
     <button id="scan" class="icon-btn" title="开始扫描"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 2l8 5-8 5z"/></svg></button>
     <button id="resume" class="icon-btn" title="继续扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 2l8 5-8 5z"/></svg></button>
@@ -966,7 +1003,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架', dependency: '依赖', duplicate: '收敛', secret: '密钥', manual: '人工' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { run: null, scanning: false, paused: false, deepFix: null, deepScan: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, qcsec: true, astgrep: true, scanOnSave: true, rewriteScan: false, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
+  let state = { run: null, projects: [], activeProject: null, scanning: false, paused: false, deepFix: null, deepScan: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, qcsec: true, astgrep: true, scanOnSave: true, rewriteScan: false, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
   let activeTab = 'all';
   /** 修复范围多选；跨渲染保留，默认全选（等同于“全面修复”） */
   let scopePick = ['upgrade', 'consolidation', 'code', 'secrets', 'static'];
@@ -982,6 +1019,46 @@ export function getHtml(nonce: string): string {
   function esc(value) {
     return String(value === undefined || value === null ? '' : value)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function projectTime(at) {
+    if (!at) return '';
+    var d = new Date(at);
+    if (isNaN(d.getTime())) return '';
+    function two(n) { return n < 10 ? '0' + n : String(n); }
+    return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + two(d.getHours()) + ':' + two(d.getMinutes());
+  }
+
+  /** 多项目工作区：只切换“当前项目”，不合并问题，也不自动扫描其他项目 */
+  function renderProjects() {
+    var bar = document.getElementById('projectbar');
+    var select = document.getElementById('project-select');
+    var meta = document.getElementById('projectmeta');
+    if (!bar || !select || !meta) return;
+    var projects = state.projects || [];
+    if (projects.length <= 1) {
+      bar.style.display = 'none';
+      return;
+    }
+    var active = state.activeProject || {};
+    var current = null;
+    select.innerHTML = projects.map(function (p) {
+      if (p.id === active.id) current = p;
+      var text = p.hasResult ? (p.total + ' 项') : '未扫描';
+      if (p.critical || p.high) text += ' · ' + (p.critical + p.high) + ' 高危';
+      if (p.dirty) text += ' · 有改动';
+      return '<option value="' + esc(p.id) + '"' + (p.id === active.id ? ' selected' : '') + '>' +
+        esc(p.label) + ' · ' + text + '</option>';
+    }).join('');
+    var busy = state.scanning || state.deepFix || state.task ||
+      (state.run && state.run.status === 'running');
+    select.disabled = !!busy;
+    var time = current ? projectTime(current.scanAt) : '';
+    meta.textContent = current
+      ? (current.hasResult ? (time ? '上次扫描 ' + time : '已有结果') : '当前项目未扫描')
+      : '';
+    meta.title = current ? '单项目模式：只扫描和操作当前项目' : '';
+    bar.style.display = 'flex';
   }
 
   function updateTabs() {
@@ -2031,6 +2108,7 @@ export function getHtml(nonce: string): string {
   }
 
   function render() {
+    renderProjects();
     renderMcp();
     renderAiStatus();
     updateTabs();
@@ -2246,6 +2324,12 @@ export function getHtml(nonce: string): string {
   document.getElementById('scan').addEventListener('click', function () {
     vscode.postMessage({ type: 'scan' });
   });
+  var projectSelect = document.getElementById('project-select');
+  if (projectSelect) {
+    projectSelect.addEventListener('change', function () {
+      vscode.postMessage({ type: 'selectProject', projectId: projectSelect.value });
+    });
+  }
   document.getElementById('mcpcheck').addEventListener('click', function () {
     vscode.postMessage({ type: 'checkMcp' });
   });

@@ -109,6 +109,10 @@ const checks = {
   planUsesNormalizedIssues: (provider.match(/createUpgradePlan\(root, readIssues\(root\)/g) || []).length >= 3,
   progressSeparated: h.includes('progressBusy'),
   catFallback: h.includes('猫咪正在准备扫描'),
+  projectSwitcher: h.includes('id="projectbar"') && h.includes('id="project-select"') &&
+    h.includes("type: 'selectProject'") && !h.includes('全部项目'),
+  projectHidesSingle: h.includes('projects.length <= 1') && h.includes("bar.style.display = 'none'"),
+  projectOnlyActive: h.includes('只扫描和操作当前项目') && h.includes('projectmeta'),
   finalReport: h.includes('最终验收')
 };
 console.log(checks);
