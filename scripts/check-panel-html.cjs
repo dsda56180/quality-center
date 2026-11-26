@@ -32,6 +32,8 @@ const checks = {
   scopeMenuOverlay: h.includes('position: absolute; left: 0; right: 0; top: calc(100% + 4px)'),
   autoFixInPlan: h.includes("btn('fixAll', '自动修复可自动项 ") && h.includes("type: 'fixAll'"),
   upgradePreviewPage: provider.includes('await this.showUpgradePreview'),
+  upgradePreviewExplain: fs.readFileSync(path.join(__dirname, '..', 'src', 'panel', 'deepFixPanel.ts'), 'utf8')
+    .includes('id="explainSkipped"') && provider.includes("message.type === 'explainSkipped'"),
   autoFixPreviewPage: provider.includes('showAutoFixPreview') && fs.existsSync(path.join(__dirname, '..', 'src', 'panel', 'autoFixPreview.ts')),
   skippedDecision: h.includes('wz-decision') && h.includes('data-wz="explainSkipped"') &&
     provider.includes('case \'explainSkipped\'') &&

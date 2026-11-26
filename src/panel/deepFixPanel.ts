@@ -129,8 +129,19 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
         + managed.map((entry) => renderCard(entry, info.entries.indexOf(entry))).join('')
       : '');
 
+  const policySkipped = info.skipped.filter((item) => /dependencyManagement|策略未授权/.test(item.reason));
+  const manualSkipped = info.skipped.filter((item) => !/dependencyManagement|策略未授权/.test(item.reason));
+  const policyBlock = policySkipped.length
+    ? `<section class="skip-decision">
+  <div class="skip-decision-title"><span class="skip-badge">需要你决定</span>${policySkipped.length} 项没有自动升级</div>
+  <div class="skip-decision-why"><b>原因：</b>这些包没有被 pom.xml 直接声明，是被其他依赖间接带入的。修它们需要插件在 pom 的“版本锁定”区写一条覆盖版本；当前策略只允许直接依赖升级，所以没有列进上方勾选项。</div>
+  <div class="skip-decision-note">这不是漏扫，也不是升级失败。先升级带入它们的直接依赖（推荐）；如果引入方升不上去，再只授权选中的包，不要手改 pom。</div>
+  <button id="explainSkipped" class="secondary">查看 ${policySkipped.length} 项与处理方式</button>
+</section>`
+    : '';
+
   const groups = new Map<string, string[]>();
-  info.skipped.forEach((item) => {
+  manualSkipped.forEach((item) => {
     if (!groups.has(item.reason)) {
       groups.set(item.reason, []);
     }
@@ -138,7 +149,7 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
   });
   const skipped = groups.size
     ? `<details class="skipped">
-  <summary>未纳入自动升级（${info.skipped.length} 项）</summary>
+  <summary>其余未纳入自动升级（${manualSkipped.length} 项）</summary>
   ${Array.from(groups.entries())
     .map(([reason, names]) => {
       const shown = names.slice(0, 10).join('、') + (names.length > 10 ? ` 等 ${names.length} 项` : '');
@@ -208,6 +219,21 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
   }
   .skipped { margin-top: 14px; color: var(--vscode-descriptionForeground); font-size: 11px; }
   .skipped summary { cursor: pointer; user-select: none; margin-bottom: 6px; }
+  .skip-decision {
+    margin-top: 16px; padding: 10px 12px; border-radius: 4px;
+    border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
+    background: var(--vscode-inputValidation-warningBackground, rgba(204,167,0,.09));
+    color: var(--vscode-foreground); font-size: 11px; line-height: 1.6;
+  }
+  .skip-decision-title { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+  .skip-badge {
+    padding: 0 6px; border-radius: 8px; font-size: 10px;
+    color: var(--vscode-editorWarning-foreground, #cca700); background: rgba(204,167,0,.16);
+  }
+  .skip-decision-why { margin-top: 5px; }
+  .skip-decision-why b { color: var(--vscode-editorWarning-foreground, #cca700); }
+  .skip-decision-note { margin-top: 4px; color: var(--vscode-descriptionForeground); }
+  .skip-decision button { margin-top: 7px; }
   .skip-group { margin: 6px 0 10px; padding-left: 6px; border-left: 2px solid var(--vscode-panel-border); }
   .skip-reason { color: var(--vscode-foreground); margin-bottom: 2px; }
   .skip-list { line-height: 1.7; word-break: break-all; }
@@ -235,7 +261,7 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
   <div class="title">依赖升级预览</div>
   <div class="sub">${escapeHtml(info.project)} · ${info.entries.length} 个可升级项 · 勾选后执行升级并校验编译</div>
 </header>
-<main>${cards}${skipped}</main>
+<main>${cards}${policyBlock}${skipped}</main>
 <footer>
   <span class="count" id="count"></span>
   <button id="toai" class="secondary">复制给 AI 继续</button>
@@ -274,6 +300,13 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
   document.getElementById('toai').addEventListener('click', function () {
     vscode.postMessage({ type: 'copyAgentPrompt', packages: picked() });
   });
+
+  const explainBtn = document.getElementById('explainSkipped');
+  if (explainBtn) {
+    explainBtn.addEventListener('click', function () {
+      vscode.postMessage({ type: 'explainSkipped' });
+    });
+  }
 
   document.getElementById('cancel').addEventListener('click', function () {
     vscode.postMessage({ type: 'cancel' });

@@ -1382,12 +1382,12 @@ export function getHtml(nonce: string): string {
           ? '<div class="wz-fixnote">计划文件里暂无候选明细。</div>'
           : '<div class="wz-fixnote">发现 ' + depCount + ' 条依赖漏洞，尚未生成可回滚计划。</div>';
       }
+      var skippedItems = (n.plan && n.plan.skipped) || [];
+      var policySkipped = skippedItems.filter(function (item) {
+        return item.decision === 'policy-denied' || /dependencyManagement|策略未授权/.test(item.reason || '');
+      });
+      var decisionCount = policySkipped.length;
       if (n.plan && n.plan.skippedCount) {
-        var skippedItems = n.plan.skipped || [];
-        var policySkipped = skippedItems.filter(function (item) {
-          return item.decision === 'policy-denied' || /dependencyManagement|策略未授权/.test(item.reason || '');
-        });
-        var decisionCount = policySkipped.length;
         if (decisionCount) {
           depBody += '<div class="wz-decision">' +
             '<div class="wz-decision-head"><span class="wz-decision-badge">需要你决定</span>' +
@@ -1415,6 +1415,7 @@ export function getHtml(nonce: string): string {
         '<span class="fix-count">' + (n.plan ? n.plan.total + ' 依赖' : depCount + ' 漏洞') + ' · ' +
         dupSuggestions.length + ' 收敛 · ' + (checkstyleCount + astgrepCount) + ' 代码 · ' +
         staticCount + ' 静态 · ' + secretCount + ' 密钥' +
+        (decisionCount ? ' · ' + decisionCount + ' 待决定' : '') +
         '</span></summary><div class="wz-fixbody">' +
         '<div class="wz-fixsection"><div class="wz-fixsection-head"><span class="fix-tag">依赖升级</span>' +
         '<span class="fix-impact">' + (n.plan

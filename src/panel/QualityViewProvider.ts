@@ -2627,6 +2627,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
             panel.dispose();
             return;
           }
+          if (message.type === 'explainSkipped') {
+            finish(null);
+            panel.dispose();
+            void this.showSkippedExplanation();
+            return;
+          }
           if (message.type === 'copyAgentPrompt') {
             const root = this.runner.root();
             if (root) {
