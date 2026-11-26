@@ -490,6 +490,7 @@ export function getHtml(nonce: string): string {
     min-height: 24px; cursor: pointer;
   }
   .wz-actions .wz-primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .wz-actions button:disabled { opacity: .45; cursor: not-allowed; }
   .wz-plan { margin-top: 7px; border-top: 1px dashed var(--vscode-panel-border); padding-top: 6px; }
   .wz-plan-head {
     display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
@@ -548,7 +549,7 @@ export function getHtml(nonce: string): string {
   }
   .wz-scope-row { display: flex; flex-wrap: nowrap; gap: 5px; align-items: center; max-width: 100%; }
   .wz-scope-picker {
-    position: relative; flex: 0 0 auto; width: calc(100% - 68px); max-width: calc(100% - 68px); min-width: 0;
+    position: relative; flex: 1 1 auto; width: auto; max-width: none; min-width: 0;
   }
   .wz-scope-picker summary {
     cursor: pointer; list-style: none; padding: 3px 7px;
@@ -578,13 +579,6 @@ export function getHtml(nonce: string): string {
     border-top: 1px dashed var(--vscode-panel-border);
     font-size: 9px; color: var(--vscode-descriptionForeground);
   }
-  .wz-scope-run {
-    flex: none; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px;
-    border: 1px solid var(--vscode-button-background);
-    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-    font-weight: 600;
-  }
-  .wz-scope-run:disabled { opacity: .45; cursor: not-allowed; }
   .wz-scope-plan {
     flex: none; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 9px;
     border: 1px solid var(--vscode-panel-border);
@@ -595,13 +589,17 @@ export function getHtml(nonce: string): string {
     cursor: pointer; list-style: none; user-select: none;
   }
   .wz-plan > summary::-webkit-details-marker, .wz-fixplan > summary::-webkit-details-marker { display: none; }
-  .wz-fixplan > summary::before {
-    content: '▸'; display: inline-flex; align-items: center; justify-content: center;
+  .wz-fixplan-caret {
+    display: inline-flex; align-items: center; justify-content: center;
     flex: none; width: 18px; height: 18px; border-radius: 3px;
     border: 1px solid var(--vscode-focusBorder, #007acc);
     color: var(--vscode-focusBorder, #007acc); font-size: 13px; line-height: 1;
   }
-  .wz-fixplan[open] > summary::before { content: '▾'; }
+  .wz-fixplan-caret::before { content: '▸'; }
+  .wz-fixplan[open] .wz-fixplan-caret::before { content: '▾'; }
+  .wz-fixplan-fold { flex: none; font-size: 9px; color: var(--vscode-descriptionForeground); }
+  .wz-fixplan-fold::before { content: '展开'; }
+  .wz-fixplan[open] .wz-fixplan-fold::before { content: '收起'; }
   .wz-plan > summary::before { content: '▸ '; color: var(--vscode-descriptionForeground); }
   .wz-plan[open] > summary::before { content: '▾ '; }
   .msg.clamp {
@@ -1361,7 +1359,9 @@ export function getHtml(nonce: string): string {
       }).join('');
       var secretRows = '<div class="wz-fixnote">先轮换密钥，再迁移到环境变量或配置中心。</div>';
       var manualCount = allSuggestions.filter(function (s) { return s.category === 'manual'; }).length;
-      fixPlan = '<details class="wz-fixplan"><summary class="wz-fixplan-head"><strong>修复方案</strong>' +
+      fixPlan = '<details class="wz-fixplan"><summary class="wz-fixplan-head">' +
+        '<span class="wz-fixplan-caret" aria-hidden="true"></span><strong>修复方案</strong>' +
+        '<span class="wz-fixplan-fold"></span>' +
         '<span class="fix-count">' + (n.plan ? n.plan.total + ' 依赖' : depCount + ' 漏洞') + ' · ' +
         dupSuggestions.length + ' 收敛 · ' + (checkstyleCount + astgrepCount) + ' 代码 · ' +
         staticCount + ' 静态 · ' + secretCount + ' 密钥' +
@@ -1429,24 +1429,27 @@ export function getHtml(nonce: string): string {
         '<details class="wz-scope-picker"><summary><span class="pick-label">修复范围</span>' +
         '<span id="scopePickSummary">' + pickText + '</span></summary>' +
         '<div class="wz-scope-menu">' + checks + planShortcut + '</div></details>' +
-        '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
-        (validPick.length ? '' : ' disabled') + '>复制给 AI</button>' +
-        '</div><div class="wz-scope-note">只复制所选范围的指令；未选类别只报告。依赖计划的手动执行仍在下方。</div></div>';
+        '</div><div class="wz-scope-note">选好范围后，用下方「复制给 AI 修复」；依赖计划的手动执行也在下方。</div></div>';
     }
     var actions = '';
+    var aiFixAction = hasData
+      ? '<button id="scopeCopyBtn" class="wz-primary" data-wz="copyScopes"' +
+        ((scopeOptions || []).some(function (o) { return o.count > 0 && scopePick.indexOf(o.key) >= 0; }) ? '' : ' disabled') +
+        '>复制给 AI 修复</button>'
+      : '';
     var autoFixAction = fixableCount ? btn('fixAll', '自动修复可自动项 ' + fixableCount + ' 项') : '';
     switch (n.action) {
       case 'scan':
         actions = btn('scan', '开始扫描', true);
         break;
       case 'plan':
-        actions = autoFixAction;
+        actions = aiFixAction + autoFixAction;
         break;
       case 'apply':
-        actions = btn('upgradeNext', '手动执行「' + label + '」') + autoFixAction;
+        actions = aiFixAction + btn('upgradeNext', '手动执行「' + label + '」') + autoFixAction;
         break;
       case 'confirm':
-        actions = btn('upgradeNext', '确认并手动执行「' + label + '」') + autoFixAction;
+        actions = aiFixAction + btn('upgradeNext', '确认并手动执行「' + label + '」') + autoFixAction;
         break;
       case 'build':
         actions = btn('buildGate', '编译并测试', true);

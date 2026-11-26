@@ -13,7 +13,8 @@ const checks = {
   msgBarBeforeAi: h.indexOf('id="msgbar"') >= 0 && h.indexOf('id="msgbar"') < h.indexOf('id="aistatus"'),
   noFixBar: !h.includes('id="fixbar"') && !h.includes('id="buildbar"'),
   msgBarActions: h.includes("wizard('生成计划'") || h.includes("wizard('开始扫描'"),
-  scopeCopyAi: h.includes('data-wz="copyScopes"') && h.includes('wz-scope-run'),
+  scopeCopyAi: h.includes('data-wz="copyScopes"') && h.includes('class="wz-primary"'),
+  fixCaret: h.includes('wz-fixplan-caret') && h.includes('wz-fixplan-fold'),
   msgBarDedupesPlan: h.includes('var planPending') && h.includes('fixable > 0 && !planPending'),
   onePlanActionCenter: !h.includes('升级计划待执行') && h.indexOf('id="wizard"') < h.indexOf('id="tabs"'),
   planDetail: h.includes('wz-fixsection') && h.includes('n.plan.candidates') &&
@@ -29,6 +30,8 @@ const checks = {
   scopePlanInMenu: h.includes('wz-scope-menu-foot') && h.includes('只生成计划文件，不改 pom'),
   scopeMenuOverlay: h.includes('position: absolute; left: 0; right: 0; top: calc(100% + 4px)'),
   autoFixInPlan: h.includes("btn('fixAll', '自动修复可自动项 ") && h.includes("type: 'fixAll'"),
+  upgradePreviewPage: provider.includes('await this.showUpgradePreview'),
+  autoFixPreviewPage: provider.includes('showAutoFixPreview') && fs.existsSync(path.join(__dirname, '..', 'src', 'panel', 'autoFixPreview.ts')),
   convergenceUsesProject: h.includes('按当前 pom 与源码 import 统计'),
   staticNotOneClick: h.includes('SpotBugs / qcsec 不在一键修复范围内'),
   scopeDistinct: ['upgrade', 'consolidation', 'code', 'secrets', 'static'].every((s) =>

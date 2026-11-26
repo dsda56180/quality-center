@@ -9,6 +9,7 @@ import { buildProject } from '../agentOps';
 import { exportForAgent, formatIssueForCopy } from '../agentExport';
 import { resolveBinary, run, runStreaming, StreamHandle, tailMessage } from '../exec';
 import { applyAutoFixes, isFixable } from '../fixer';
+import { FIXABLE_RULE_LABELS, planLineFix } from '../fixerCore';
 import { Issue, ScanResult, SOURCE_LABEL } from '../model';
 import { EXTERNAL_TOOLS, ExternalTool, installLocation, installPlan, InstallPlan, ToolId } from '../tools';
 import { detectProjectProfile, ProjectProfile, recipeAdvice } from '../projectProfile';
@@ -16,6 +17,7 @@ import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
 import { mavenMirrorArgs } from '../maven';
 import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, UpgradePreviewEntry } from './deepFixPanel';
+import { AutoFixPreviewItem, buildAutoFixPreviewHtml } from './autoFixPreview';
 import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '../upgrader';
 import { loadPolicy } from '../upgradePolicy';
 import { buildAgentPrompt, type AgentScope } from '../agentPrompt';
@@ -1860,42 +1862,65 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
 
     const groupCandidates = planFile.candidates.filter((item) => item.group === group);
-    const cveCount = groupCandidates.reduce((sum, item) => sum + item.cveCount, 0);
     const label = PLAN_GROUP_LABEL[group];
     const crossLine = group === 'cross-line';
-    const actionLabel = crossLine ? '已确认跨大版本，继续' : '升级这一组';
-    const list = groupCandidates.map((item) =>
-      `· ${item.packageName} ${item.from} → ${item.to}` +
-      (item.cveCount ? `（${item.cveCount} 条漏洞）` : '')
-    ).join('\n');
-    const detail = [
-      `将改动 ${groupCandidates.length} 个依赖：`,
-      list,
-      '',
-      `写入后会自动编译并运行测试；失败会保留 pom 和日志，可回滚到升级前。`,
-      crossLine ? '这是跨大版本升级，可能需要同步调整代码；建议先提交当前改动。' : ''
-    ].filter(Boolean).join('\n');
-    const confirm = await vscode.window.showWarningMessage(
-      `要升级「${label}」的 ${groupCandidates.length} 个依赖吗？${cveCount ? `（涉及 ${cveCount} 条漏洞）` : ''}`,
-      { modal: true, detail },
-      actionLabel,
-      '稍后'
+
+    const original = fs.readFileSync(pomFile, 'utf8');
+    let model = original;
+    const entries: UpgradePreviewEntry[] = [];
+    for (const item of groupCandidates) {
+      const applied = applyUpgrade(model, planCandidateToUpgrade(planFile, item));
+      if (!applied) {
+        continue;
+      }
+      model = applied.text;
+      entries.push({
+        packageName: item.packageName,
+        from: item.from,
+        to: item.to,
+        cveCount: item.cveCount,
+        mode: item.mode,
+        source: item.source,
+        affects: item.affects,
+        note: item.note,
+        alternatives: [item.to],
+        changes: applied.changes
+      });
+    }
+    if (entries.length === 0) {
+      void vscode.window.showInformationMessage('这一组在 pom.xml 里没有可定位的改动，请重新生成计划。');
+      return;
+    }
+    const profile = detectProjectProfile(root);
+    const projectParts = [
+      profile.javaVersion ? `Java ${profile.javaVersion}` : '',
+      profile.springBootVersion ? `Spring Boot ${profile.springBootVersion} → ${planFile.project.frameworkTarget ?? '未声明'}` : ''
+    ].filter(Boolean);
+    const decision = await this.showUpgradePreview(
+      entries,
+      planFile.skipped.map((item) => ({ packageName: item.packageName, reason: item.reason })),
+      projectParts.join(' · ')
     );
-    if (confirm !== actionLabel) {
+    if (!decision) {
+      this.log('用户取消了依赖升级预览');
+      return;
+    }
+    const chosen = groupCandidates.filter((item) => decision.packages.includes(item.packageName));
+    if (chosen.length === 0) {
       return;
     }
 
     const current = fs.readFileSync(pomFile, 'utf8');
     this.beginDeepFix('写入 pom', 2);
     this.log(
-      `向导升级「${label}」：${groupCandidates.map((item) => `${item.packageName} ${item.from}→${item.to}`).join(', ')}`
+      `向导升级「${label}」：${chosen.map((item) => `${item.packageName} ${item.from}→${item.to}`).join(', ')}`
     );
     try {
       const applied = applyUpgradePlan(root, {
         planId: planFile.planId,
         write: true,
         expectedHash: hashText(current),
-        group,
+        packages: chosen.map((item) => item.packageName),
         allowCrossLine: crossLine
       });
       if (!applied.ok) {
@@ -2632,6 +2657,58 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     });
   }
 
+  /** 自动修复预览页：列出逐行改动，勾选后只应用选中项 */
+  private showAutoFixPreview(
+    items: AutoFixPreviewItem[],
+    project: string,
+    skipped: number
+  ): Promise<number[] | null> {
+    const panel = vscode.window.createWebviewPanel(
+      'qualityCenter.autoFixPreview',
+      '自动修复预览',
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    this.previewPanel = panel;
+    panel.webview.html = buildAutoFixPreviewHtml(createNonce(), { project, items, skipped });
+
+    const known = new Set(items.map((item) => item.id));
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value: number[] | null): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.previewPanel === panel) {
+          this.previewPanel = undefined;
+        }
+        resolve(value);
+      };
+      panel.onDidDispose(() => finish(null));
+      panel.webview.onDidReceiveMessage((message: { type?: string; ids?: number[] }) => {
+        if (message.type === 'cancel') {
+          finish(null);
+          panel.dispose();
+          return;
+        }
+        if (message.type !== 'apply') {
+          return;
+        }
+        const picks = (message.ids ?? []).map(Number).filter((id) => known.has(id));
+        if (!picks.length) {
+          return;
+        }
+        if (this.runner.isRunning) {
+          void vscode.window.showInformationMessage('扫描进行中，请稍后再应用修复。');
+          return;
+        }
+        finish(picks);
+        panel.dispose();
+      });
+    });
+  }
+
   /** 针对单条问题所属规则执行深度修复 */
   private async deepFixRule(id: number): Promise<void> {
     const issue = this.runner.result?.issues[id - 1];
@@ -2741,52 +2818,78 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
   async fixAll(): Promise<void> {
     const issues = this.runner.result?.issues ?? [];
-    const targets = issues.filter(isFixable);
-    if (targets.length === 0) {
+    const candidates: Array<{ issue: Issue; id: number }> = [];
+    issues.forEach((issue, index) => {
+      if (isFixable(issue)) {
+        candidates.push({ issue, id: index + 1 });
+      }
+    });
+    if (candidates.length === 0) {
       void vscode.window.showInformationMessage('当前没有可自动修复的问题。');
       return;
     }
-    const root = this.runner.root() ?? '';
-    const fileCount = new Set(targets.map((item) => item.file)).size;
-    const ruleLabels: Record<string, string> = {
-      UnusedImports: '删除未使用的 import',
-      RedundantImport: '删除重复 import',
-      ModifierOrder: '调整修饰符顺序',
-      SimplifyBooleanExpression: '简化布尔判断'
-    };
-    const ruleCounts = new Map<string, number>();
-    for (const issue of targets) {
-      const rule = issue.rule ?? '其他';
-      ruleCounts.set(rule, (ruleCounts.get(rule) ?? 0) + 1);
-    }
-    const ruleLines = [...ruleCounts.entries()]
-      .map(([rule, count]) => `· ${ruleLabels[rule] ?? rule}：${count} 项`)
-      .join('\n');
-    const files = [...new Set(
-      targets.map((item) => item.file).filter((file): file is string => !!file)
-    )]
-      .map((file) => (root ? path.relative(root, file) : file))
-      .slice(0, 8);
-    const detail = [
-      `共 ${targets.length} 项，涉及 ${fileCount} 个文件：`,
-      ruleLines,
-      '',
-      '改动范围：',
-      ...files.map((file) => `· ${file}`),
-      fileCount > files.length ? `· 其余 ${fileCount - files.length} 个文件` : '',
-      '',
-      '只改源码中的这些行，不改 pom；执行后会自动重新扫描。'
-    ].join('\n').replace(/\n{3,}/g, '\n\n').trim();
-    const answer = await vscode.window.showWarningMessage(
-      `要自动修复 ${targets.length} 项代码问题吗？`,
-      { modal: true, detail },
-      '开始修复',
-      '取消'
-    );
-    if (answer !== '开始修复') {
+    if (this.previewPanel) {
+      this.previewPanel.reveal();
+      void vscode.window.showInformationMessage('已有预览窗口打开，请先应用或取消。');
       return;
     }
-    await this.applyFixes(targets);
+
+    const root = this.runner.root() ?? '';
+    const fileCache = new Map<string, string[]>();
+    const seen = new Set<string>();
+    const items: AutoFixPreviewItem[] = [];
+    let skipped = 0;
+
+    for (const { issue, id } of candidates) {
+      const file = issue.file!;
+      const line = issue.line!;
+      if (!fileCache.has(file)) {
+        try {
+          fileCache.set(file, fs.readFileSync(file, 'utf8').split(/\r?\n/));
+        } catch {
+          fileCache.set(file, []);
+        }
+      }
+      const lines = fileCache.get(file)!;
+      const text = lines[line - 1];
+      const key = `${file}:${line}`;
+      if (text === undefined || seen.has(key)) {
+        skipped += 1;
+        continue;
+      }
+      const plan = planLineFix(issue.rule ?? '', text);
+      if (!plan) {
+        skipped += 1;
+        continue;
+      }
+      seen.add(key);
+      const rule = issue.rule ?? '';
+      items.push({
+        id,
+        file: root ? path.relative(root, file).split(path.sep).join('/') : file,
+        line,
+        rule,
+        ruleLabel: FIXABLE_RULE_LABELS[rule] ?? rule,
+        oldText: text,
+        newText: plan.type === 'delete' ? '' : plan.text,
+        deleted: plan.type === 'delete'
+      });
+    }
+
+    if (items.length === 0) {
+      void vscode.window.showInformationMessage('没有可预览的自动修复项，请先重新扫描。');
+      return;
+    }
+    items.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+
+    const ids = await this.showAutoFixPreview(items, path.basename(root) || 'Maven 项目', skipped);
+    if (!ids) {
+      this.log('用户取消了自动修复预览');
+      return;
+    }
+    const selected = candidates.filter((item) => ids.includes(item.id)).map((item) => item.issue);
+    this.log(`自动修复：应用选中的 ${selected.length} 项（预览共 ${items.length} 项）`);
+    await this.applyFixes(selected);
   }
 
   async fixIssue(id: number): Promise<void> {

@@ -16,6 +16,14 @@ export const FIXABLE_RULES = new Set([
   'SimplifyBooleanExpression'
 ]);
 
+/** 面板预览用的人话名称，避免把 Checkstyle 规则名直接甩给用户 */
+export const FIXABLE_RULE_LABELS: Record<string, string> = {
+  UnusedImports: '删除未使用的 import',
+  RedundantImport: '删除重复 import',
+  ModifierOrder: '调整修饰符顺序',
+  SimplifyBooleanExpression: '简化布尔判断'
+};
+
 export type LinePlan =
   | { type: 'replace'; text: string }
   | { type: 'delete' }
