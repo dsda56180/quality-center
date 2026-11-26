@@ -485,14 +485,23 @@ export function getHtml(nonce: string): string {
   }
   .wz-overview-head strong { font-size: 11px; color: var(--vscode-foreground); }
   .wz-overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 6px; }
-  .wz-overview-cell { min-width: 0; padding: 4px 5px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; line-height: 1.35; }
-  .wz-overview-cell .label { display: block; font-size: 9px; color: var(--vscode-descriptionForeground); }
-  .wz-overview-cell .value { display: block; margin-top: 1px; font-size: 11px; font-weight: 600; color: var(--vscode-foreground); overflow-wrap: anywhere; }
+  .wz-overview-cell {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+    min-width: 0; padding: 5px 6px; border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px; line-height: 1.35;
+  }
+  .wz-overview-cell .label {
+    min-width: 0; font-size: 9px; color: var(--vscode-descriptionForeground);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .wz-overview-cell .value {
+    flex: none; margin-top: 0; font-size: 11px; font-weight: 600;
+    color: var(--vscode-foreground); white-space: nowrap;
+  }
   .wz-overview-note { margin-top: 5px; font-size: 9px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
   .wz-choices { margin-top: 8px; }
   .wz-choices-note { margin-top: 2px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
-  .wz-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 5px; }
-  .wz-choice-full { grid-column: 1 / -1; }
+  .wz-choice-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-top: 5px; }
   .wz-choice {
     display: flex; flex-direction: column; min-width: 0; padding: 6px 7px;
     border: 1px solid var(--vscode-panel-border); border-radius: 6px;
@@ -1769,7 +1778,7 @@ export function getHtml(nonce: string): string {
           btn('fixAll', '安全自动修复 ' + fixableCount + ' 项', false, 'wz-choice-btn') + '</div>'
         : '';
       var allCard = depCount
-        ? '<div class="wz-choice wz-choice-full risk"><div class="wz-choice-title"><span>全部依赖</span>' +
+        ? '<div class="wz-choice risk"><div class="wz-choice-title"><span>全部依赖</span>' +
           '<span class="wz-choice-tag risk">高风险</span>' +
           '<span class="wz-choice-count">' + (n.plan ? totalCount : depCount) + ' 项</span></div>' +
           '<div class="wz-choice-note">一次升级全部依赖；不分组编译，失败更难定位，跨大版本仍会跳过。</div>' +

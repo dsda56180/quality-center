@@ -24,8 +24,12 @@ const checks = {
   fullRepairPlan: h.includes('升级计划明细'),
   overviewFirst: h.includes('扫描结果总览') && h.indexOf('扫描结果总览') < h.indexOf('var gate =') &&
     h.indexOf('扫描结果总览') < h.indexOf('var primaryRow'),
+  overviewSingleLine: h.includes('.wz-overview-cell .label') &&
+    h.includes('white-space: nowrap; overflow: hidden; text-overflow: ellipsis'),
   choiceRoutes: h.includes('wz-choices') && h.includes('wz-choice-grid') &&
     ['升级依赖', '自动修复', '全部依赖', 'AI 修复'].every((label) => h.includes(label)),
+  choiceSingleRow: h.includes('grid-template-columns: repeat(3, minmax(0, 1fr))') &&
+    !h.includes('wz-choice-full'),
   choiceButtons: ["btn('chooseUpgrade'", "btn('fixAll'", "btn('upgradeDeps'", 'data-wz="copyScopes"'].every((key) =>
     h.includes(key)
   ),
