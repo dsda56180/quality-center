@@ -129,7 +129,8 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.rules.mute` | `[]` | 规则静音（单规则开关）：规则 id、前缀通配 `SEC_DRUID_*` 或来源名 `trivy`；静音条数记入 `summary.mutedByRule`，不进面板与报告 |
 | `qualityCenter.aggregate` | `false` | 同文件聚合：同规则同文件 ≥3 处合并为一条（仅 medium 及以下，高危逐条展示） |
 | `qualityCenter.dependencyUpgrade.enabled` | `true` | 启用依赖升级；入口在修复工作台，有计划时按组执行 |
-| `qualityCenter.openRewrite.enabled` | `true` | 启用源码重构（OpenRewrite）；入口在修复工作台的高级修复 |
+| `qualityCenter.openRewrite.enabled` | `true` | 启用源码重构（OpenRewrite）；入口在修复工作台的深度重构 |
+| `qualityCenter.openRewrite.scanEnabled` | `false` | 手动扫描后自动运行 OpenRewrite 深度预演（只生成 diff，不改代码）；保存触发的扫描不叠加 |
 | `qualityCenter.openRewrite.recipes` | `[]` | 手动启用的进阶配方；面板「设置」里按风险分组勾选，且只展示当前项目适用的配方 |
 | `qualityCenter.openRewrite.autoRecipes` | `true` | 自动启用当前项目适用的低风险配方（8 个等价改写） |
 | `qualityCenter.openRewrite.showAllRecipes` | `false` | 设置中显示 discover 列出的全部配方（含官方描述），新增配方无需升级插件 |
@@ -479,7 +480,9 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 「安全自动修复」只处理插件内置的确定性改写。更复杂的结构性问题（无用导入、等价写法、冗余修饰等）交给 OpenRewrite——它的配方库是开源社区长期维护、被大量项目验证过的，按编译单元（AST）改写，不做文本替换。
 
-在「修复工作台 → 高级修复」点「源码重构」后：
+普通扫描默认不跑 OpenRewrite，扫描完成后工作台会给出「深度重构」建议条。也可以在「扫描设置」勾选「手动扫描后运行 OpenRewrite 深度预演」：它只跑 dry-run、生成 diff，不自动应用；首次实测单配方约 1–2 分钟，工作区未变化时复用缓存，保存触发的扫描不会叠加 Maven。
+
+在「修复工作台 → 深度重构」点「源码重构」或「建议深度扫描」后：
 
 1. 先执行 dry-run 预演，然后在编辑器页签打开「源码重构预览」：左侧文件列表、右侧逐行 diff，可勾选要应用的文件（`qualityCenter.openRewrite.dryRunPreview`，默认开启）；
 2. 预览页可以一直留着慢慢看，切到其他编辑器或点击别处不会关闭；只有点「应用选中文件」才执行，点「取消」或直接关闭页签则放弃；再次点击「源码重构」会复用上次预演结果，不重复 dry-run（代码或配方变化后自动重新预演）；
