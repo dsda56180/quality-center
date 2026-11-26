@@ -1908,6 +1908,12 @@ export function getHtml(nonce: string): string {
         severityPick = severitySelectEl.value;
       });
     }
+    var reportLinkEl = el.querySelector('[data-msg="openReport"]');
+    if (reportLinkEl) {
+      reportLinkEl.addEventListener('click', function () {
+        vscode.postMessage({ type: 'openReport' });
+      });
+    }
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
       button.type = 'button';

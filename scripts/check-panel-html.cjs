@@ -32,6 +32,8 @@ const checks = {
   overviewMergedLabels: h.includes('代码质量+语义') && h.includes('静态+配置') &&
     h.includes('Checkstyle '),
   reportLink: h.includes('data-msg="openReport"') && h.includes('查看报告'),
+  reportLinkBound: h.includes('querySelector(\'[data-msg="openReport"]\')') &&
+    h.includes("vscode.postMessage({ type: 'openReport' })"),
   choiceRoutes: h.includes('wz-choices') && h.includes('wz-choice-grid') &&
     ['升级依赖', '自动修复', '全部依赖', 'AI 修复'].every((label) => h.includes(label)),
   choiceSingleRow: h.includes('grid-template-columns: repeat(3, minmax(0, 1fr))') &&
