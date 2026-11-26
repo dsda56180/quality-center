@@ -1404,6 +1404,7 @@ export function getHtml(nonce: string): string {
     var secretCount = (state.issues || []).filter(function (i) { return i.source === 'gitleaks'; }).length;
     var allSuggestions = state.suggestions || [];
     var dupSuggestions = allSuggestions.filter(function (s) { return s.category === 'duplicate'; });
+    var manualCount = allSuggestions.filter(function (s) { return s.category === 'manual'; }).length;
     var countSource = function (source) {
       return (state.issues || []).filter(function (i) { return i.source === source; }).length;
     };
@@ -1441,16 +1442,22 @@ export function getHtml(nonce: string): string {
     }
     if (n.action === 'plan') {
       title = '修复工作台';
-      meta = issueTotal + ' 项问题 · 可安全自动修复 ' + fixableCount +
-        (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
+      meta = hubMode
+        ? '先选一条处理路线'
+        : issueTotal + ' 项问题 · 可安全自动修复 ' + fixableCount +
+          (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
     }
     if ((n.action === 'apply' || n.action === 'confirm') && n.plan) {
-      title = n.plan.state === 'partial' ? '修复工作台 · 计划执行中' : '修复工作台 · 计划已生成';
+      title = hubMode
+        ? '修复工作台 · 先选处理路线'
+        : (n.plan.state === 'partial' ? '修复工作台 · 计划执行中' : '修复工作台 · 计划已生成');
       if (state.final) {
         title = n.plan.state === 'partial' ? '本次修复已收尾 · 剩余组需人工确认' : '本次修复已收尾';
       }
-      meta = '已落盘 ' + n.plan.appliedCount + '/' + n.plan.total +
-        (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
+      meta = hubMode
+        ? '先选一条处理路线'
+        : '已落盘 ' + n.plan.appliedCount + '/' + n.plan.total +
+          (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
     }
     var purpose = '';
     if (blankState === 'scan') {
@@ -1465,11 +1472,11 @@ export function getHtml(nonce: string): string {
     } else if (n.action === 'plan') {
       purpose = upgradeFlow
         ? '只显示依赖升级相关内容；先看提醒和待决定项，再生成计划。'
-        : '先看总览，再选择从哪条路线开始；依赖升级只生成计划，不改 pom。';
+        : '扫描完成；先选一条路线，写操作都会先预览。';
     } else if ((n.action === 'apply' || n.action === 'confirm') && appliedCount === 0) {
       purpose = upgradeFlow
         ? '只显示依赖升级相关计划；先处理提醒和待决定项，再写入 pom。'
-        : '计划已生成但还没写入；先选一条路线，写操作都会先预览。';
+        : '扫描完成；先选一条路线，写操作都会先预览。';
     } else if (n.action === 'build') {
       purpose = '升级已写入，编译并运行测试，确认没有破坏现有功能。';
     } else if (n.action === 'explain') {
@@ -1535,7 +1542,7 @@ export function getHtml(nonce: string): string {
         { label: '代码质量', value: checkstyleCount + astgrepCount, unit: '项' },
         { label: '静态与配置', value: staticCount, unit: '项' },
         { label: '硬编码密钥', value: secretCount, unit: '处' },
-        { label: '待决定', value: decisionCount, unit: '项' }
+        { label: hubMode ? '人工判断' : '待决定', value: hubMode ? manualCount : decisionCount, unit: hubMode ? '条' : '项' }
       ].filter(function (cell) { return cell.value > 0; }).map(function (cell) {
         return '<div class="wz-overview-cell"><span class="label">' + esc(cell.label) +
           '</span><span class="value">' + esc(String(cell.value)) + ' ' + esc(cell.unit) + '</span></div>';
@@ -1547,7 +1554,7 @@ export function getHtml(nonce: string): string {
       if (fixableCount) {
         overviewNotes.push(fixableCount + ' 项可安全自动修复');
       }
-      if (decisionCount) {
+      if (decisionCount && !hubMode) {
         overviewNotes.push(decisionCount + ' 项间接依赖待你授权');
       }
       overview = '<div class="wz-overview"><div class="wz-overview-head"><strong>扫描结果总览</strong>' +
