@@ -62,7 +62,8 @@ assert(markdown.includes('| 问题总数 | 严重 + 高危 | 可自动修复 | �
 assert(markdown.includes('### 严重度分布'), '应包含严重度分布');
 assert(markdown.includes('### 来源分布'), '应包含来源分布');
 assert(markdown.includes('### 高风险组件 Top 5'), '应包含高风险组件');
-assert(markdown.includes('## 详细清单（默认折叠）'), '应包含折叠说明');
+assert(markdown.includes('## 详细清单\n'), '应包含详细清单标题');
+assert(!markdown.includes('（默认折叠）'), '标题不应出现“默认折叠”字样');
 assert(markdown.includes('<details><summary><strong>依赖漏洞'), 'CVE 明细应折叠');
 assert(markdown.includes('<details><summary><strong>代码质量'), '逐文件清单应折叠');
 assert(markdown.includes('█'), '分布应使用方块条');

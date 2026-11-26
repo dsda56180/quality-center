@@ -10,12 +10,13 @@ function rel(root: string, file?: string): string {
   return (relative || file).split(path.sep).join('/');
 }
 
+function oneLine(text: string | undefined): string {
+  return (text ?? '').replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function clean(text: string | undefined, max = 160): string {
-  if (!text) {
-    return '';
-  }
-  const oneLine = text.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
-  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+  const line = oneLine(text);
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 function cell(text: string | undefined, max = 160): string {
@@ -235,7 +236,7 @@ export function toMarkdown(result: ScanResult, root: string): string {
     for (const [index, item] of top.entries()) {
       const impact = item.impactLabel ? `${item.impact} ${item.impactLabel}` : `${item.impact} 项`;
       lines.push(`${index + 1}. **${item.title}**（${impact}）`);
-      lines.push(`   ${clean(item.detail, 180)}`);
+      lines.push(`   ${oneLine(item.detail)}`);
     }
     lines.push('');
     if (result.suggestions.length > top.length) {
@@ -244,9 +245,9 @@ export function toMarkdown(result: ScanResult, root: string): string {
       );
       lines.push('');
       for (const [index, item] of result.suggestions.slice(top.length).entries()) {
-        lines.push(`### ${top.length + index + 1}. ${item.title}`);
-        lines.push('');
-        lines.push(`影响 ${item.impact} 项。${clean(item.detail, 400)}`);
+        const impact = item.impactLabel ? `${item.impact} ${item.impactLabel}` : `${item.impact} 项`;
+        lines.push(`${top.length + index + 1}. **${item.title}**（${impact}）`);
+        lines.push(`   ${oneLine(item.detail)}`);
         lines.push('');
       }
       lines.push('</details>');
@@ -255,7 +256,7 @@ export function toMarkdown(result: ScanResult, root: string): string {
   }
 
   if (total > 0) {
-    lines.push('## 详细清单（默认折叠）');
+    lines.push('## 详细清单');
     lines.push('');
     lines.push('> 日常只需要看上面的核心看板和优先处理；需要逐条核对或复制给 AI 时再展开。');
     lines.push('');
