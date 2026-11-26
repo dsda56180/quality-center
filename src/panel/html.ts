@@ -525,9 +525,9 @@ export function getHtml(nonce: string): string {
   .wz-choice .secondary:hover { background: var(--vscode-list-hoverBackground); }
   .wz-choice .secondary:disabled { opacity: .45; cursor: not-allowed; }
   .wz-ai-first {
-    border: 2px solid #2ea043;
-    background: rgba(46,160,67,.16);
-    box-shadow: 0 0 0 1px rgba(46,160,67,.45), 0 0 16px rgba(46,160,67,.22);
+    border: 2px solid #3fb950;
+    background: rgba(63,185,80,.20);
+    box-shadow: 0 0 0 1px rgba(63,185,80,.60), 0 0 18px rgba(63,185,80,.28);
   }
   .wz-star {
     margin-left: 5px; font-size: 11px; line-height: 1; vertical-align: 1px;
