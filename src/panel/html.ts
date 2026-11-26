@@ -235,6 +235,13 @@ export function getHtml(nonce: string): string {
     flex: 0 0 auto; width: 28px; height: 26px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
   }
+  /* 主操作统一用固定蓝色，避免不同主题把按钮背景渲染成灰/绿 */
+  #scan,
+  .wz-ai-first .wz-scope-run {
+    background: #0e639c; color: #ffffff; border-color: #0e639c;
+  }
+  #scan:hover,
+  .wz-ai-first .wz-scope-run:hover { background: #1177bb; border-color: #1177bb; }
   .icon-btn svg { display: block; }
   button {
     flex: 1 1 auto;
@@ -547,11 +554,11 @@ export function getHtml(nonce: string): string {
     color: #f2cc60;
   }
   .wz-ai-first .wz-scope-run {
-    background: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    border-color: var(--vscode-button-background);
+    background: #0e639c;
+    color: #ffffff;
+    border-color: #0e639c;
   }
-  .wz-ai-first .wz-scope-run:hover { background: var(--vscode-button-hoverBackground); }
+  .wz-ai-first .wz-scope-run:hover { background: #1177bb; border-color: #1177bb; }
   .wz-route-head {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     margin-top: 8px; padding: 5px 0 5px 7px;
