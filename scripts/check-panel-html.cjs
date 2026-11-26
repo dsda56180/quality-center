@@ -31,6 +31,9 @@ const checks = {
     ['升级依赖', '自动修复', '全部依赖', 'AI 修复'].every((label) => h.includes(label)),
   choiceSingleRow: h.includes('grid-template-columns: repeat(3, minmax(0, 1fr))') &&
     !h.includes('wz-choice-full'),
+  choiceCardsFitContent: h.includes('align-items: start') && h.includes('flex: 0 0 auto; margin-top: 3px'),
+  noManualLabel: !h.includes('>手动处理<'),
+  aiButtonBeforeScope: h.indexOf('id="scopeCopyBtn"') < h.indexOf('class="wz-scope-picker"'),
   choiceButtons: ["btn('chooseUpgrade'", "btn('fixAll'", "btn('upgradeDeps'", 'data-wz="copyScopes"'].every((key) =>
     h.includes(key)
   ),

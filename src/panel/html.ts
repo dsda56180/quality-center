@@ -501,7 +501,7 @@ export function getHtml(nonce: string): string {
   .wz-overview-note { margin-top: 5px; font-size: 9px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
   .wz-choices { margin-top: 8px; }
   .wz-choices-note { margin-top: 2px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
-  .wz-choice-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-top: 5px; }
+  .wz-choice-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 5px; margin-top: 5px; }
   .wz-choice {
     display: flex; flex-direction: column; min-width: 0; padding: 6px 7px;
     border: 1px solid var(--vscode-panel-border); border-radius: 6px;
@@ -519,7 +519,7 @@ export function getHtml(nonce: string): string {
     color: var(--vscode-editorWarning-foreground, #d29922);
     background: rgba(210,153,34,.14);
   }
-  .wz-choice-note { flex: 1; margin-top: 3px; font-size: 9px; line-height: 1.4; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+  .wz-choice-note { flex: 0 0 auto; min-height: 2.8em; margin-top: 3px; font-size: 9px; line-height: 1.4; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .wz-choice .wz-primary {
     display: inline-flex; align-self: flex-start; width: auto; margin-top: 4px; padding: 3px 8px;
     font-size: 10px; font-weight: 500; line-height: 1.2; text-align: left;
@@ -1679,12 +1679,12 @@ export function getHtml(nonce: string): string {
           esc(o.label) + '<span class="fix-impact">' + esc(String(o.note || '0')) + '</span></label>';
       }).join('');
       scopeBar = '<div class="wz-ai"><div class="wz-scope-row">' +
+        '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
+        (validPick.length ? '' : ' disabled') + '>AI 修复<span class="wz-star" title="首选" aria-label="首选">★</span></button>' +
         '<details class="wz-scope-picker"><summary><span class="pick-label">范围</span>' +
         '<span id="scopePickSummary">' + pickText + '</span>' +
         '<span class="wz-scope-caret" aria-hidden="true"></span></summary>' +
         '<div class="wz-scope-menu">' + checks + '</div></details>' +
-        '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
-        (validPick.length ? '' : ' disabled') + '>AI 修复<span class="wz-star" title="首选" aria-label="首选">★</span></button>' +
         '</div></div>';
     }
     var primary = '';
@@ -1781,14 +1781,13 @@ export function getHtml(nonce: string): string {
         ? '<div class="wz-choice risk"><div class="wz-choice-title"><span>全部依赖</span>' +
           '<span class="wz-choice-tag risk">高风险</span>' +
           '<span class="wz-choice-count">' + (n.plan ? totalCount : depCount) + ' 项</span></div>' +
-          '<div class="wz-choice-note">一次升级全部依赖；不分组编译，失败更难定位，跨大版本仍会跳过。</div>' +
+          '<div class="wz-choice-note">全部一次升级；不分组编译，失败难定位，跨大版本会跳过。</div>' +
           btn('upgradeDeps', '全部升级 ' + (n.plan ? totalCount : depCount) + ' 项', false, 'wz-choice-btn') +
           '</div>'
         : '';
       var aiFirstBlock = scopeBar
         .replace('<div class="wz-ai">', '<div class="wz-ai wz-ai-first">');
       choiceHub = '<div class="wz-choices">' + aiFirstBlock +
-        '<div class="wz-section-label">手动处理</div>' +
         '<div class="wz-choice-grid">' + depCard + fixCard + allCard + '</div>' +
         '</div>';
     }
