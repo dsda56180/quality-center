@@ -12,7 +12,8 @@ const checks = {
   msgBar: h.includes('id="msgbar"'),
   msgBarBeforeAi: h.indexOf('id="msgbar"') >= 0 && h.indexOf('id="msgbar"') < h.indexOf('id="aistatus"'),
   noFixBar: !h.includes('id="fixbar"') && !h.includes('id="buildbar"'),
-  msgBarActions: h.includes("wizard('生成计划'") || h.includes("wizard('开始扫描'"),
+  emptyWorkbench: h.includes("case 'scan':") && h.includes('wz-empty') && !h.includes("wizard('开始扫描'"),
+  msgBarActions: h.includes("action('构建并扫描'"),
   scopeCopyAi: h.includes('data-wz="copyScopes"') && h.includes('wz-scope-run'),
   scopeCaret: h.includes('wz-scope-caret'),
   fixCaret: h.includes('wz-fixplan-caret') && h.includes('wz-fixplan-fold'),
@@ -24,7 +25,14 @@ const checks = {
     h.includes('配置安全（qcsec）') && h.includes('语义规则（astgrep）'),
   noDuplicateGroupChips: !h.includes('<div class="wz-groups">'),
   noLongPurpose: !h.includes('先选范围：全面修复交给 AI'),
-  notesInsideFixPlan: h.includes('<div class="wz-fixbody">') && h.includes('wz-note block'),
+  notesInsideFixPlan: h.includes('<div class="wz-fixbody">') && !h.includes('notes +'),
+  blockersAboveFold: h.includes('var gate =') && h.includes('wz-gate block') &&
+    h.indexOf('var primaryRow') > h.indexOf('var gate ='),
+  rollbackEverywhere: h.includes('function addRevert()') && h.includes("'回滚到计划前', false, 'danger'") &&
+    h.includes('addRevert();'),
+  busyLocksWrites: h.includes('var writeKeys') && h.includes('busy && writeKeys[key]'),
+  openPolicyPrimary: h.includes("btn('openPolicy'") && h.includes("type: 'openPolicyPreview'") &&
+    provider.includes('openPolicyPreview'),
   noHandoffCtaAfterPlan: !provider.includes('升级第一组'),
   aiFirstInPlanCard: h.includes('data-wz="copyScopes"') && h.includes('交给 AI 修复'),
   scopeChooser: h.includes('wz-scope-picker') && h.includes('scopePickSummary') && h.includes('data-scope-pick="'),
@@ -36,11 +44,13 @@ const checks = {
   advancedRepairs: h.includes('高级修复') && h.includes("btn('deepFix'") && h.includes("btn('upgradeDeps'"),
   noToolbarWrites: !h.includes('id="deepfix"') && !h.includes('id="upgrade"'),
   upgradePreviewPage: provider.includes('await this.showUpgradePreview'),
+  upgradePreviewOnlySkips: fs.readFileSync(path.join(__dirname, '..', 'src', 'panel', 'deepFixPanel.ts'), 'utf8')
+    .includes('直接依赖已处理完'),
   upgradePreviewExplain: fs.readFileSync(path.join(__dirname, '..', 'src', 'panel', 'deepFixPanel.ts'), 'utf8')
     .includes('id="authorizeSkips"') && provider.includes("message.type === 'authorizeSkips'"),
   autoFixPreviewPage: provider.includes('showAutoFixPreview') && fs.existsSync(path.join(__dirname, '..', 'src', 'panel', 'autoFixPreview.ts')),
-  skippedDecision: h.includes('wz-decision') && h.includes('打开升级预览，一并选择') &&
-    h.includes('data-wz="upgradeNext"'),
+  skippedDecision: h.includes('需要你决定 · ') && h.includes('wz-gate warn') &&
+    !h.includes('wz-decision-btn') && !h.includes('打开升级预览，一并选择'),
   skippedPlainReason: !h.includes('策略未授权或需人工处理') && !h.includes('allowDependencyManagement=false'),
   convergenceUsesProject: h.includes('按当前 pom 与源码 import 统计'),
   staticNotOneClick: h.includes('SpotBugs / qcsec 不在一键修复范围内'),

@@ -486,6 +486,29 @@ export function getHtml(nonce: string): string {
   .wz-note { margin-top: 5px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
   .wz-note.warn { color: var(--vscode-editorWarning-foreground, #d29922); }
   .wz-note.block { color: var(--vscode-editorError-foreground, #f85149); }
+  .wz-gate {
+    margin-top: 7px; padding: 6px 8px; border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere;
+  }
+  .wz-gate.block {
+    border-color: var(--vscode-editorError-foreground, #f85149);
+    background: rgba(248, 81, 73, .07);
+  }
+  .wz-gate.warn {
+    border-color: var(--vscode-editorWarning-foreground, #d29922);
+    background: rgba(210, 153, 34, .06);
+  }
+  .wz-gate-head { font-weight: 600; }
+  .wz-gate.block .wz-gate-head { color: var(--vscode-editorError-foreground, #f85149); }
+  .wz-gate.warn .wz-gate-head { color: var(--vscode-editorWarning-foreground, #d29922); }
+  .wz-gate-msg { margin-top: 2px; }
+  .wz-gate-tip { margin-top: 3px; color: var(--vscode-descriptionForeground); }
+  .wz-lock {
+    margin-top: 7px; padding: 5px 7px; border: 1px dashed var(--vscode-panel-border);
+    border-radius: 4px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground);
+  }
+  .wz-empty { margin-top: 7px; font-size: 11px; line-height: 1.6; color: var(--vscode-descriptionForeground); }
+  .wz-empty-step { margin-top: 2px; }
   .wz-primary-row { margin-top: 9px; }
   .wz-primary {
     display: block; width: 100%; padding: 7px 10px; font-size: 12px; font-weight: 600;
@@ -504,6 +527,11 @@ export function getHtml(nonce: string): string {
   }
   .wz-secondary button:hover { background: var(--vscode-list-hoverBackground); }
   .wz-secondary button:disabled { opacity: .45; cursor: not-allowed; }
+  .wz-secondary button.danger {
+    border-color: var(--vscode-editorWarning-foreground, #d29922);
+    color: var(--vscode-editorWarning-foreground, #d29922);
+  }
+  .wz-secondary-hint { margin-top: 4px; font-size: 9px; line-height: 1.4; color: var(--vscode-descriptionForeground); }
   .wz-section-label { margin-top: 9px; font-size: 10px; color: var(--vscode-descriptionForeground); }
   .wz-ai { margin-top: 6px; padding: 6px 7px; border-radius: 6px; border: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background, rgba(128,128,128,.05)); }
   .wz-ai-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-bottom: 5px; }
@@ -552,27 +580,6 @@ export function getHtml(nonce: string): string {
   .wz-plan-row .cve { flex: none; color: var(--vscode-editorWarning-foreground, #d29922); }
   .wz-plan-row.done { opacity: .65; }
   .wz-plan-note { margin-top: 4px; font-size: 10px; color: var(--vscode-descriptionForeground); }
-  .wz-decision {
-    margin-top: 7px; padding: 8px 9px; border-radius: 5px; line-height: 1.55;
-    border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
-    background: var(--vscode-inputValidation-warningBackground, rgba(204,167,0,.09));
-    overflow-wrap: anywhere;
-  }
-  .wz-decision-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-  .wz-decision-head strong { font-size: 11px; color: var(--vscode-foreground); }
-  .wz-decision-badge {
-    flex: none; padding: 0 5px; border-radius: 8px; font-size: 9px; font-weight: 600;
-    color: var(--vscode-editorWarning-foreground, #cca700);
-    background: rgba(204,167,0,.16);
-  }
-  .wz-decision-why { font-size: 10px; color: var(--vscode-foreground); }
-  .wz-decision-why b { color: var(--vscode-editorWarning-foreground, #cca700); }
-  .wz-decision-note { margin-top: 3px; font-size: 9px; color: var(--vscode-descriptionForeground); }
-  .wz-decision-btn {
-    margin-top: 6px; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px;
-    border: 1px solid var(--vscode-button-background);
-    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-  }
   .wz-fixplan { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--vscode-panel-border); }
   .wz-fixplan-head {
     display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 4px 6px;
@@ -1220,9 +1227,6 @@ export function getHtml(nonce: string): string {
       return '<button class="msg-action' + (primary ? ' primary' : '') + '" data-msg="' + type + '" title="' +
         esc(title || label) + '">' + label + '</button>';
     }
-    function wizard(label, key, title) {
-      return '<button class="msg-action" data-wz="' + key + '" title="' + esc(title || label) + '">' + label + '</button>';
-    }
     function focus(label, id) {
       return '<button class="msg-action" data-focus="' + id + '" title="' + esc(label) + '">' + label + '</button>';
     }
@@ -1276,13 +1280,7 @@ export function getHtml(nonce: string): string {
       }
     }
 
-    // 修复与优化：人工可执行的动作统一进消息栏，不再使用独立 fixbar
-    var n = state.next;
-    if (!busy && n) {
-      if (n.action === 'scan') {
-        add('info', '还没有扫描结果，先扫描项目才能给出修复与升级建议。', wizard('开始扫描', 'scan'));
-      }
-    }
+    // 修复与优化：人工可执行的动作统一进修复工作台；消息栏只保留运行态与构建提醒
     if (!busy && state.finishedAt && state.buildHint) {
       add('warn', '🧱 ' + esc(state.buildHint), action('构建并扫描', 'buildAndScan'));
     }
@@ -1312,9 +1310,17 @@ export function getHtml(nonce: string): string {
     var el = document.getElementById('wizard');
     if (!el) return;
     var n = state.next;
+    if (!n) {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      return;
+    }
     var issueTotal0 = (state.issues || []).length;
-    var hasData = issueTotal0 > 0 || (state.suggestions || []).length > 0 || Boolean(n && n.plan);
-    if (!n || !hasData || (n.action === 'scan' && !n.plan)) {
+    var hasData = issueTotal0 > 0 || (state.suggestions || []).length > 0 || Boolean(n.plan);
+    var blankState = !hasData && n.action === 'scan'
+      ? 'scan'
+      : (!hasData && n.action === 'rescan' && n.scan && Number(n.scan.total || 0) === 0 ? 'clean' : '');
+    if (!hasData && !blankState) {
       el.style.display = 'none';
       el.innerHTML = '';
       return;
@@ -1337,19 +1343,41 @@ export function getHtml(nonce: string): string {
     var astgrepCount = countSource('astgrep');
     var spotbugsCount = countSource('spotbugs');
     var qcsecCount = countSource('qcsec');
+    var skippedItems = (n.plan && n.plan.skipped) || [];
+    var policySkipped = skippedItems.filter(function (item) {
+      return item.decision === 'policy-denied' || /dependencyManagement|策略未授权/.test(item.reason || '');
+    });
+    var decisionCount = policySkipped.length;
+    var busy = !!state.scanning || !!state.deepFix;
+    if (blankState === 'clean') {
+      title = '修复工作台 · 当前无问题';
+      meta = '最近一次扫描 0 项问题';
+    }
+    if (n.action === 'scan' && state.scanning) {
+      title = '修复工作台 · 正在扫描';
+      meta = '扫描只读执行中';
+    }
     if (n.action === 'plan') {
       title = '修复工作台';
-      meta = issueTotal + ' 项问题 · 可安全自动修复 ' + fixableCount;
+      meta = issueTotal + ' 项问题 · 可安全自动修复 ' + fixableCount +
+        (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
     }
     if ((n.action === 'apply' || n.action === 'confirm') && n.plan) {
       title = n.plan.state === 'partial' ? '修复工作台 · 计划执行中' : '修复工作台 · 计划已生成';
       if (state.final) {
         title = n.plan.state === 'partial' ? '本次修复已收尾 · 剩余组需人工确认' : '本次修复已收尾';
       }
-      meta = '已落盘 ' + n.plan.appliedCount + '/' + n.plan.total;
+      meta = '已落盘 ' + n.plan.appliedCount + '/' + n.plan.total +
+        (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
     }
     var purpose = '';
-    if (state.final && (n.action === 'apply' || n.action === 'confirm')) {
+    if (blankState === 'scan') {
+      purpose = state.scanning
+        ? '扫描完成后会在这里给出唯一的下一步。'
+        : '扫描只读，不改代码；之后的计划与写入都会先预览、再确认。';
+    } else if (blankState === 'clean') {
+      purpose = '最近一次扫描没有发现问题；改过 pom 或代码后再复扫确认。';
+    } else if (state.final && (n.action === 'apply' || n.action === 'confirm')) {
       purpose = '本次 AI 修复已生成最终验收（' + state.final.baselineTotal + ' → ' + state.final.currentTotal +
         ' 项）；剩余组需你确认后才进入下一轮。';
     } else if (n.action === 'build') {
@@ -1361,18 +1389,13 @@ export function getHtml(nonce: string): string {
     } else if (n.action === 'scan') {
       purpose = '先扫描项目，插件会根据结果给出升级建议。';
     } else if (n.action === 'none') {
-      purpose = '升级与验证已完成，剩余项按报告人工评估。';
+      purpose = decisionCount
+        ? '直接依赖已处理完；剩下的间接依赖需要你授权后才会写入。'
+        : '升级与验证已完成，剩余项按报告人工评估。';
     }
     // 全面修复方案：依赖升级只是其中一节，其余范围同卡展示；明细默认折叠
     var fixPlan = '';
     if (hasData) {
-      var notes = '';
-      (n.blockers || []).slice(0, 2).forEach(function (b) {
-        notes += '<div class="wz-note block">阻塞：' + esc(b.message) + '</div>';
-      });
-      (n.warnings || []).slice(0, 2).forEach(function (w) {
-        notes += '<div class="wz-note warn">注意：' + esc(w.message) + '</div>';
-      });
       var planRows = '';
       if (n.plan && n.plan.candidates && n.plan.candidates.length) {
         (n.plan.groups || []).forEach(function (g) {
@@ -1396,25 +1419,9 @@ export function getHtml(nonce: string): string {
           ? '<div class="wz-fixnote">计划文件里暂无候选明细。</div>'
           : '<div class="wz-fixnote">发现 ' + depCount + ' 条依赖漏洞，尚未生成可回滚计划。</div>';
       }
-      var skippedItems = (n.plan && n.plan.skipped) || [];
-      var policySkipped = skippedItems.filter(function (item) {
-        return item.decision === 'policy-denied' || /dependencyManagement|策略未授权/.test(item.reason || '');
-      });
-      var decisionCount = policySkipped.length;
-      if (n.plan && n.plan.skippedCount) {
-        if (decisionCount) {
-          depBody += '<div class="wz-decision">' +
-            '<div class="wz-decision-head"><span class="wz-decision-badge">需要你决定</span>' +
-            '<strong>' + decisionCount + ' 项没有自动升级</strong></div>' +
-            '<div class="wz-decision-why"><b>原因：</b>这些包没有被 pom.xml 直接声明，是被其他依赖间接带入的。修它们需要插件在 pom 的“版本锁定”区写一条覆盖版本；当前策略只允许直接依赖升级，所以没有生成执行按钮。</div>' +
-            '<div class="wz-decision-note">不是漏扫，也不是升级失败；已有的 ' + (n.plan.directCount ?? n.plan.total) + ' 项直接依赖仍可正常升级。' +
-            '先升级带入它们的直接依赖（推荐）；如果引入方升不上去，再只授权选中的包，不要手改 pom。</div>' +
-            '<button class="wz-decision-btn" data-wz="upgradeNext">打开升级预览，一并选择</button>' +
-            '</div>';
-        } else {
-          depBody += '<div class="wz-plan-note">另有 ' + n.plan.skippedCount +
-            ' 项未纳入：没有同线修复版本或需人工判断，已记录在计划文件。</div>';
-        }
+      if (n.plan && n.plan.skippedCount && !decisionCount) {
+        depBody += '<div class="wz-plan-note">另有 ' + n.plan.skippedCount +
+          ' 项未纳入：没有同线修复版本或需人工判断，已记录在计划文件。</div>';
       }
       var dupRows = dupSuggestions.map(function (s) {
         return '<div class="wz-fixrow"><span class="fix-title">' + esc(s.title) + '</span>' +
@@ -1457,13 +1464,74 @@ export function getHtml(nonce: string): string {
         '<div class="wz-fixrow"><span class="fix-title">配置安全（qcsec）</span><span class="fix-impact">' +
         qcsecCount + ' 项</span></div>' +
         '<div class="wz-fixnote">SpotBugs / qcsec 不在一键修复范围内，需 AI 带上下文修改或人工确认。</div></div>' +
-        notes +
         '<div class="wz-fixnote">只有依赖升级由插件写 pom；收敛、代码、密钥、静态由 AI 或你确认后处理' +
         (manualCount ? '，另有 ' + manualCount + ' 条人工判断建议见「修复建议」' : '') + '。</div>' +
         '</div></details>';
     }
-    function btn(key, text, primary) {
-      return '<button class="' + (primary ? 'wz-primary' : 'secondary') + '" data-wz="' + key + '">' + esc(text) + '</button>';
+    var emptyBody = '';
+    if (blankState === 'scan') {
+      emptyBody = '<div class="wz-empty">' +
+        (state.scanning
+          ? '已开始扫描；完成后自动刷新，不需要重复点击。'
+          : '<div class="wz-empty-step">1. 扫描：只读检查依赖、代码、密钥与静态缺陷</div>' +
+            '<div class="wz-empty-step">2. 计划：先看升什么、升到哪、pom.diff</div>' +
+            '<div class="wz-empty-step">3. 执行：按组写 pom 并编译，失败可回滚</div>') +
+        '</div>';
+    } else if (blankState === 'clean') {
+      emptyBody = '<div class="wz-empty">没有待修复项，不需要生成计划；改过依赖或代码后再复扫，避免拿旧结果决策。</div>';
+    }
+    var gate = '';
+    var policyBlocked = (n.blockers || []).some(function (b) { return b.code === 'policy-blocked'; });
+    (n.blockers || []).slice(0, 2).forEach(function (b) {
+      var blockTitle = ({
+        'build-failed': '构建未通过',
+        'pom-drift': 'pom 已偏离计划',
+        'policy-blocked': '需要授权才能继续',
+        'mvn-missing': '缺少 Maven',
+        'empty-plan': '计划为空'
+      })[b.code] || '当前不能继续';
+      var blockTip = b.suggestion;
+      if (b.code === 'policy-blocked' && n.plan &&
+        Number(n.plan.appliedCount || 0) >= Number(n.plan.total || 0)) {
+        blockTip = '直接依赖已处理完；在待决定项里按项授权，或接受剩余风险。';
+      }
+      gate += '<div class="wz-gate block"><div class="wz-gate-head">阻塞 · ' + esc(blockTitle) + '</div>' +
+        '<div class="wz-gate-msg">' + esc(b.message) + '</div>' +
+        (blockTip ? '<div class="wz-gate-tip">建议：' + esc(blockTip) + '</div>' : '') +
+        '</div>';
+    });
+    (n.warnings || []).slice(0, 2).forEach(function (w) {
+      var warnTitle = ({
+        'property-override': '属性会覆盖框架版本',
+        'revert-scope': '回滚范围',
+        'baseline-build-failed': '基线构建未通过'
+      })[w.code] || '注意';
+      gate += '<div class="wz-gate warn"><div class="wz-gate-head">注意 · ' + esc(warnTitle) + '</div>' +
+        '<div class="wz-gate-msg">' + esc(w.message) + '</div>' +
+        (w.suggestion ? '<div class="wz-gate-tip">建议：' + esc(w.suggestion) + '</div>' : '') +
+        '</div>';
+    });
+    if (decisionCount && !policyBlocked) {
+      gate += '<div class="wz-gate warn"><div class="wz-gate-head">需要你决定 · ' + decisionCount + ' 项间接依赖</div>' +
+        '<div class="wz-gate-msg">这些包由其他依赖间接带入；当前策略只允许直接依赖升级。</div>' +
+        '<div class="wz-gate-tip">打开预览后可逐项授权，只写版本锁定，不手改 pom。</div></div>';
+    }
+    var lockNote = busy
+      ? '<div class="wz-lock">' + (state.scanning
+        ? '扫描正在执行，修改类操作暂不可用；完成后自动恢复。'
+        : '修复正在执行，修改类操作暂不可用；完成后自动恢复。') + '</div>'
+      : '';
+    var writeKeys = {
+      scan: 1, createPlan: 1, upgradeNext: 1, buildGate: 1, revertPlan: 1,
+      fixAll: 1, deepFix: 1, upgradeDeps: 1, openPolicy: 1, 'install-mvn': 1
+    };
+    function btn(key, text, primary, extraClass) {
+      var cls = primary ? 'wz-primary' : 'secondary';
+      if (extraClass) {
+        cls += ' ' + extraClass;
+      }
+      return '<button class="' + cls + '"' + (busy && writeKeys[key] ? ' disabled' : '') +
+        ' data-wz="' + key + '">' + esc(text) + '</button>';
     }
     var scopeBar = '';
     if (hasData) {
@@ -1498,11 +1566,20 @@ export function getHtml(nonce: string): string {
     var primary = '';
     var primaryHint = '';
     var secondary = [];
+    function addRevert() {
+      if (n.plan && Number(n.plan.appliedCount || 0) > 0) {
+        secondary.push(btn('revertPlan', '回滚到计划前', false, 'danger'));
+      }
+    }
     var nextCount = n.plan && n.plan.nextGroup
       ? (n.plan.candidates || []).filter(function (item) { return item.group === n.plan.nextGroup; }).length
       : 0;
     var autoFixAction = fixableCount ? btn('fixAll', '安全自动修复 ' + fixableCount + ' 项') : '';
     switch (n.action) {
+      case 'scan':
+        primary = btn('scan', state.scanning ? '正在扫描…' : '开始扫描', true);
+        primaryHint = '只读扫描，不改代码；完成后给出唯一的下一步。';
+        break;
       case 'plan':
         if (depCount) {
           primary = btn('createPlan', '生成升级计划', true);
@@ -1522,19 +1599,22 @@ export function getHtml(nonce: string): string {
         primary = btn('upgradeNext', '继续升级：' + label + (nextCount ? ' ' + nextCount + ' 项' : ''), true);
         primaryHint = '写 pom 后自动编译；失败只停在当前组，可回滚。';
         if (autoFixAction) secondary.push(autoFixAction);
+        addRevert();
         break;
       case 'build':
         primary = btn('buildGate', '编译并测试', true);
         primaryHint = '上一组已写入；验证通过后才进入下一组。';
+        addRevert();
         break;
       case 'explain':
         primary = btn('explainBuild', '查看失败原因', true);
         primaryHint = '先定位这一组的问题，避免把失败带到下一组。';
-        secondary.push(btn('revertPlan', '回滚到计划前'));
+        addRevert();
         break;
       case 'rescan':
         primary = btn('scan', '复扫验收', true);
         primaryHint = '确认目标漏洞是否真的消失，再决定下一轮。';
+        addRevert();
         secondary.push(btn('openHandoff', '查看交接文件'));
         break;
       case 'install':
@@ -1546,8 +1626,14 @@ export function getHtml(nonce: string): string {
         primaryHint = '撤销本次计划写入的 pom 改动，代码保持当前工作区状态。';
         break;
       case 'none':
-        primary = btn('scan', '重新扫描验收', true);
-        primaryHint = '升级与验证已完成；复扫确认剩余项，再人工评估。';
+        if (decisionCount) {
+          primary = btn('openPolicy', '处理待决定 ' + decisionCount + ' 项', true);
+          primaryHint = '只打开预览供你勾选授权；授权后重新生成计划，不直接改 pom。';
+        } else {
+          primary = btn('scan', '重新扫描验收', true);
+          primaryHint = '升级与验证已完成；复扫确认剩余项，再人工评估。';
+        }
+        addRevert();
         secondary.push(btn('openHandoff', '查看交接文件'));
         break;
       default:
@@ -1558,22 +1644,26 @@ export function getHtml(nonce: string): string {
       ? '<div class="wz-primary-row">' + primary +
         (primaryHint ? '<div class="wz-primary-hint">' + esc(primaryHint) + '</div>' : '') + '</div>'
       : '';
+    var hasWriteSecondary = (n.plan && Number(n.plan.appliedCount || 0) > 0) || fixableCount > 0;
     var secondaryRow = secondary.length
-      ? '<div class="wz-section-label">其他修复</div><div class="wz-secondary">' + secondary.join('') + '</div>'
+      ? '<div class="wz-section-label">其他操作</div><div class="wz-secondary">' + secondary.join('') + '</div>' +
+        (hasWriteSecondary ? '<div class="wz-secondary-hint">修改类操作会先打开预览，确认后才写入；失败可回滚。</div>' : '')
       : '';
-    var advanced = '<details class="wz-advanced"><summary>高级修复（会改源码或 pom）</summary>' +
-      '<div class="wz-advanced-body">' +
-      '<div class="wz-advanced-row"><div><strong>OpenRewrite 源码重构</strong>' +
-      '<small>先预览 diff，改完编译；失败自动回滚</small></div>' +
-      btn('deepFix', '打开重构', false) + '</div>' +
-      (depCount ? '<div class="wz-advanced-row"><div><strong>全部依赖一次升级</strong>' +
-        '<small>不按组编译，多个依赖同时改，失败更难定位</small></div>' +
-        btn('upgradeDeps', '全部升级', false) + '</div>' : '') +
-      '</div></details>';
+    var advanced = hasData
+      ? '<details class="wz-advanced"><summary>高级修复（会改源码或 pom）</summary>' +
+        '<div class="wz-advanced-body">' +
+        '<div class="wz-advanced-row"><div><strong>OpenRewrite 源码重构</strong>' +
+        '<small>先预览 diff，改完编译；失败自动回滚</small></div>' +
+        btn('deepFix', '打开重构', false) + '</div>' +
+        (depCount ? '<div class="wz-advanced-row"><div><strong>全部依赖一次升级</strong>' +
+          '<small>不按组编译，多个依赖同时改，失败更难定位</small></div>' +
+          btn('upgradeDeps', '全部升级', false) + '</div>' : '') +
+        '</div></details>'
+      : '';
     el.innerHTML = '<div class="wz-title">' + esc(title) + '</div>'
       + (meta ? '<div class="wz-meta">' + esc(meta) + '</div>' : '')
       + (purpose ? '<div class="wz-purpose">' + esc(purpose) + '</div>' : '')
-      + primaryRow + secondaryRow + scopeBar + advanced + fixPlan;
+      + gate + emptyBody + lockNote + primaryRow + secondaryRow + scopeBar + advanced + fixPlan;
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
       button.type = 'button';
@@ -1623,6 +1713,8 @@ export function getHtml(nonce: string): string {
       vscode.postMessage({ type: 'createUpgradePlan' });
     } else if (key === 'upgradeNext') {
       vscode.postMessage({ type: 'upgradeNext' });
+    } else if (key === 'openPolicy') {
+      vscode.postMessage({ type: 'openPolicyPreview' });
     } else if (key === 'buildGate') {
       vscode.postMessage({ type: 'buildGate' });
     } else if (key === 'explainBuild') {
@@ -1792,7 +1884,7 @@ export function getHtml(nonce: string): string {
     } else if (!state.finishedAt) {
       list.innerHTML = deep
         ? '<div class="empty">深度修复进行中，完成后会自动重新扫描。</div>'
-        : '<div class="empty">点击「重新扫描」开始</div>';
+        : '<div class="empty">点击上方「开始扫描」开始</div>';
     } else if (activeTab === 'suggest') {
       const suggestions = state.suggestions || [];
       list.innerHTML = suggestions.length

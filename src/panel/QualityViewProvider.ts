@@ -547,6 +547,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       case 'upgradeNext':
         await this.upgradeNextGroup();
         break;
+      case 'openPolicyPreview':
+        await this.openPolicyPreview();
+        break;
       case 'createUpgradePlan':
         await this.createPlanOnly();
         break;
@@ -2022,6 +2025,53 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         this.deepFixState = null;
         this.push();
       }
+    }
+  }
+
+  /**
+   * 直接依赖都处理完、只剩间接依赖时，打开预览让用户按项授权。
+   * 这里不写 pom：授权只更新 upgrade-policy.json，随后重新生成计划。
+   */
+  private async openPolicyPreview(): Promise<void> {
+    const root = this.runner.root();
+    if (!root || !this.runner.result) {
+      void vscode.window.showInformationMessage('还没有扫描结果，请先执行扫描。');
+      return;
+    }
+    if (this.runner.isRunning || this.deepFixState) {
+      void vscode.window.showInformationMessage('当前有任务在执行，请稍后再处理待决定项。');
+      return;
+    }
+    if (this.previewPanel) {
+      this.previewPanel.reveal();
+      void vscode.window.showInformationMessage('已有预览窗口打开，请先处理完再继续。');
+      return;
+    }
+    let planFile: ReturnType<typeof createUpgradePlan>['plan'];
+    try {
+      planFile = createUpgradePlan(root, readIssues(root), { reuse: true }).plan;
+    } catch (error) {
+      void vscode.window.showErrorMessage(
+        `读取升级计划失败：${error instanceof Error ? error.message : String(error)}`
+      );
+      return;
+    }
+    const skipped = this.upgradeSkippedDetails(planFile.skipped);
+    const policySkipped = skipped.filter((item) => /dependencyManagement|策略未授权/.test(item.reason || ''));
+    if (!policySkipped.length) {
+      void vscode.window.showInformationMessage('当前没有需要按项授权的间接依赖。');
+      return;
+    }
+    const profile = detectProjectProfile(root);
+    const projectParts = [
+      profile.javaVersion ? `Java ${profile.javaVersion}` : '',
+      profile.springBootVersion
+        ? `Spring Boot ${profile.springBootVersion} → ${planFile.project.frameworkTarget ?? '未声明'}`
+        : ''
+    ].filter(Boolean);
+    const decision = await this.showUpgradePreview([], skipped, projectParts.join(' · '));
+    if (decision?.authorize?.length) {
+      await this.authorizeManagePackages(root, decision.authorize);
     }
   }
 

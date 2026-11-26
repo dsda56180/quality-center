@@ -158,7 +158,9 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
     ? `<section class="skip-decision">
   <div class="skip-decision-title"><span class="skip-badge">需要你决定</span>${policySkipped.length} 项没有自动升级</div>
   <div class="skip-decision-why"><b>原因：</b>这些包没有被 pom.xml 直接声明，是被其他依赖间接带入的。修它们需要插件在 pom 的“版本锁定”区写一条覆盖版本；当前策略只允许直接依赖升级，所以没有列进上方勾选项。</div>
-  <div class="skip-decision-note">这不是漏扫，也不是升级失败。上方 ${info.entries.length} 项可以正常升级；下方 ${policySkipped.length} 项需要你单独决定。先升级带入它们的直接依赖（推荐）；如果引入方升不上去，再只授权选中的包，不要手改 pom。</div>
+  <div class="skip-decision-note">这不是漏扫，也不是升级失败。${info.entries.length
+    ? `上方 ${info.entries.length} 项可以正常升级；下方 ${policySkipped.length} 项需要你单独决定。先升级带入它们的直接依赖（推荐）；如果引入方升不上去，再只授权选中的包，不要手改 pom。`
+    : `直接依赖已经处理完；下方 ${policySkipped.length} 项需要你单独决定。先升级带入它们的直接依赖（推荐）；如果引入方升不上去，再只授权选中的包，不要手改 pom。`}</div>
   <div class="skip-toolbar"><label><input type="checkbox" id="allSkips" /> 全选</label><span>默认不勾选，避免一次授权太多</span></div>
   <div class="skip-table">${skipRows || '<div class="skip-empty">没有需要按项授权的包。</div>'}</div>
   <button id="authorizeSkips" class="secondary" disabled>授权选中项并重新生成计划</button>
@@ -307,7 +309,7 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
 <body>
 <header>
   <div class="title">依赖升级预览</div>
-  <div class="sub">${escapeHtml(info.project)} · ${info.entries.length} 个可升级项${policySkipped.length ? ` · ${policySkipped.length} 项待决定` : ''} · 同页选择，分别处理</div>
+  <div class="sub">${escapeHtml(info.project)} · ${info.entries.length ? `${info.entries.length} 个可升级项` : '直接依赖已处理完'}${policySkipped.length ? ` · ${policySkipped.length} 项待决定` : ''} · 同页选择，分别处理</div>
 </header>
 <main>${cards}${policyBlock}${skipped}</main>
 <footer>
