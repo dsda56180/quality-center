@@ -495,6 +495,12 @@ export function getHtml(nonce: string): string {
     font-size: 10px; color: var(--vscode-descriptionForeground);
   }
   .wz-overview-head strong { font-size: 11px; color: var(--vscode-foreground); }
+  .wz-overview-head .head-right { display: flex; align-items: center; gap: 8px; }
+  .wz-report-link {
+    padding: 0; border: 0; background: transparent; font: inherit; font-size: 10px;
+    color: var(--vscode-textLink-foreground, #3794ff); cursor: pointer;
+  }
+  .wz-report-link:hover { text-decoration: underline; }
   .wz-overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 6px; }
   .wz-overview-cell {
     display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
@@ -1622,7 +1628,8 @@ export function getHtml(nonce: string): string {
         overviewNotes.push(decisionCount + ' 项间接依赖待你授权');
       }
       overview = '<div class="wz-overview"><div class="wz-overview-head"><strong>扫描结果总览</strong>' +
-        '<span>' + issueTotal + ' 项问题</span></div>' +
+        '<span class="head-right"><span>' + issueTotal + ' 项问题</span>' +
+        '<button class="wz-report-link" data-msg="openReport" title="在编辑器页签打开本次扫描报告">查看报告</button></span></div>' +
         (overviewCells ? '<div class="wz-overview-grid">' + overviewCells + '</div>' : '') +
         (overviewNotes.length ? '<div class="wz-overview-note">' + esc(overviewNotes.join(' · ')) + '</div>' : '') +
         '</div>';

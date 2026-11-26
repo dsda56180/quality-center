@@ -21,6 +21,7 @@
 - **零手动触发**：打开项目自动扫描，保存文件后自动增量扫描
 - **工具缺失可一键安装**：外部工具缺失不再静默跳过，扫描后弹窗 + 面板「安装」入口，装完自动重扫
 - **一键交付 AI**：面板「复制给 AI」生成结构化 Markdown，或「导出报告」保存为 `.md`
+- **扫描报告**：每轮扫描生成 `.quality-center/report.md`；手动扫描完成后自动在编辑器页签打开，总览右上角「查看报告」可随时重开
 - **单条复制**：每条问题右侧有「复制」按钮，只把这一条交给 AI
 - **AI 可读接口**：每轮扫描自动写入 `.quality-center/issues.json`（结构化）与 `.quality-center/report.md`，AI agent 可直接读取该文件
 - **点击跳转**：代码类问题可直接跳转到对应文件行
@@ -109,6 +110,7 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.scanOnStartup` | `true` | 打开项目后自动扫描一次 |
 | `qualityCenter.scanOnSave` | `true` | 保存文件后自动触发扫描 |
 | `qualityCenter.exportForAgent` | `true` | 每轮扫描后写入 `.quality-center/issues.json` 与 `report.md`，供 AI agent 直接读取 |
+| `qualityCenter.report.openAfterScan` | `true` | 手动扫描完成后在编辑器页签打开 `report.md`；保存触发的扫描不自动打开 |
 | `qualityCenter.notifyMissingTools` | `true` | 外部工具（gitleaks / trivy / mvn）缺失时弹窗提示并提供一键安装 |
 | `qualityCenter.checkstyle.enabled` | `true` | 启用 Checkstyle |
 | `qualityCenter.checkstyle.config` | `""` | 规则文件路径，留空则依次尝试 `.githooks/checkstyle-config.xml`、`checkstyle.xml`、`config/checkstyle/checkstyle.xml` |

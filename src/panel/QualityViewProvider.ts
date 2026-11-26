@@ -286,6 +286,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
   private view?: vscode.WebviewView;
   private agentFile?: string;
+  /** 最近一次扫描的人可读报告；由扫描结果直接生成，不依赖 exportForAgent */
+  private scanReportFile?: string;
   private deepFixState: { stage: string; startedAt: number; total: number; done: number } | null = null;
   private previewPanel?: vscode.WebviewPanel;
   /** 上一次 dry-run 的结果，工作区未变化时直接复用，避免重复预演 */
@@ -491,7 +493,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   }): Promise<void> {
     const readOnly = new Set([
       'copy', 'copyIssue', 'openAgent', 'copySuggestion', 'explainBuild', 'openHandoff',
-      'copyDrivePrompt', 'copyScope', 'copyScopes', 'checkMcp', 'openMcpConfig', 'open', 'openLink', 'saveSettings',
+      'copyDrivePrompt', 'copyScope', 'copyScopes', 'checkMcp', 'openMcpConfig', 'open', 'openLink', 'openReport', 'saveSettings',
       'pauseScan', 'stopScan'
     ]);
     if (message.type && !readOnly.has(message.type) && this.runLocked()) {
@@ -617,6 +619,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       case 'save':
         await this.exportReport();
         break;
+      case 'openReport':
+        await this.openScanReport();
+        break;
       case 'open':
         if (message.file) {
           await openIssue(message.file, message.line ?? 0);
@@ -647,6 +652,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     this.scanProgress = { done: 0, total: 0, active: [] };
     this.deepScanResult = null;
     this.push({ scanning: true });
+    let completed = false;
     try {
       const result = await this.runner.scan((progress) => {
         this.scanProgress = progress;
@@ -654,6 +660,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       });
       this.writeAgentFiles();
       if (result) {
+        completed = true;
         this.log(
           `扫描完成：${result.issues.length} 项问题，用时 ${((result.finishedAt - result.startedAt) / 1000).toFixed(1)} 秒`
         );
@@ -665,6 +672,16 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       this.push();
     }
     const config = vscode.workspace.getConfiguration('qualityCenter');
+    const current = this.runner.result;
+    if (
+      force &&
+      completed &&
+      current &&
+      current.issues.length > 0 &&
+      config.get<boolean>('report.openAfterScan', true)
+    ) {
+      await this.openScanReport();
+    }
     // 只在用户主动扫描后自动预演；保存触发的扫描不叠加 Maven，避免每次保存都变慢
     if (force && this.runner.root() && config.get<boolean>('openRewrite.scanEnabled', false)) {
       void this.runDeepScan(this.runner.root()!);
@@ -930,12 +947,20 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     await this.scanAndPush(true);
   }
 
-  /** 每轮扫描后写一份 AI 可读的结构化结果 */
+  /** 每轮扫描后写一份 AI 可读的结构化结果；人可读报告始终生成 */
   private writeAgentFiles(): void {
     const root = this.runner.root();
     const result = this.runner.result;
     if (!root || !result) {
       return;
+    }
+    const reportPath = path.join(root, '.quality-center', 'report.md');
+    try {
+      fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+      fs.writeFileSync(reportPath, toMarkdown(result, root), 'utf8');
+      this.scanReportFile = path.relative(root, reportPath).split(path.sep).join('/');
+    } catch {
+      this.scanReportFile = undefined;
     }
     if (!vscode.workspace.getConfiguration('qualityCenter').get<boolean>('exportForAgent', true)) {
       this.agentFile = undefined;
@@ -3484,6 +3509,41 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     void vscode.window.showInformationMessage(
       `已复制 ${this.runner.result?.issues.length ?? 0} 个问题到剪贴板，可直接粘贴给 AI。`
     );
+  }
+
+  /** 在编辑器页签打开本次扫描报告；面板按钮与扫描完成共用 */
+  async openScanReport(): Promise<void> {
+    const root = this.runner.root();
+    const text = this.markdown();
+    if (!root || !text) {
+      void vscode.window.showInformationMessage('还没有扫描结果，请先执行扫描。');
+      return;
+    }
+    const reportPath = path.join(root, '.quality-center', 'report.md');
+    try {
+      fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+      fs.writeFileSync(reportPath, text, 'utf8');
+      this.scanReportFile = path.relative(root, reportPath).split(path.sep).join('/');
+    } catch (err) {
+      void vscode.window.showWarningMessage(`无法写入扫描报告：${(err as Error).message}`);
+      return;
+    }
+    const uri = vscode.Uri.file(reportPath);
+    // Markdown 预览更适合读报告；没有预览扩展时退回纯文本页签
+    for (const command of ['markdown.showPreviewToSide', 'markdown.showPreview']) {
+      try {
+        await vscode.commands.executeCommand(command, uri);
+        return;
+      } catch {
+        // 继续尝试下一种打开方式
+      }
+    }
+    try {
+      const document = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(document, { preview: true, preserveFocus: true });
+    } catch (err) {
+      void vscode.window.showWarningMessage(`无法打开扫描报告：${(err as Error).message}`);
+    }
   }
 
   async exportReport(): Promise<void> {

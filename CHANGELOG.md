@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.75
+
+- 每轮扫描后始终生成 `.quality-center/report.md`，不再依赖 `exportForAgent` 开关
+- 手动扫描完成后自动在编辑器页签打开 Markdown 报告；保存触发的扫描不自动打开
+- 总览右上角新增「查看报告」，可随时重新打开本次扫描报告
+- 新增设置 `qualityCenter.report.openAfterScan`，默认开启，可关闭自动打开
+
 ## 0.27.74
 
 - 扫描结果总览保留 6 格，标签标明合并来源：`代码质量+语义`、`静态+配置`

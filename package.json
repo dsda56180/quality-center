@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)、字节码静态缺陷与配置安全的统一面板，支持一键导出给 AI 修复",
-  "version": "0.27.74",
+  "version": "0.27.75",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -117,6 +117,11 @@
           "type": "boolean",
           "default": true,
           "description": "每轮扫描后把结果写入 .quality-center/issues.json 与 report.md，供 AI agent 直接读取"
+        },
+        "qualityCenter.report.openAfterScan": {
+          "type": "boolean",
+          "default": true,
+          "description": "手动扫描完成后，在编辑器页签自动打开 .quality-center/report.md（保存触发的扫描不自动打开）"
         },
         "qualityCenter.checkstyle.enabled": {
           "type": "boolean",
