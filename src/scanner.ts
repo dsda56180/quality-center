@@ -229,11 +229,17 @@ export class ScanRunner {
         return;
       }
       const finishedAt = Date.parse(data.generatedAt ?? '') || Date.now();
-      const issues = (data.issues ?? []).map((issue) =>
-        issue.file && !path.isAbsolute(issue.file)
-          ? { ...issue, file: path.resolve(root, issue.file) }
-          : issue
-      );
+      const issues = (data.issues ?? []).map((issue) => {
+        // issues.json 给 agent 的字段叫 package，内存模型叫 packageName；重载时补齐
+        const legacy = issue as Issue & { package?: string };
+        const mapped: Issue = {
+          ...issue,
+          packageName: issue.packageName ?? legacy.package
+        };
+        return mapped.file && !path.isAbsolute(mapped.file)
+          ? { ...mapped, file: path.resolve(root, mapped.file) }
+          : mapped;
+      });
       this.lastResult = {
         startedAt: finishedAt,
         finishedAt,
