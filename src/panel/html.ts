@@ -552,15 +552,22 @@ export function getHtml(nonce: string): string {
     position: relative; flex: 1 1 auto; width: auto; max-width: none; min-width: 0;
   }
   .wz-scope-picker summary {
+    display: flex; align-items: center; gap: 4px;
     cursor: pointer; list-style: none; padding: 3px 7px;
     border: 1px solid var(--vscode-button-secondaryBackground, rgba(128,128,128,.25));
     border-radius: 4px; font-size: 10px;
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
   }
   .wz-scope-picker summary::-webkit-details-marker { display: none; }
-  .wz-scope-picker summary::after { content: ' ▾'; color: var(--vscode-descriptionForeground); }
-  .wz-scope-picker[open] summary::after { content: ' ▴'; }
-  .wz-scope-picker summary .pick-label { color: var(--vscode-descriptionForeground); margin-right: 4px; }
+  .wz-scope-picker summary .pick-label { flex: none; color: var(--vscode-descriptionForeground); margin-right: 4px; }
+  .wz-scope-picker #scopePickSummary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wz-scope-caret {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: none; width: 12px; height: 12px; margin-left: auto;
+    color: var(--vscode-focusBorder, #007acc); font-size: 10px; line-height: 1;
+  }
+  .wz-scope-caret::before { content: '▾'; }
+  .wz-scope-picker[open] .wz-scope-caret::before { content: '▴'; }
   .wz-scope-menu {
     position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30;
     margin-top: 0; padding: 5px 6px; border-radius: 5px;
@@ -579,6 +586,13 @@ export function getHtml(nonce: string): string {
     border-top: 1px dashed var(--vscode-panel-border);
     font-size: 9px; color: var(--vscode-descriptionForeground);
   }
+  .wz-scope-run {
+    flex: none; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px;
+    border: 1px solid var(--vscode-button-background);
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+    font-weight: 600;
+  }
+  .wz-scope-run:disabled { opacity: .45; cursor: not-allowed; }
   .wz-scope-plan {
     flex: none; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 9px;
     border: 1px solid var(--vscode-panel-border);
@@ -1427,29 +1441,27 @@ export function getHtml(nonce: string): string {
         : '';
       scopeBar = '<div class="wz-scopebar"><div class="wz-scope-row">' +
         '<details class="wz-scope-picker"><summary><span class="pick-label">修复范围</span>' +
-        '<span id="scopePickSummary">' + pickText + '</span></summary>' +
+        '<span id="scopePickSummary">' + pickText + '</span>' +
+        '<span class="wz-scope-caret" aria-hidden="true"></span></summary>' +
         '<div class="wz-scope-menu">' + checks + planShortcut + '</div></details>' +
-        '</div><div class="wz-scope-note">选好范围后，用下方「复制给 AI 修复」；依赖计划的手动执行也在下方。</div></div>';
+        '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
+        (validPick.length ? '' : ' disabled') + '>复制给 AI 修复</button>' +
+        '</div><div class="wz-scope-note">选好范围后点右侧「复制给 AI 修复」；依赖计划的手动执行在下方。</div></div>';
     }
     var actions = '';
-    var aiFixAction = hasData
-      ? '<button id="scopeCopyBtn" class="wz-primary" data-wz="copyScopes"' +
-        ((scopeOptions || []).some(function (o) { return o.count > 0 && scopePick.indexOf(o.key) >= 0; }) ? '' : ' disabled') +
-        '>复制给 AI 修复</button>'
-      : '';
     var autoFixAction = fixableCount ? btn('fixAll', '自动修复可自动项 ' + fixableCount + ' 项') : '';
     switch (n.action) {
       case 'scan':
         actions = btn('scan', '开始扫描', true);
         break;
       case 'plan':
-        actions = aiFixAction + autoFixAction;
+        actions = autoFixAction;
         break;
       case 'apply':
-        actions = aiFixAction + btn('upgradeNext', '手动执行「' + label + '」') + autoFixAction;
+        actions = btn('upgradeNext', '手动执行「' + label + '」') + autoFixAction;
         break;
       case 'confirm':
-        actions = aiFixAction + btn('upgradeNext', '确认并手动执行「' + label + '」') + autoFixAction;
+        actions = btn('upgradeNext', '确认并手动执行「' + label + '」') + autoFixAction;
         break;
       case 'build':
         actions = btn('buildGate', '编译并测试', true);
