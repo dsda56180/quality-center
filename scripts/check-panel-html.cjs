@@ -16,8 +16,13 @@ const checks = {
   scopeCopyAi: h.includes('data-wz="copyScopes"') && h.includes('wz-scope-run'),
   msgBarDedupesPlan: h.includes('var planPending') && h.includes('fixable > 0 && !planPending'),
   onePlanActionCenter: !h.includes('升级计划待执行') && h.indexOf('id="wizard"') < h.indexOf('id="tabs"'),
-  planDetail: h.includes('计划明细') && h.includes('n.plan.cveTotal') && h.includes('n.plan.candidates'),
-  fullRepairPlan: h.includes('全面修复方案') && h.includes('不只依赖升级') && h.includes("duplicate: '收敛'"),
+  planDetail: h.includes('wz-fixsection') && h.includes('n.plan.candidates') &&
+    !h.includes('<details class="wz-plan">'),
+  fullRepairPlan: h.includes('全面修复方案') && h.includes('静态与配置') &&
+    h.includes('配置安全（qcsec）') && h.includes('语义规则（astgrep）'),
+  noDuplicateGroupChips: !h.includes('<div class="wz-groups">'),
+  noLongPurpose: !h.includes('先选范围：全面修复交给 AI'),
+  notesInsideFixPlan: h.includes('<div class="wz-fixbody">') && h.includes('wz-note block'),
   noHandoffCtaAfterPlan: !provider.includes('升级第一组'),
   aiFirstInPlanCard: h.includes('data-wz="copyScopes"') && h.includes('全面修复'),
   scopeChooser: h.includes('wz-scope-picker') && h.includes('scopePickSummary') && h.includes('data-scope-pick="'),
@@ -28,7 +33,7 @@ const checks = {
   scopeCheckboxWiring: h.includes('updateScopePickerUI') && h.includes("type: 'copyScopes'") &&
     provider.includes("case 'copyScopes'"),
   pageScroll: h.includes('overflow-y: auto') && h.includes('#list { overflow: visible; }'),
-  planFolded: h.includes('<details class="wz-plan">'),
+  planInsideFixPlan: !h.includes('<details class="wz-plan">'),
   fixPlanFolded: h.includes('<details class="wz-fixplan">'),
   mcpReadyHidden: !h.includes("if (mcp.state === 'ready')"),
   noAiDataButton: !h.includes('AI 数据'),

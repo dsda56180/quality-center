@@ -521,6 +521,17 @@ export function getHtml(nonce: string): string {
     font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 4px;
   }
   .wz-fixplan-head strong { color: var(--vscode-foreground); font-size: 11px; }
+  .wz-fixbody { margin-top: 2px; }
+  .wz-fixsection { margin-top: 6px; padding-top: 5px; border-top: 1px dashed var(--vscode-panel-border); }
+  .wz-fixsection:first-child { margin-top: 2px; padding-top: 0; border-top: 0; }
+  .wz-fixsection-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+    margin-bottom: 3px; font-size: 10px; color: var(--vscode-descriptionForeground);
+  }
+  .wz-fixsection-head .fix-tag {
+    flex: none; font-size: 9px; padding: 0 4px; border-radius: 7px;
+    color: var(--vscode-textLink-foreground); background: rgba(88,166,255,.12);
+  }
   .wz-fixrow { display: flex; gap: 5px; align-items: baseline; line-height: 1.5; margin-bottom: 3px; }
   .wz-fixrow .fix-tag {
     flex: none; font-size: 9px; padding: 0 4px; border-radius: 7px;
@@ -1250,19 +1261,6 @@ export function getHtml(nonce: string): string {
       return;
     }
     el.style.display = 'block';
-    var groups = '';
-    if (n.plan && n.plan.groups) {
-      groups = '<div class="wz-groups">' + n.plan.groups.map(function (g) {
-        return '<span class="wz-chip ' + esc(g.state) + '">' + esc(g.label) + ' ' + g.applied + '/' + g.total + '</span>';
-      }).join('') + '</div>';
-    }
-    var notes = '';
-    (n.blockers || []).slice(0, 2).forEach(function (b) {
-      notes += '<div class="wz-note block">阻塞：' + esc(b.message) + '</div>';
-    });
-    (n.warnings || []).slice(0, 2).forEach(function (w) {
-      notes += '<div class="wz-note warn">注意：' + esc(w.message) + '</div>';
-    });
     var label = n.plan && n.plan.nextLabel ? n.plan.nextLabel : '当前组';
     var title = n.title;
     var meta = n.progress || '';
@@ -1273,35 +1271,28 @@ export function getHtml(nonce: string): string {
     var secretCount = (state.issues || []).filter(function (i) { return i.source === 'gitleaks'; }).length;
     var allSuggestions = state.suggestions || [];
     var dupSuggestions = allSuggestions.filter(function (s) { return s.category === 'duplicate'; });
+    var countSource = function (source) {
+      return (state.issues || []).filter(function (i) { return i.source === source; }).length;
+    };
+    var checkstyleCount = countSource('checkstyle');
+    var astgrepCount = countSource('astgrep');
+    var spotbugsCount = countSource('spotbugs');
+    var qcsecCount = countSource('qcsec');
     if (n.action === 'plan') {
       title = '质量修复方案';
-      meta = issueTotal + ' 项问题 · 可自动修复 ' + fixableCount + ' · 依赖 ' + depCount +
-        (dupSuggestions.length ? ' · 收敛建议 ' + dupSuggestions.length : '');
+      meta = issueTotal + ' 项问题 · 可自动修复 ' + fixableCount;
     }
     if ((n.action === 'apply' || n.action === 'confirm') && n.plan) {
       title = n.plan.state === 'partial' ? '质量修复方案 · 升级计划执行中' : '质量修复方案 · 升级计划已生成';
       if (state.final) {
         title = n.plan.state === 'partial' ? '本次 AI 修复已收尾 · 剩余组需人工确认' : '本次 AI 修复已收尾';
       }
-      meta = n.plan.groups.length + ' 组 · ' + n.plan.total + ' 个依赖' +
-        (n.plan.cveTotal ? ' · 覆盖 ' + n.plan.cveTotal + ' 条漏洞' : '') +
-        (n.plan.skippedCount ? ' · 跳过 ' + n.plan.skippedCount + ' 项' : '') +
-        ' · 已落盘 ' + n.plan.appliedCount + '/' + n.plan.total;
+      meta = '已落盘 ' + n.plan.appliedCount + '/' + n.plan.total;
     }
     var purpose = '';
-    if (n.action === 'apply' || n.action === 'confirm') {
-      purpose =
-        '先选范围：全面修复交给 AI 按类别推进；仅升级依赖只走可回滚的 pom 计划。' +
-        '升级计划按风险从低到高拆成 ' + (n.plan ? n.plan.groups.length : 0) + ' 组（' +
-        (n.plan ? n.plan.groups.map(function (g) { return g.label; }).join(' → ') : '') +
-        '），每组落盘后跑构建门禁，失败只处理这一组。' +
-        (n.action === 'confirm' ? '当前组含跨大版本，执行前需要确认。' : '');
-      if (state.final) {
-        purpose = '本次 AI 修复已生成最终验收（' + state.final.baselineTotal + ' → ' + state.final.currentTotal +
-          ' 项）。剩下的组需要你确认后才进入下一轮，不代表 AI 还在执行。';
-      }
-    } else if (n.action === 'plan') {
-      purpose = '先选范围：生成可回滚的依赖升级计划，或交给 AI 全面修复 / 只修某一块。生成计划不会改 pom。';
+    if (state.final && (n.action === 'apply' || n.action === 'confirm')) {
+      purpose = '本次 AI 修复已生成最终验收（' + state.final.baselineTotal + ' → ' + state.final.currentTotal +
+        ' 项）；剩余组需你确认后才进入下一轮。';
     } else if (n.action === 'build') {
       purpose = '升级已写入，跑构建门禁确认没有破坏现有功能。';
     } else if (n.action === 'explain') {
@@ -1313,56 +1304,81 @@ export function getHtml(nonce: string): string {
     } else if (n.action === 'none') {
       purpose = '升级与验证已完成，剩余项按报告人工评估。';
     }
-    // 计划明细：面板内直接回答“升什么、升到哪”，不再让人读 handoff.md
-    var planDetail = '';
-    if (n.plan && n.plan.candidates && n.plan.candidates.length &&
-        (n.action === 'apply' || n.action === 'confirm' || n.action === 'build' ||
-         n.action === 'explain' || n.action === 'rescan')) {
-      var rows = '';
-      (n.plan.groups || []).forEach(function (g) {
-        var items = (n.plan.candidates || []).filter(function (c) { return c.group === g.name; });
-        if (!items.length) return;
-        rows += '<div class="wz-plan-group"><div class="wz-plan-group-title">' +
-          esc(g.label) + ' · ' + items.length + ' 项' + (g.state === 'done' ? ' · 已完成' : '') + '</div>';
-        items.forEach(function (c) {
-          rows += '<div class="wz-plan-row' + (g.state === 'done' ? ' done' : '') + '">' +
-            '<span class="pkg">' + esc(c.packageName) + '</span>' +
-            '<span class="ver">' + esc(c.from || '?') + ' → ' + esc(c.to) + '</span>' +
-            (c.cveCount ? '<span class="cve">' + c.cveCount + ' 漏洞</span>' : '') +
-            '</div>';
-        });
-        rows += '</div>';
-      });
-      planDetail = '<details class="wz-plan"><summary class="wz-plan-head"><span>计划明细</span><span>' +
-        n.plan.total + ' 个依赖</span></summary><div class="wz-plan-list">' + rows + '</div>' +
-        (n.plan.skippedCount
-          ? '<div class="wz-plan-note">另有 ' + n.plan.skippedCount +
-            ' 项未纳入：策略未授权或需人工处理，已记录在计划文件。</div>'
-          : '') + '</details>';
-    }
-    // 全面修复方案：升级只是其中一类，收敛/密钥/代码/静态问题也要在同一张卡里可见
+    // 全面修复方案：依赖升级只是其中一节，其余范围同卡展示；明细默认折叠
     var fixPlan = '';
-    if (allSuggestions.length) {
-      var picked = [];
-      allSuggestions.filter(function (s) { return s.category === 'duplicate'; }).slice(0, 2)
-        .forEach(function (s) { picked.push(s); });
-      ['secret', 'manual', 'framework', 'dependency'].forEach(function (cat) {
-        if (picked.length >= 4) return;
-        var hit = allSuggestions.filter(function (s) { return s.category === cat; })[0];
-        if (hit && picked.indexOf(hit) < 0) picked.push(hit);
+    if (hasData) {
+      var notes = '';
+      (n.blockers || []).slice(0, 2).forEach(function (b) {
+        notes += '<div class="wz-note block">阻塞：' + esc(b.message) + '</div>';
       });
-      allSuggestions.forEach(function (s) {
-        if (picked.length < 4 && picked.indexOf(s) < 0) picked.push(s);
+      (n.warnings || []).slice(0, 2).forEach(function (w) {
+        notes += '<div class="wz-note warn">注意：' + esc(w.message) + '</div>';
       });
-      fixPlan = '<details class="wz-fixplan"><summary class="wz-fixplan-head"><strong>全面修复方案</strong><span>不只依赖升级</span></summary>' +
-        picked.map(function (s) {
-          return '<div class="wz-fixrow"><span class="fix-tag">' + esc(SUG_LABEL[s.category] || s.category) + '</span>' +
-            '<span class="fix-title">' + esc(s.title) + '</span>' +
-            '<span class="fix-impact">' + (s.impactLabel
-              ? s.impact + ' ' + s.impactLabel
-              : s.impact + ' 项') + '</span></div>';
-        }).join('') +
-        '<div class="wz-fixnote">自动执行仍只写依赖升级；收敛、密钥、静态缺陷需要 AI 或人工确认后处理，全部建议见「修复建议」。</div></details>';
+      var planRows = '';
+      if (n.plan && n.plan.candidates && n.plan.candidates.length) {
+        (n.plan.groups || []).forEach(function (g) {
+          var items = (n.plan.candidates || []).filter(function (c) { return c.group === g.name; });
+          if (!items.length) return;
+          planRows += '<div class="wz-plan-group"><div class="wz-plan-group-title">' +
+            esc(g.label) + ' · ' + g.applied + '/' + g.total + ' · ' + items.length + ' 项' +
+            (g.state === 'done' ? ' · 已完成' : '') + '</div>';
+          items.forEach(function (c) {
+            planRows += '<div class="wz-plan-row' + (g.state === 'done' ? ' done' : '') + '">' +
+              '<span class="pkg">' + esc(c.packageName) + '</span>' +
+              '<span class="ver">' + esc(c.from || '?') + ' → ' + esc(c.to) + '</span>' +
+              (c.cveCount ? '<span class="cve">' + c.cveCount + ' 漏洞</span>' : '') +
+              '</div>';
+          });
+        });
+      }
+      var depBody = planRows;
+      if (!depBody) {
+        depBody = n.plan
+          ? '<div class="wz-fixnote">计划文件里暂无候选明细。</div>'
+          : '<div class="wz-fixnote">发现 ' + depCount + ' 条依赖漏洞，尚未生成可回滚计划。</div>';
+      }
+      if (n.plan && n.plan.skippedCount) {
+        depBody += '<div class="wz-plan-note">另有 ' + n.plan.skippedCount +
+          ' 项未纳入：策略未授权或需人工处理，已记录在计划文件。</div>';
+      }
+      var dupRows = dupSuggestions.map(function (s) {
+        return '<div class="wz-fixrow"><span class="fix-title">' + esc(s.title) + '</span>' +
+          '<span class="fix-impact">' + (s.impactLabel ? s.impact + ' ' + s.impactLabel : s.impact + ' 项') +
+          '</span></div>';
+      }).join('');
+      var secretRows = '<div class="wz-fixnote">先轮换密钥，再迁移到环境变量或配置中心。</div>';
+      var manualCount = allSuggestions.filter(function (s) { return s.category === 'manual'; }).length;
+      fixPlan = '<details class="wz-fixplan"><summary class="wz-fixplan-head"><strong>全面修复方案</strong>' +
+        '<span>' + (n.plan ? n.plan.total + ' 依赖' : depCount + ' 漏洞') + ' · ' +
+        dupSuggestions.length + ' 收敛 · ' + (checkstyleCount + astgrepCount) + ' 代码 · ' +
+        staticCount + ' 静态 · ' + secretCount + ' 密钥' +
+        '</span></summary><div class="wz-fixbody">' +
+        '<div class="wz-fixsection"><div class="wz-fixsection-head"><span class="fix-tag">依赖升级</span>' +
+        '<span class="fix-impact">' + (n.plan
+          ? n.plan.total + ' 个依赖 · ' + (n.plan.cveTotal || 0) + ' 漏洞 · ' + n.plan.appliedCount + '/' + n.plan.total
+          : depCount + ' 条漏洞 · 未生成计划') + '</span></div>' + depBody + '</div>' +
+        '<div class="wz-fixsection"><div class="wz-fixsection-head"><span class="fix-tag">依赖收敛</span>' +
+        '<span class="fix-impact">' + dupSuggestions.length + ' 类</span></div>' +
+        (dupRows || '<div class="wz-fixnote">未发现 JSON / 日志 / HTTP / BOM 重复绑定。</div>') + '</div>' +
+        '<div class="wz-fixsection"><div class="wz-fixsection-head"><span class="fix-tag">代码质量</span>' +
+        '<span class="fix-impact">' + (checkstyleCount + astgrepCount) + ' 项 · ' + fixableCount +
+        ' 可自动修复</span></div>' +
+        '<div class="wz-fixrow"><span class="fix-title">Checkstyle</span><span class="fix-impact">' +
+        checkstyleCount + ' 项</span></div>' +
+        '<div class="wz-fixrow"><span class="fix-title">语义规则（astgrep）</span><span class="fix-impact">' +
+        astgrepCount + ' 项</span></div></div>' +
+        '<div class="wz-fixsection"><div class="wz-fixsection-head"><span class="fix-tag">硬编码密钥</span>' +
+        '<span class="fix-impact">' + secretCount + ' 处</span></div>' + secretRows + '</div>' +
+        '<div class="wz-fixsection"><div class="wz-fixsection-head"><span class="fix-tag">静态与配置</span>' +
+        '<span class="fix-impact">' + staticCount + ' 项</span></div>' +
+        '<div class="wz-fixrow"><span class="fix-title">SpotBugs 静态缺陷</span><span class="fix-impact">' +
+        spotbugsCount + ' 项</span></div>' +
+        '<div class="wz-fixrow"><span class="fix-title">配置安全（qcsec）</span><span class="fix-impact">' +
+        qcsecCount + ' 项</span></div></div>' +
+        notes +
+        '<div class="wz-fixnote">只有依赖升级由插件写 pom；收敛、代码、密钥、静态由 AI 或你确认后处理' +
+        (manualCount ? '，另有 ' + manualCount + ' 条人工判断建议见「修复建议」' : '') + '。</div>' +
+        '</div></details>';
     }
     function btn(key, text, primary) {
       return '<button class="' + (primary ? 'wz-primary' : 'secondary') + '" data-wz="' + key + '">' + esc(text) + '</button>';
@@ -1372,7 +1388,7 @@ export function getHtml(nonce: string): string {
       var scopeOptions = [
         { key: 'upgrade', label: '依赖升级', count: n.plan ? n.plan.total : (depCount ? 1 : 0), note: n.plan ? n.plan.total : '计划' },
         { key: 'consolidation', label: '依赖收敛', count: dupSuggestions.length, note: dupSuggestions.length },
-        { key: 'code', label: '代码质量', count: fixableCount, note: fixableCount },
+        { key: 'code', label: '代码质量', count: checkstyleCount + astgrepCount, note: checkstyleCount + astgrepCount },
         { key: 'secrets', label: '密钥', count: secretCount, note: secretCount },
         { key: 'static', label: '静态缺陷', count: staticCount, note: staticCount }
       ];
@@ -1435,7 +1451,7 @@ export function getHtml(nonce: string): string {
     el.innerHTML = '<div class="wz-title">' + esc(title) + '</div>'
       + (meta ? '<div class="wz-meta">' + esc(meta) + '</div>' : '')
       + (purpose ? '<div class="wz-purpose">' + esc(purpose) + '</div>' : '')
-      + scopeBar + groups + planDetail + fixPlan + notes
+      + scopeBar + fixPlan
       + (actions ? '<div class="wz-actions">' + actions + '</div>' : '');
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
