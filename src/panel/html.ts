@@ -1858,8 +1858,7 @@ export function getHtml(nonce: string): string {
   function handleWizardAction(key) {
     if (!key) return;
     if (key === 'chooseUpgrade') {
-      routePick = 'upgrade';
-      renderWizard();
+      vscode.postMessage({ type: 'upgradeDeps' });
     } else if (key === 'showRoutes') {
       var plan = state.next && state.next.plan;
       if (!plan || Number(plan.appliedCount || 0) === 0) {

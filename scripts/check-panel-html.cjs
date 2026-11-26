@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { getHtml } = require('../out/panel/html.js');
 const h = getHtml({ cspSource: 'x', nonce: 'n' });
+const chooseBranch = h.slice(h.indexOf("key === 'chooseUpgrade'"), h.indexOf("} else if (key === 'showRoutes'"));
 const provider = fs.readFileSync(path.join(__dirname, '..', 'src', 'panel', 'QualityViewProvider.ts'), 'utf8');
 const checks = {
   aiBusy: h.includes('body.ai-busy'),
@@ -33,6 +34,8 @@ const checks = {
   choiceButtons: ["btn('chooseUpgrade'", "btn('fixAll'", "btn('upgradeDeps'", 'data-wz="copyScopes"'].every((key) =>
     h.includes(key)
   ),
+  chooseUpgradeOpensPreview: chooseBranch.includes("postMessage({ type: 'upgradeDeps' })") &&
+    !chooseBranch.includes("routePick = 'upgrade'"),
   routeGate: h.includes('function buildGate(includeDependency)') &&
     h.includes('globalBlocks') && h.includes('buildGate(upgradeFlow || !hubMode)') &&
     h.includes('buildGate(false)') === false,
