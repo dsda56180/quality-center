@@ -18,7 +18,7 @@ const checks = {
   onePlanActionCenter: !h.includes('升级计划待执行') && h.indexOf('id="wizard"') < h.indexOf('id="tabs"'),
   planDetail: h.includes('wz-fixsection') && h.includes('n.plan.candidates') &&
     !h.includes('<details class="wz-plan">'),
-  fullRepairPlan: h.includes('全面修复方案') && h.includes('静态与配置') &&
+  fullRepairPlan: h.includes('修复方案') && h.includes('静态与配置') &&
     h.includes('配置安全（qcsec）') && h.includes('语义规则（astgrep）'),
   noDuplicateGroupChips: !h.includes('<div class="wz-groups">'),
   noLongPurpose: !h.includes('先选范围：全面修复交给 AI'),

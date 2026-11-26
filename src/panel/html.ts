@@ -517,10 +517,11 @@ export function getHtml(nonce: string): string {
   .wz-plan-note { margin-top: 4px; font-size: 10px; color: var(--vscode-descriptionForeground); }
   .wz-fixplan { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--vscode-panel-border); }
   .wz-fixplan-head {
-    display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+    display: flex; align-items: center; justify-content: flex-start; gap: 6px;
     font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 4px;
   }
-  .wz-fixplan-head strong { color: var(--vscode-foreground); font-size: 11px; }
+  .wz-fixplan-head strong { flex: 0 0 auto; color: var(--vscode-foreground); font-size: 11px; }
+  .wz-fixplan-head .fix-count { margin-left: auto; flex: none; }
   .wz-fixbody { margin-top: 2px; }
   .wz-fixsection { margin-top: 6px; padding-top: 5px; border-top: 1px dashed var(--vscode-panel-border); }
   .wz-fixsection:first-child { margin-top: 2px; padding-top: 0; border-top: 0; }
@@ -594,8 +595,15 @@ export function getHtml(nonce: string): string {
     cursor: pointer; list-style: none; user-select: none;
   }
   .wz-plan > summary::-webkit-details-marker, .wz-fixplan > summary::-webkit-details-marker { display: none; }
-  .wz-plan > summary::before, .wz-fixplan > summary::before { content: '▸ '; color: var(--vscode-descriptionForeground); }
-  .wz-plan[open] > summary::before, .wz-fixplan[open] > summary::before { content: '▾ '; }
+  .wz-fixplan > summary::before {
+    content: '▸'; display: inline-flex; align-items: center; justify-content: center;
+    flex: none; width: 18px; height: 18px; border-radius: 3px;
+    border: 1px solid var(--vscode-focusBorder, #007acc);
+    color: var(--vscode-focusBorder, #007acc); font-size: 13px; line-height: 1;
+  }
+  .wz-fixplan[open] > summary::before { content: '▾'; }
+  .wz-plan > summary::before { content: '▸ '; color: var(--vscode-descriptionForeground); }
+  .wz-plan[open] > summary::before { content: '▾ '; }
   .msg.clamp {
     display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
     overflow: hidden;
@@ -1299,9 +1307,9 @@ export function getHtml(nonce: string): string {
       purpose = '本次 AI 修复已生成最终验收（' + state.final.baselineTotal + ' → ' + state.final.currentTotal +
         ' 项）；剩余组需你确认后才进入下一轮。';
     } else if (n.action === 'build') {
-      purpose = '升级已写入，跑构建门禁确认没有破坏现有功能。';
+      purpose = '升级已写入，编译并运行测试，确认没有破坏现有功能。';
     } else if (n.action === 'explain') {
-      purpose = '上一组已写入但构建没有通过，先看原因；必要时回滚到计划前。';
+      purpose = '上一组已写入，但编译或测试没有通过；先看原因，必要时回滚到计划前。';
     } else if (n.action === 'rescan') {
       purpose = '构建已通过，复扫确认目标漏洞是否真的消除。';
     } else if (n.action === 'scan') {
@@ -1353,8 +1361,8 @@ export function getHtml(nonce: string): string {
       }).join('');
       var secretRows = '<div class="wz-fixnote">先轮换密钥，再迁移到环境变量或配置中心。</div>';
       var manualCount = allSuggestions.filter(function (s) { return s.category === 'manual'; }).length;
-      fixPlan = '<details class="wz-fixplan"><summary class="wz-fixplan-head"><strong>全面修复方案</strong>' +
-        '<span>' + (n.plan ? n.plan.total + ' 依赖' : depCount + ' 漏洞') + ' · ' +
+      fixPlan = '<details class="wz-fixplan"><summary class="wz-fixplan-head"><strong>修复方案</strong>' +
+        '<span class="fix-count">' + (n.plan ? n.plan.total + ' 依赖' : depCount + ' 漏洞') + ' · ' +
         dupSuggestions.length + ' 收敛 · ' + (checkstyleCount + astgrepCount) + ' 代码 · ' +
         staticCount + ' 静态 · ' + secretCount + ' 密钥' +
         '</span></summary><div class="wz-fixbody">' +
@@ -1441,7 +1449,7 @@ export function getHtml(nonce: string): string {
         actions = btn('upgradeNext', '确认并手动执行「' + label + '」') + autoFixAction;
         break;
       case 'build':
-        actions = btn('buildGate', '跑构建门禁', true);
+        actions = btn('buildGate', '编译并测试', true);
         break;
       case 'explain':
         actions = btn('explainBuild', '查看失败原因', true) + btn('revertPlan', '回滚到计划前');

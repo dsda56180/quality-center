@@ -1846,11 +1846,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const group = state.nextGroup;
     if (!group) {
       const pick = await vscode.window.showInformationMessage(
-        `计划 ${planFile.planId} 的候选都已落盘，下一步是构建门禁。`,
-        '跑构建门禁',
+        `计划 ${planFile.planId} 的候选都已写入。下一步编译并运行测试，确认没有破坏现有功能吗？`,
+        { modal: true, detail: '会按策略执行 Maven 编译与测试；失败会保留日志和现场，可回滚到升级前。' },
+        '编译并测试',
         '打开交接'
       );
-      if (pick === '跑构建门禁') {
+      if (pick === '编译并测试') {
         await this.buildGate();
       } else if (pick === '打开交接') {
         await this.openHandoffFile();
@@ -1863,10 +1864,20 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const label = PLAN_GROUP_LABEL[group];
     const crossLine = group === 'cross-line';
     const actionLabel = crossLine ? '已确认跨大版本，继续' : '升级这一组';
+    const list = groupCandidates.map((item) =>
+      `· ${item.packageName} ${item.from} → ${item.to}` +
+      (item.cveCount ? `（${item.cveCount} 条漏洞）` : '')
+    ).join('\n');
+    const detail = [
+      `将改动 ${groupCandidates.length} 个依赖：`,
+      list,
+      '',
+      `写入后会自动编译并运行测试；失败会保留 pom 和日志，可回滚到升级前。`,
+      crossLine ? '这是跨大版本升级，可能需要同步调整代码；建议先提交当前改动。' : ''
+    ].filter(Boolean).join('\n');
     const confirm = await vscode.window.showWarningMessage(
-      `执行「${label}」：${groupCandidates.length} 项，涉及 ${cveCount} 条漏洞。` +
-        `写入后会跑构建门禁；失败会保留现场并给出原因。`,
-      { modal: true },
+      `要升级「${label}」的 ${groupCandidates.length} 个依赖吗？${cveCount ? `（涉及 ${cveCount} 条漏洞）` : ''}`,
+      { modal: true, detail },
       actionLabel,
       '稍后'
     );
@@ -1894,11 +1905,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         return;
       }
 
-      this.setDeepFixStage('构建门禁');
+      this.setDeepFixStage('编译与测试');
       const build = await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
-          title: `质量中心：「${label}」已写入，正在跑构建门禁…`,
+          title: `质量中心：「${label}」已写入，正在编译并测试…`,
           cancellable: false
         },
         () =>
@@ -1990,7 +2001,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const build = await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: '质量中心：跑构建门禁…',
+        title: '质量中心：编译并测试…',
         cancellable: false
       },
       () =>
@@ -2014,7 +2025,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
     const pick = await vscode.window.showInformationMessage(
-      `构建通过（${build.seconds.toFixed(1)} 秒，门禁 ${build.gate ?? 'package'}）。`,
+      `编译与测试通过（${build.seconds.toFixed(1)} 秒，级别 ${build.gate ?? 'package'}）。`,
       '复扫验收',
       '打开交接'
     );
@@ -2735,13 +2746,44 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       void vscode.window.showInformationMessage('当前没有可自动修复的问题。');
       return;
     }
+    const root = this.runner.root() ?? '';
     const fileCount = new Set(targets.map((item) => item.file)).size;
+    const ruleLabels: Record<string, string> = {
+      UnusedImports: '删除未使用的 import',
+      RedundantImport: '删除重复 import',
+      ModifierOrder: '调整修饰符顺序',
+      SimplifyBooleanExpression: '简化布尔判断'
+    };
+    const ruleCounts = new Map<string, number>();
+    for (const issue of targets) {
+      const rule = issue.rule ?? '其他';
+      ruleCounts.set(rule, (ruleCounts.get(rule) ?? 0) + 1);
+    }
+    const ruleLines = [...ruleCounts.entries()]
+      .map(([rule, count]) => `· ${ruleLabels[rule] ?? rule}：${count} 项`)
+      .join('\n');
+    const files = [...new Set(
+      targets.map((item) => item.file).filter((file): file is string => !!file)
+    )]
+      .map((file) => (root ? path.relative(root, file) : file))
+      .slice(0, 8);
+    const detail = [
+      `共 ${targets.length} 项，涉及 ${fileCount} 个文件：`,
+      ruleLines,
+      '',
+      '改动范围：',
+      ...files.map((file) => `· ${file}`),
+      fileCount > files.length ? `· 其余 ${fileCount - files.length} 个文件` : '',
+      '',
+      '只改源码中的这些行，不改 pom；执行后会自动重新扫描。'
+    ].join('\n').replace(/\n{3,}/g, '\n\n').trim();
     const answer = await vscode.window.showWarningMessage(
-      `将自动修复 ${targets.length} 项（涉及 ${fileCount} 个文件）：删除无用/冗余导入、重排修饰符顺序、简化布尔字面量比较。是否继续？`,
-      { modal: true },
-      '修复'
+      `要自动修复 ${targets.length} 项代码问题吗？`,
+      { modal: true, detail },
+      '开始修复',
+      '取消'
     );
-    if (answer !== '修复') {
+    if (answer !== '开始修复') {
       return;
     }
     await this.applyFixes(targets);
