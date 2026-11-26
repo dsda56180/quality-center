@@ -1395,7 +1395,7 @@ export function getHtml(nonce: string): string {
             '<div class="wz-decision-why"><b>原因：</b>这些包没有被 pom.xml 直接声明，是被其他依赖间接带入的。修它们需要插件在 pom 的“版本锁定”区写一条覆盖版本；当前策略只允许直接依赖升级，所以没有生成执行按钮。</div>' +
             '<div class="wz-decision-note">不是漏扫，也不是升级失败；已有的 ' + (n.plan.directCount ?? n.plan.total) + ' 项直接依赖仍可正常升级。' +
             '先升级带入它们的直接依赖（推荐）；如果引入方升不上去，再只授权选中的包，不要手改 pom。</div>' +
-            '<button class="wz-decision-btn" data-wz="explainSkipped">查看 ' + decisionCount + ' 项与处理方式</button>' +
+            '<button class="wz-decision-btn" data-wz="upgradeNext">打开升级预览，一并选择</button>' +
             '</div>';
         } else {
           depBody += '<div class="wz-plan-note">另有 ' + n.plan.skippedCount +

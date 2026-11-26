@@ -36,10 +36,19 @@ export interface UpgradePreviewEntry {
   changes: UpgradePreviewChange[];
 }
 
+export interface UpgradePreviewSkipped {
+  packageName: string;
+  reason: string;
+  installedVersion?: string;
+  fixedVersion?: string;
+  cveCount?: number;
+  introducedBy?: string[];
+}
+
 export interface UpgradePreviewInfo {
   project: string;
   entries: UpgradePreviewEntry[];
-  skipped: Array<{ packageName: string; reason: string }>;
+  skipped: UpgradePreviewSkipped[];
 }
 
 export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo): string {
@@ -131,12 +140,28 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
 
   const policySkipped = info.skipped.filter((item) => /dependencyManagement|策略未授权/.test(item.reason));
   const manualSkipped = info.skipped.filter((item) => !/dependencyManagement|策略未授权/.test(item.reason));
+  const skipRows = policySkipped
+    .slice()
+    .sort((a, b) => (b.cveCount ?? 0) - (a.cveCount ?? 0) || a.packageName.localeCompare(b.packageName))
+    .map((item) => {
+      const owners = (item.introducedBy ?? []).filter(Boolean);
+      return `<label class="skip-row">
+  <input type="checkbox" class="skip-pick" data-pkg="${escapeHtml(item.packageName)}" />
+  <span class="skip-pkg">${escapeHtml(item.packageName)}</span>
+  <span class="skip-ver">${escapeHtml(item.installedVersion || '?')} → ${escapeHtml(item.fixedVersion || '待确认')}</span>
+  <span class="skip-cve">${item.cveCount ? `${item.cveCount} 个漏洞` : '未关联漏洞'}</span>
+  <span class="skip-owner">${owners.length ? `由 ${owners.map((owner) => `<code>${escapeHtml(owner)}</code>`).join('、')} 带入` : ''}</span>
+</label>`;
+    })
+    .join('');
   const policyBlock = policySkipped.length
     ? `<section class="skip-decision">
   <div class="skip-decision-title"><span class="skip-badge">需要你决定</span>${policySkipped.length} 项没有自动升级</div>
   <div class="skip-decision-why"><b>原因：</b>这些包没有被 pom.xml 直接声明，是被其他依赖间接带入的。修它们需要插件在 pom 的“版本锁定”区写一条覆盖版本；当前策略只允许直接依赖升级，所以没有列进上方勾选项。</div>
-  <div class="skip-decision-note">这不是漏扫，也不是升级失败。先升级带入它们的直接依赖（推荐）；如果引入方升不上去，再只授权选中的包，不要手改 pom。</div>
-  <button id="explainSkipped" class="secondary">查看 ${policySkipped.length} 项与处理方式</button>
+  <div class="skip-decision-note">这不是漏扫，也不是升级失败。上方 ${info.entries.length} 项可以正常升级；下方 ${policySkipped.length} 项需要你单独决定。先升级带入它们的直接依赖（推荐）；如果引入方升不上去，再只授权选中的包，不要手改 pom。</div>
+  <div class="skip-toolbar"><label><input type="checkbox" id="allSkips" /> 全选</label><span>默认不勾选，避免一次授权太多</span></div>
+  <div class="skip-table">${skipRows || '<div class="skip-empty">没有需要按项授权的包。</div>'}</div>
+  <button id="authorizeSkips" class="secondary" disabled>授权选中项并重新生成计划</button>
 </section>`
     : '';
 
@@ -233,7 +258,30 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
   .skip-decision-why { margin-top: 5px; }
   .skip-decision-why b { color: var(--vscode-editorWarning-foreground, #cca700); }
   .skip-decision-note { margin-top: 4px; color: var(--vscode-descriptionForeground); }
+  .skip-toolbar { display: flex; align-items: center; gap: 12px; margin-top: 8px; color: var(--vscode-descriptionForeground); }
+  .skip-toolbar label { cursor: pointer; }
+  .skip-table { margin-top: 5px; border: 1px solid var(--vscode-panel-border); border-radius: 3px; overflow: hidden; }
+  .skip-row {
+    display: grid; grid-template-columns: 14px minmax(180px, 1.25fr) 92px 76px minmax(150px, 1fr);
+    align-items: center; gap: 8px; padding: 5px 7px; line-height: 1.45;
+    border-bottom: 1px solid var(--vscode-panel-border); cursor: pointer;
+  }
+  .skip-row:last-child { border-bottom: 0; }
+  .skip-row:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.08)); }
+  .skip-pkg { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; }
+  .skip-ver { color: var(--vscode-descriptionForeground); }
+  .skip-cve { color: var(--vscode-editorWarning-foreground, #cca700); }
+  .skip-owner { color: var(--vscode-descriptionForeground); font-size: 10px; }
+  .skip-owner code {
+    font-family: var(--vscode-editor-font-family, monospace);
+    background: var(--vscode-textCodeBlock-background, rgba(128,128,128,.12)); padding: 0 2px;
+  }
+  .skip-empty { padding: 6px 8px; color: var(--vscode-descriptionForeground); }
   .skip-decision button { margin-top: 7px; }
+  @media (max-width: 720px) {
+    .skip-row { grid-template-columns: 14px minmax(140px, 1fr) 82px 64px; }
+    .skip-owner { grid-column: 2 / -1; }
+  }
   .skip-group { margin: 6px 0 10px; padding-left: 6px; border-left: 2px solid var(--vscode-panel-border); }
   .skip-reason { color: var(--vscode-foreground); margin-bottom: 2px; }
   .skip-list { line-height: 1.7; word-break: break-all; }
@@ -259,7 +307,7 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
 <body>
 <header>
   <div class="title">依赖升级预览</div>
-  <div class="sub">${escapeHtml(info.project)} · ${info.entries.length} 个可升级项 · 勾选后执行升级并校验编译</div>
+  <div class="sub">${escapeHtml(info.project)} · ${info.entries.length} 个可升级项${policySkipped.length ? ` · ${policySkipped.length} 项待决定` : ''} · 同页选择，分别处理</div>
 </header>
 <main>${cards}${policyBlock}${skipped}</main>
 <footer>
@@ -301,10 +349,35 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
     vscode.postMessage({ type: 'copyAgentPrompt', packages: picked() });
   });
 
-  const explainBtn = document.getElementById('explainSkipped');
-  if (explainBtn) {
-    explainBtn.addEventListener('click', function () {
-      vscode.postMessage({ type: 'explainSkipped' });
+  const skipBoxes = Array.from(document.querySelectorAll('input.skip-pick'));
+  const authorizeBtn = document.getElementById('authorizeSkips');
+  const allSkips = document.getElementById('allSkips');
+  function pickedSkips() {
+    return skipBoxes.filter(function (box) { return box.checked; })
+      .map(function (box) { return box.getAttribute('data-pkg'); });
+  }
+  function syncSkips() {
+    if (!authorizeBtn || !allSkips) return;
+    const selected = pickedSkips().length;
+    authorizeBtn.disabled = selected === 0;
+    authorizeBtn.textContent = selected
+      ? '授权选中 ' + selected + ' 项并重新生成计划'
+      : '授权选中项并重新生成计划';
+    allSkips.checked = selected === skipBoxes.length && skipBoxes.length > 0;
+    allSkips.indeterminate = selected > 0 && selected < skipBoxes.length;
+  }
+  skipBoxes.forEach(function (box) { box.addEventListener('change', syncSkips); });
+  if (allSkips) {
+    allSkips.addEventListener('change', function () {
+      skipBoxes.forEach(function (box) { box.checked = allSkips.checked; });
+      syncSkips();
+    });
+  }
+  if (authorizeBtn) {
+    authorizeBtn.addEventListener('click', function () {
+      const packages = pickedSkips();
+      if (!packages.length) return;
+      vscode.postMessage({ type: 'authorizeSkips', packages: packages });
     });
   }
 
@@ -334,6 +407,7 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
   });
 
   sync();
+  syncSkips();
 </script>
 </body>
 </html>`;

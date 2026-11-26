@@ -16,7 +16,7 @@ import { detectProjectProfile, ProjectProfile, recipeAdvice } from '../projectPr
 import { toMarkdown } from '../report';
 import { ScanRunner } from '../scanner';
 import { mavenMirrorArgs } from '../maven';
-import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, UpgradePreviewEntry } from './deepFixPanel';
+import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, UpgradePreviewEntry, UpgradePreviewSkipped } from './deepFixPanel';
 import { AutoFixPreviewItem, buildAutoFixPreviewHtml } from './autoFixPreview';
 import { buildSkippedPreviewHtml, SkippedPreviewItem } from './skippedPreview';
 import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '../upgrader';
@@ -551,7 +551,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         await this.createPlanOnly();
         break;
       case 'explainSkipped':
-        await this.showSkippedExplanation();
+        // 兼容旧版预览页残留按钮：不再跳独立页，直接打开同页可选择的升级预览
+        await this.upgradeNextGroup();
         break;
       case 'buildGate':
         await this.buildGate();
@@ -1662,11 +1663,15 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     ].filter(Boolean);
     const decision = await this.showUpgradePreview(
       entries,
-      planFile.skipped.map((item) => ({ packageName: item.packageName, reason: item.reason })),
+      this.upgradeSkippedDetails(planFile.skipped),
       projectParts.join(' · ')
     );
     if (!decision) {
       this.log('用户取消了依赖升级预览');
+      return;
+    }
+    if (decision.authorize?.length) {
+      await this.authorizeManagePackages(root, decision.authorize);
       return;
     }
     const chosen = pool.filter((item) => decision.packages.includes(item.packageName));
@@ -1902,11 +1907,15 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     ].filter(Boolean);
     const decision = await this.showUpgradePreview(
       entries,
-      planFile.skipped.map((item) => ({ packageName: item.packageName, reason: item.reason })),
+      this.upgradeSkippedDetails(planFile.skipped),
       projectParts.join(' · ')
     );
     if (!decision) {
       this.log('用户取消了依赖升级预览');
+      return;
+    }
+    if (decision.authorize?.length) {
+      await this.authorizeManagePackages(root, decision.authorize);
       return;
     }
     const chosen = groupCandidates.filter((item) => decision.packages.includes(item.packageName));
@@ -2587,12 +2596,40 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     });
   }
 
+  /** 把计划里的 skipped 补齐版本、CVE 与引入方，供升级预览页内联展示；不额外跑 Maven */
+  private upgradeSkippedDetails(
+    skipped: Array<{
+      packageName: string;
+      reason: string;
+      installedVersion?: string;
+      fixedVersion?: string;
+      cveCount?: number;
+      introducedBy?: string[];
+    }>
+  ): UpgradePreviewSkipped[] {
+    const nodes = this.depContextCache?.context.nodes;
+    return skipped.map((item) => {
+      const matched = (this.runner.result?.issues ?? []).filter(
+        (issue) => (issue.packageName ?? '') === item.packageName
+      );
+      return {
+        packageName: item.packageName,
+        reason: item.reason,
+        installedVersion:
+          item.installedVersion ?? matched.find((issue) => issue.installedVersion)?.installedVersion,
+        fixedVersion: item.fixedVersion ?? matched.find((issue) => issue.fixedVersion)?.fixedVersion,
+        cveCount: item.cveCount ?? (matched.length || undefined),
+        introducedBy: item.introducedBy?.length ? item.introducedBy : nodes?.get(item.packageName)?.dependents
+      };
+    });
+  }
+
   /** 依赖升级预览页：展示版本来源、冲突与 pom 改动，勾选后执行 */
   private showUpgradePreview(
     entries: UpgradePreviewEntry[],
-    skipped: Array<{ packageName: string; reason: string }>,
+    skipped: UpgradePreviewSkipped[],
     project: string
-  ): Promise<{ packages: string[]; versions: Record<string, string> } | null> {
+  ): Promise<{ packages: string[]; versions: Record<string, string>; authorize?: string[] } | null> {
     const panel = vscode.window.createWebviewPanel(
       'qualityCenter.upgradePreview',
       '依赖升级预览',
@@ -2607,9 +2644,16 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     });
 
     const known = new Set(entries.map((entry) => entry.packageName));
+    const knownSkips = new Set(
+      skipped
+        .filter((item) => /dependencyManagement|策略未授权/.test(item.reason))
+        .map((item) => item.packageName)
+    );
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (value: { packages: string[]; versions: Record<string, string> } | null): void => {
+      const finish = (
+        value: { packages: string[]; versions: Record<string, string>; authorize?: string[] } | null
+      ): void => {
         if (settled) {
           return;
         }
@@ -2627,10 +2671,13 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
             panel.dispose();
             return;
           }
-          if (message.type === 'explainSkipped') {
-            finish(null);
+          if (message.type === 'authorizeSkips') {
+            const picks = (message.packages ?? []).filter((name) => knownSkips.has(name));
+            if (!picks.length) {
+              return;
+            }
+            finish({ packages: [], versions: {}, authorize: picks });
             panel.dispose();
-            void this.showSkippedExplanation();
             return;
           }
           if (message.type === 'copyAgentPrompt') {
@@ -2702,13 +2749,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
 
-    // 依赖树用于把“被谁带进来”直接写给人看；失败也不影响说明页打开
-    let nodes: UpgradeContext['nodes'];
-    try {
-      nodes = (await this.loadUpgradeContext(root)).nodes;
-    } catch {
-      nodes = undefined;
-    }
+    // 优先复用已解析的依赖树；没有再显示“引入方未解析”，不在这里额外跑 mvn 阻塞用户
+    const nodes = this.depContextCache?.context.nodes;
     const items: SkippedPreviewItem[] = plan.skipped.map((item) => {
       const matched = (this.runner.result?.issues ?? []).filter(
         (issue) => (issue.packageName ?? '') === item.packageName
