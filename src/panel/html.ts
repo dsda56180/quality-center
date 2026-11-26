@@ -1460,7 +1460,6 @@ export function getHtml(nonce: string): string {
     var issueTotal = (state.issues || []).length;
     var fixableCount = (state.issues || []).filter(function (i) { return i.fixable; }).length;
     var depCount = (state.issues || []).filter(function (i) { return i.source === 'trivy'; }).length;
-    var staticCount = (state.issues || []).filter(function (i) { return i.source === 'spotbugs' || i.source === 'qcsec'; }).length;
     var secretCount = (state.issues || []).filter(function (i) { return i.source === 'gitleaks'; }).length;
     var allSuggestions = state.suggestions || [];
     var dupSuggestions = allSuggestions.filter(function (s) { return s.category === 'duplicate'; });
@@ -1468,6 +1467,9 @@ export function getHtml(nonce: string): string {
     var countSource = function (source) {
       return (state.issues || []).filter(function (i) { return i.source === source; }).length;
     };
+    var spotbugsCount = countSource('spotbugs');
+    var qcsecCount = countSource('qcsec');
+    var staticCount = spotbugsCount + qcsecCount;
     var checkstyleCount = countSource('checkstyle');
     var astgrepCount = countSource('astgrep');
     var skippedItems = (n.plan && n.plan.skipped) || [];
@@ -1598,14 +1600,15 @@ export function getHtml(nonce: string): string {
     var overview = '';
     if (hasData) {
       var overviewCells = [
-        { label: '依赖升级', value: (n.plan ? totalCount : depCount), unit: '项' },
-        { label: '可自动修复', value: fixableCount, unit: '项' },
-        { label: '代码质量', value: checkstyleCount + astgrepCount, unit: '项' },
-        { label: '静态与配置', value: staticCount, unit: '项' },
-        { label: '硬编码密钥', value: secretCount, unit: '处' },
-        { label: hubMode ? '人工判断' : '待决定', value: hubMode ? manualCount : decisionCount, unit: hubMode ? '条' : '项' }
+        { label: '依赖升级', value: (n.plan ? totalCount : depCount), unit: '项', title: '待升级的依赖数，不是下方依赖漏洞的 CVE 条数' },
+        { label: '可自动修复', value: fixableCount, unit: '项', title: '跨来源的确定性修复条数，与代码质量有重叠，不是独立分类' },
+        { label: '代码质量+语义', value: checkstyleCount + astgrepCount, unit: '项', title: 'Checkstyle ' + checkstyleCount + ' + AST 语义规则 ' + astgrepCount },
+        { label: '静态+配置', value: staticCount, unit: '项', title: 'SpotBugs ' + spotbugsCount + ' + 配置安全 ' + qcsecCount },
+        { label: '硬编码密钥', value: secretCount, unit: '处', title: 'Gitleaks 命中数；一处密钥可能跨多行' },
+        { label: hubMode ? '人工判断' : '待决定', value: hubMode ? manualCount : decisionCount, unit: hubMode ? '条' : '项', title: hubMode ? '来自修复建议的人工判断项' : '需要你授权的间接依赖项' }
       ].filter(function (cell) { return cell.value > 0; }).map(function (cell) {
-        return '<div class="wz-overview-cell"><span class="label">' + esc(cell.label) +
+        return '<div class="wz-overview-cell"' + (cell.title ? ' title="' + esc(cell.title) + '"' : '') +
+          '><span class="label">' + esc(cell.label) +
           '</span><span class="value">' + esc(String(cell.value)) + ' ' + esc(cell.unit) + '</span></div>';
       }).join('');
       var overviewNotes = [];
