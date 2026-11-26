@@ -524,12 +524,13 @@ export function getHtml(nonce: string): string {
   .wz-choice .secondary:hover { background: var(--vscode-list-hoverBackground); }
   .wz-choice .secondary:disabled { opacity: .45; cursor: not-allowed; }
   .wz-ai-first {
-    border-color: var(--vscode-focusBorder, #007acc);
-    background: rgba(88,166,255,.07);
+    border: 1px solid var(--vscode-focusBorder, #007acc);
+    background: rgba(88,166,255,.16);
+    box-shadow: 0 0 0 2px rgba(88,166,255,.30), 0 0 14px rgba(88,166,255,.18);
   }
-  .wz-scope-run .wz-choice-tag {
-    margin-left: 4px; vertical-align: 1px;
-    color: inherit; background: rgba(255,255,255,.16);
+  .wz-star {
+    margin-left: 5px; font-size: 11px; line-height: 1; vertical-align: 1px;
+    color: #f2cc60;
   }
   .wz-ai-first .wz-scope-run {
     background: var(--vscode-button-background);
@@ -1672,7 +1673,7 @@ export function getHtml(nonce: string): string {
         '<span class="wz-scope-caret" aria-hidden="true"></span></summary>' +
         '<div class="wz-scope-menu">' + checks + '</div></details>' +
         '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
-        (validPick.length ? '' : ' disabled') + '>交给 AI 修复<span class="wz-choice-tag">首选</span></button>' +
+        (validPick.length ? '' : ' disabled') + '>AI 修复<span class="wz-star" title="首选" aria-label="首选">★</span></button>' +
         '</div></div>';
     }
     var primary = '';

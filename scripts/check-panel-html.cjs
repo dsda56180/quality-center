@@ -25,7 +25,7 @@ const checks = {
   overviewFirst: h.includes('扫描结果总览') && h.indexOf('扫描结果总览') < h.indexOf('var gate =') &&
     h.indexOf('扫描结果总览') < h.indexOf('var primaryRow'),
   choiceRoutes: h.includes('wz-choices') && h.includes('wz-choice-grid') &&
-    ['升级依赖', '自动修复', '全部依赖', '交给 AI 修复'].every((label) => h.includes(label)),
+    ['升级依赖', '自动修复', '全部依赖', 'AI 修复'].every((label) => h.includes(label)),
   choiceButtons: ["btn('chooseUpgrade'", "btn('fixAll'", "btn('upgradeDeps'", 'data-wz="copyScopes"'].every((key) =>
     h.includes(key)
   ),
@@ -34,7 +34,7 @@ const checks = {
     h.includes('buildGate(false)') === false,
   routeBack: h.includes("btn('showRoutes'") && h.includes('wz-route-head') &&
     h.includes('升级计划明细'),
-  aiFirstHub: h.includes('wz-ai-first') && h.includes('>首选<') &&
+  aiFirstHub: h.includes('wz-ai-first') && h.includes('wz-star') && h.includes('★') &&
     !h.includes('为什么 AI 优先') && !h.includes('建议先交给 AI') && !h.includes('AI 负责编排'),
   upgradeDetailOnly: h.includes('<strong>升级计划明细</strong>') &&
     !h.includes('配置安全（qcsec）') && !h.includes('SpotBugs / qcsec 不在一键修复范围内'),
@@ -50,7 +50,7 @@ const checks = {
   openPolicyPrimary: h.includes("btn('openPolicy'") && h.includes("type: 'openPolicyPreview'") &&
     provider.includes('openPolicyPreview'),
   noHandoffCtaAfterPlan: !provider.includes('升级第一组'),
-  aiFirstInPlanCard: h.includes('data-wz="copyScopes"') && h.includes('交给 AI 修复'),
+  aiFirstInPlanCard: h.includes('data-wz="copyScopes"') && h.includes('AI 修复'),
   scopeChooser: h.includes('wz-scope-picker') && h.includes('scopePickSummary') && h.includes('data-scope-pick="'),
   scopePlanInMenu: !h.includes('scopePlanBtn') && !h.includes('wz-scope-menu-foot'),
   scopeMenuOverlay: h.includes('position: absolute; left: 0; right: 0; top: calc(100% + 4px)'),
