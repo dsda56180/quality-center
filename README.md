@@ -107,7 +107,7 @@ code --install-extension dsda56180.quality-center
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `qualityCenter.scanOnStartup` | `true` | 打开项目后自动扫描一次 |
+| `qualityCenter.scanOnStartup` | `true` | 打开项目后，只有没有上次扫描结果时才自动扫描；已有结果直接复用，需手动点扫描 |
 | `qualityCenter.scanOnSave` | `true` | 保存文件后自动触发扫描 |
 | `qualityCenter.exportForAgent` | `true` | 每轮扫描后写入 `.quality-center/issues.json` 与 `report.md`，供 AI agent 直接读取 |
 | `qualityCenter.report.openAfterScan` | `true` | 手动扫描完成后在编辑器页签打开 `report.md`；保存触发的扫描不自动打开 |

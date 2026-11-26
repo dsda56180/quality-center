@@ -188,7 +188,10 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
-  if (vscode.workspace.getConfiguration('qualityCenter').get<boolean>('scanOnStartup', true)) {
+  if (
+    vscode.workspace.getConfiguration('qualityCenter').get<boolean>('scanOnStartup', true) &&
+    !provider.hasLoadedResult()
+  ) {
     setTimeout(() => {
       void provider.scanAndPush();
     }, 1500);

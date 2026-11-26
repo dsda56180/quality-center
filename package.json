@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)、字节码静态缺陷与配置安全的统一面板，支持一键导出给 AI 修复",
-  "version": "0.27.76",
+  "version": "0.27.77",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -106,7 +106,7 @@
         "qualityCenter.scanOnStartup": {
           "type": "boolean",
           "default": true,
-          "description": "打开项目后自动扫描一次"
+          "description": "打开项目后，只有在没有上次扫描结果时才自动扫描一次；已有结果直接复用，需要手动点击扫描"
         },
         "qualityCenter.scanOnSave": {
           "type": "boolean",

@@ -3511,12 +3511,21 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     );
   }
 
+  /** 启动时是否已经从上次结果（.quality-center/issues.json 或缓存）恢复出结果 */
+  hasLoadedResult(): boolean {
+    return !!this.runner.result;
+  }
+
   /** 在编辑器页签打开本次扫描报告；面板按钮与扫描完成共用 */
   async openScanReport(): Promise<void> {
     const root = this.runner.root();
     const text = this.markdown();
     if (!root || !text) {
       void vscode.window.showInformationMessage('还没有扫描结果，请先执行扫描。');
+      return;
+    }
+    if (this.runner.isRunning) {
+      void vscode.window.showInformationMessage('扫描进行中，完成后会生成并打开最新报告。');
       return;
     }
     const reportPath = path.join(root, '.quality-center', 'report.md');
@@ -3527,6 +3536,19 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     } catch (err) {
       void vscode.window.showWarningMessage(`无法写入扫描报告：${(err as Error).message}`);
       return;
+    }
+    // Markdown 预览对同一文件可能复用旧内容；先关掉旧页签再打开，确保看到本轮结果
+    const staleTabs: vscode.Tab[] = [];
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        const uri = (tab.input as { uri?: vscode.Uri } | undefined)?.uri;
+        if (uri && uri.fsPath === reportPath) {
+          staleTabs.push(tab);
+        }
+      }
+    }
+    if (staleTabs.length > 0) {
+      await vscode.window.tabGroups.close(staleTabs);
     }
     const uri = vscode.Uri.file(reportPath);
     // Markdown 预览更适合读报告；没有预览扩展时退回纯文本页签
