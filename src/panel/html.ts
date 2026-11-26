@@ -545,8 +545,10 @@ export function getHtml(nonce: string): string {
     border: 1px solid var(--vscode-panel-border);
     background: var(--vscode-sideBar-background, rgba(128,128,128,.05));
   }
-  .wz-scope-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-  .wz-scope-picker { flex: 1 1 auto; min-width: 0; }
+  .wz-scope-row { display: flex; flex-wrap: nowrap; gap: 5px; align-items: center; max-width: 100%; }
+  .wz-scope-picker {
+    position: relative; flex: 0 0 auto; width: calc(100% - 68px); max-width: calc(100% - 68px); min-width: 0;
+  }
   .wz-scope-picker summary {
     cursor: pointer; list-style: none; padding: 3px 7px;
     border: 1px solid var(--vscode-button-secondaryBackground, rgba(128,128,128,.25));
@@ -558,9 +560,12 @@ export function getHtml(nonce: string): string {
   .wz-scope-picker[open] summary::after { content: ' ▴'; }
   .wz-scope-picker summary .pick-label { color: var(--vscode-descriptionForeground); margin-right: 4px; }
   .wz-scope-menu {
-    margin-top: 4px; padding: 5px 6px; border-radius: 5px;
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30;
+    margin-top: 0; padding: 5px 6px; border-radius: 5px;
     border: 1px solid var(--vscode-panel-border);
-    background: var(--vscode-editor-background);
+    background: var(--vscode-editor-background, #1f1f1f);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, .35);
+    max-height: 210px; overflow-y: auto;
   }
   .wz-scope-option {
     display: flex; align-items: center; gap: 4px; line-height: 1.8;
@@ -1359,14 +1364,17 @@ export function getHtml(nonce: string): string {
           : depCount + ' 条漏洞 · 未生成计划') + '</span></div>' + depBody + '</div>' +
         '<div class="wz-fixsection"><div class="wz-fixsection-head"><span class="fix-tag">依赖收敛</span>' +
         '<span class="fix-impact">' + dupSuggestions.length + ' 类</span></div>' +
-        (dupRows || '<div class="wz-fixnote">未发现 JSON / 日志 / HTTP / BOM 重复绑定。</div>') + '</div>' +
+        (dupRows || '<div class="wz-fixnote">未发现 JSON / 日志 / HTTP / BOM 重复绑定。</div>') +
+        '<div class="wz-fixnote">按当前 pom 与源码 import 统计，不只看依赖名。</div></div>' +
         '<div class="wz-fixsection"><div class="wz-fixsection-head"><span class="fix-tag">代码质量</span>' +
         '<span class="fix-impact">' + (checkstyleCount + astgrepCount) + ' 项 · ' + fixableCount +
         ' 可自动修复</span></div>' +
         '<div class="wz-fixrow"><span class="fix-title">Checkstyle</span><span class="fix-impact">' +
         checkstyleCount + ' 项</span></div>' +
         '<div class="wz-fixrow"><span class="fix-title">语义规则（astgrep）</span><span class="fix-impact">' +
-        astgrepCount + ' 项</span></div></div>' +
+        astgrepCount + ' 项</span></div>' +
+        '<div class="wz-fixnote">一键修复覆盖 Checkstyle 的 ' + fixableCount +
+        ' 项确定性问题；语义规则与静态缺陷需要 AI 或人工判断。</div></div>' +
         '<div class="wz-fixsection"><div class="wz-fixsection-head"><span class="fix-tag">硬编码密钥</span>' +
         '<span class="fix-impact">' + secretCount + ' 处</span></div>' + secretRows + '</div>' +
         '<div class="wz-fixsection"><div class="wz-fixsection-head"><span class="fix-tag">静态与配置</span>' +
@@ -1374,7 +1382,8 @@ export function getHtml(nonce: string): string {
         '<div class="wz-fixrow"><span class="fix-title">SpotBugs 静态缺陷</span><span class="fix-impact">' +
         spotbugsCount + ' 项</span></div>' +
         '<div class="wz-fixrow"><span class="fix-title">配置安全（qcsec）</span><span class="fix-impact">' +
-        qcsecCount + ' 项</span></div></div>' +
+        qcsecCount + ' 项</span></div>' +
+        '<div class="wz-fixnote">SpotBugs / qcsec 不在一键修复范围内，需 AI 带上下文修改或人工确认。</div></div>' +
         notes +
         '<div class="wz-fixnote">只有依赖升级由插件写 pom；收敛、代码、密钥、静态由 AI 或你确认后处理' +
         (manualCount ? '，另有 ' + manualCount + ' 条人工判断建议见「修复建议」' : '') + '。</div>' +
@@ -1417,18 +1426,19 @@ export function getHtml(nonce: string): string {
         '</div><div class="wz-scope-note">只复制所选范围的指令；未选类别只报告。依赖计划的手动执行仍在下方。</div></div>';
     }
     var actions = '';
+    var autoFixAction = fixableCount ? btn('fixAll', '自动修复可自动项 ' + fixableCount + ' 项') : '';
     switch (n.action) {
       case 'scan':
         actions = btn('scan', '开始扫描', true);
         break;
       case 'plan':
-        actions = '';
+        actions = autoFixAction;
         break;
       case 'apply':
-        actions = btn('upgradeNext', '手动执行「' + label + '」');
+        actions = btn('upgradeNext', '手动执行「' + label + '」') + autoFixAction;
         break;
       case 'confirm':
-        actions = btn('upgradeNext', '确认并手动执行「' + label + '」');
+        actions = btn('upgradeNext', '确认并手动执行「' + label + '」') + autoFixAction;
         break;
       case 'build':
         actions = btn('buildGate', '跑构建门禁', true);
@@ -1494,6 +1504,8 @@ export function getHtml(nonce: string): string {
       vscode.postMessage({ type: 'copyScopes', scopes: scopePick.slice() });
     } else if (key.indexOf('copyScope:') === 0) {
       vscode.postMessage({ type: 'copyScope', scope: key.slice('copyScope:'.length) });
+    } else if (key === 'fixAll') {
+      vscode.postMessage({ type: 'fixAll' });
     } else if (key === 'createPlan') {
       vscode.postMessage({ type: 'createUpgradePlan' });
     } else if (key === 'upgradeNext') {
@@ -1811,6 +1823,12 @@ export function getHtml(nonce: string): string {
       }
     });
   }
+  document.addEventListener('click', function (e) {
+    var picker = document.querySelector('.wz-scope-picker');
+    if (picker && picker.open && !picker.contains(e.target)) {
+      picker.open = false;
+    }
+  });
 
   var SETTING_KEYS = ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec', 'astgrep'];
   var RECIPE_BOXES = [];

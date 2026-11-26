@@ -27,6 +27,10 @@ const checks = {
   aiFirstInPlanCard: h.includes('data-wz="copyScopes"') && h.includes('全面修复'),
   scopeChooser: h.includes('wz-scope-picker') && h.includes('scopePickSummary') && h.includes('data-scope-pick="'),
   scopePlanInMenu: h.includes('wz-scope-menu-foot') && h.includes('只生成计划文件，不改 pom'),
+  scopeMenuOverlay: h.includes('position: absolute; left: 0; right: 0; top: calc(100% + 4px)'),
+  autoFixInPlan: h.includes("btn('fixAll', '自动修复可自动项 ") && h.includes("type: 'fixAll'"),
+  convergenceUsesProject: h.includes('按当前 pom 与源码 import 统计'),
+  staticNotOneClick: h.includes('SpotBugs / qcsec 不在一键修复范围内'),
   scopeDistinct: ['upgrade', 'consolidation', 'code', 'secrets', 'static'].every((s) =>
     h.includes(`key: '${s}', label:`)
   ),
