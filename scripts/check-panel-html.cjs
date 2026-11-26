@@ -21,8 +21,17 @@ const checks = {
   onePlanActionCenter: !h.includes('升级计划待执行') && h.indexOf('id="wizard"') < h.indexOf('id="tabs"'),
   planDetail: h.includes('wz-fixsection') && h.includes('n.plan.candidates') &&
     !h.includes('<details class="wz-plan">'),
-  fullRepairPlan: h.includes('修复总览') && h.includes('静态与配置') &&
+  fullRepairPlan: h.includes('修复明细') && h.includes('静态与配置') &&
     h.includes('配置安全（qcsec）') && h.includes('语义规则（astgrep）'),
+  overviewFirst: h.includes('扫描结果总览') && h.indexOf('扫描结果总览') < h.indexOf('var gate =') &&
+    h.indexOf('扫描结果总览') < h.indexOf('选择处理方式'),
+  choiceRoutes: h.includes('wz-choices') && h.includes('wz-choice-grid') &&
+    ['升级依赖', '自动修复', '全部依赖', '交给 AI 修复'].every((label) => h.includes(label)),
+  choiceButtons: ["btn('createPlan'", "btn('fixAll'", "btn('upgradeDeps'", 'data-wz="copyScopes"'].every((key) =>
+    h.includes(key)
+  ),
+  detailsLast: h.includes('修复明细') && h.indexOf('var fixPlan') < h.indexOf('修复明细') &&
+    h.indexOf('+ advanced + fixPlan') > h.indexOf('choiceHub'),
   noDuplicateGroupChips: !h.includes('<div class="wz-groups">'),
   noLongPurpose: !h.includes('先选范围：全面修复交给 AI'),
   notesInsideFixPlan: h.includes('<div class="wz-fixbody">') && !h.includes('notes +'),
