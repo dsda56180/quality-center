@@ -21,17 +21,24 @@ const checks = {
   onePlanActionCenter: !h.includes('升级计划待执行') && h.indexOf('id="wizard"') < h.indexOf('id="tabs"'),
   planDetail: h.includes('wz-fixsection') && h.includes('n.plan.candidates') &&
     !h.includes('<details class="wz-plan">'),
-  fullRepairPlan: h.includes('修复明细') && h.includes('静态与配置') &&
-    h.includes('配置安全（qcsec）') && h.includes('语义规则（astgrep）'),
+  fullRepairPlan: h.includes('升级计划明细'),
   overviewFirst: h.includes('扫描结果总览') && h.indexOf('扫描结果总览') < h.indexOf('var gate =') &&
-    h.indexOf('扫描结果总览') < h.indexOf('选择处理方式'),
+    h.indexOf('扫描结果总览') < h.indexOf('建议先交给 AI</div>'),
   choiceRoutes: h.includes('wz-choices') && h.includes('wz-choice-grid') &&
     ['升级依赖', '自动修复', '全部依赖', '交给 AI 修复'].every((label) => h.includes(label)),
-  choiceButtons: ["btn('createPlan'", "btn('fixAll'", "btn('upgradeDeps'", 'data-wz="copyScopes"'].every((key) =>
+  choiceButtons: ["btn('chooseUpgrade'", "btn('fixAll'", "btn('upgradeDeps'", 'data-wz="copyScopes"'].every((key) =>
     h.includes(key)
   ),
-  detailsLast: h.includes('修复明细') && h.indexOf('var fixPlan') < h.indexOf('修复明细') &&
-    h.indexOf('+ advanced + fixPlan') > h.indexOf('choiceHub'),
+  routeGate: h.includes('function buildGate(includeDependency)') &&
+    h.includes('globalBlocks') && h.includes('buildGate(upgradeFlow || !hubMode)') &&
+    h.includes('buildGate(false)') === false,
+  routeBack: h.includes("btn('showRoutes'") && h.includes('wz-route-head') &&
+    h.includes('升级计划明细'),
+  aiFirstHub: h.includes('建议先交给 AI') && h.includes('或者自己处理') &&
+    h.includes('wz-ai-first') && h.includes('为什么 AI 优先'),
+  upgradeDetailOnly: h.includes('<strong>升级计划明细</strong>') &&
+    !h.includes('配置安全（qcsec）') && !h.includes('SpotBugs / qcsec 不在一键修复范围内'),
+  detailsLast: h.includes('upgradeFlow ? fixPlan') && h.indexOf('hubMode ? choiceHub') > h.indexOf('var primaryRow'),
   noDuplicateGroupChips: !h.includes('<div class="wz-groups">'),
   noLongPurpose: !h.includes('先选范围：全面修复交给 AI'),
   notesInsideFixPlan: h.includes('<div class="wz-fixbody">') && !h.includes('notes +'),
@@ -61,8 +68,6 @@ const checks = {
   skippedDecision: h.includes('需要你决定 · ') && h.includes('wz-gate warn') &&
     !h.includes('wz-decision-btn') && !h.includes('打开升级预览，一并选择'),
   skippedPlainReason: !h.includes('策略未授权或需人工处理') && !h.includes('allowDependencyManagement=false'),
-  convergenceUsesProject: h.includes('按当前 pom 与源码 import 统计'),
-  staticNotOneClick: h.includes('SpotBugs / qcsec 不在一键修复范围内'),
   scopeDistinct: ['upgrade', 'consolidation', 'code', 'secrets', 'static'].every((s) =>
     h.includes(`key: '${s}', label:`)
   ),
