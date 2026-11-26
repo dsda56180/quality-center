@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.55
+
+- 面板不再直接抛 `allowDependencyManagement=false`：19 项未自动升级改为「需要你决定」，明确这是传递依赖、不是漏扫，并说明原因与下一步
+- 新增「未自动升级的依赖」说明页：按包展示当前版本、修复版本、CVE 数与引入方，解释为什么没有按钮
+- 支持只授权选中的包写入 `dependencyManagement`（按项白名单），不打开全局开关、不直接改 pom；授权后重新生成计划，仍在预览页逐项确认 diff
+- 策略新增 `dependencyManagementAllowlist`，兼容已有 `allowDependencyManagement=false` 配置
+
 ## 0.27.54
 
 - 修复「修复范围」下拉框看不清/像消失：箭头改成真实节点，不再依赖 Webview 常吞掉的 `summary::after`

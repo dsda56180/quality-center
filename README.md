@@ -258,7 +258,7 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 - 升级前会告警“项目属性覆盖框架 BOM”（如 `okhttp.version`、`kotlin.version`），这是框架组落盘后最常见的 `Non-resolvable import POM` 来源。
 - `apply` 必须带当前 `pomHash`，不一致直接拒绝；整份计划一次落盘时，结果还要与 `pomHashAfter` 逐字节一致。
 - 跨大版本（poi 4→5、mssql 8→13 等）默认拒绝写入，需要显式 `--allow-cross-line` 或人工处理。
-- 需要新增 `<dependencyManagement>` 才能固定的传递依赖 CVE 默认只报告：策略里 `allowDependencyManagement` 为 `false` 时，候选会带“未授权”原因跳过，不把 AI 引向手改 pom；确认版本组合可靠后再显式打开。
+- 需要新增 `<dependencyManagement>` 才能固定的传递依赖 CVE 默认只报告：策略里 `allowDependencyManagement=false` 时，面板会解释原因并允许按 artifact 写入 `dependencyManagementAllowlist`，只授权选中的包，不打开全局开关；确认版本组合可靠后再应用。
 - **同一时间只允许一个活动计划**：已有 `pending/partial` 计划时，`upgrade plan` / `quality_upgrade_plan` 会拒绝再生成第二个（CLI 用 `--replace`、MCP 用 `replace=true` 才能显式替换）；已 `revert` 的计划不再占用“当前计划”。
 - 每次落盘都记录 `steps.json` 与 `pom.before.xml`，`upgrade revert` 可回到计划前状态；手工改过 pom 时回滚会被拒绝。
 - `integrate` 生成 `.quality-center/bin/qc.cjs` 启动器，MCP 配置统一写成它的**项目内绝对路径**并带 `cwd`（Trae 不展开 `${workspaceFolder}`）；扩展升级后不需要改各编辑器的配置；已适配 Trae / Cursor / VS Code / Copilot 与 Claude 风格 `.mcp.json`。面板检测到配置里仍是字面量变量时会显示“MCP 配置未展开变量”。

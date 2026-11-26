@@ -33,6 +33,10 @@ const checks = {
   autoFixInPlan: h.includes("btn('fixAll', '自动修复可自动项 ") && h.includes("type: 'fixAll'"),
   upgradePreviewPage: provider.includes('await this.showUpgradePreview'),
   autoFixPreviewPage: provider.includes('showAutoFixPreview') && fs.existsSync(path.join(__dirname, '..', 'src', 'panel', 'autoFixPreview.ts')),
+  skippedDecision: h.includes('wz-decision') && h.includes('data-wz="explainSkipped"') &&
+    provider.includes('case \'explainSkipped\'') &&
+    fs.existsSync(path.join(__dirname, '..', 'src', 'panel', 'skippedPreview.ts')),
+  skippedPlainReason: !h.includes('策略未授权或需人工处理') && !h.includes('allowDependencyManagement=false'),
   convergenceUsesProject: h.includes('按当前 pom 与源码 import 统计'),
   staticNotOneClick: h.includes('SpotBugs / qcsec 不在一键修复范围内'),
   scopeDistinct: ['upgrade', 'consolidation', 'code', 'secrets', 'static'].every((s) =>

@@ -40,6 +40,11 @@ export interface UpgradePolicy {
    * 默认 false：传递依赖的 CVE 只报告，不自动写 pom，避免引入未经验证的版本组合。
    */
   allowDependencyManagement: boolean;
+  /**
+   * 按 artifact 授权的 dependencyManagement 白名单。
+   * allowDependencyManagement=false 时只允许这些包写版本覆盖；不打开全局开关。
+   */
+  dependencyManagementAllowlist: string[];
 }
 
 export interface LoadedPolicy {
@@ -72,7 +77,8 @@ export const DEFAULT_POLICY: UpgradePolicy = {
   mavenArgs: [],
   runTestsOnNextLine: true,
   runTests: true,
-  allowDependencyManagement: false
+  allowDependencyManagement: false,
+  dependencyManagementAllowlist: []
 };
 
 function readJson(file: string): unknown {
@@ -168,6 +174,10 @@ export function loadPolicy(root: string, pom?: string): LoadedPolicy {
     if (typeof obj.allowDependencyManagement === 'boolean') {
       policy.allowDependencyManagement = obj.allowDependencyManagement;
     }
+    const manageAllowlist = asStringArray(obj.dependencyManagementAllowlist);
+    if (manageAllowlist.length > 0) {
+      policy.dependencyManagementAllowlist = manageAllowlist;
+    }
     const forbidden = asStringArray(obj.forbiddenPackages);
     if (forbidden.length > 0) {
       policy.forbiddenPackages = forbidden;
@@ -228,8 +238,14 @@ export function defaultPolicyDocument(root: string): UpgradePolicy & { schemaVer
     mavenArgs: loaded.policy.mavenArgs,
     runTestsOnNextLine: loaded.policy.runTestsOnNextLine,
     runTests: loaded.policy.runTests,
-    allowDependencyManagement: loaded.policy.allowDependencyManagement
+    allowDependencyManagement: loaded.policy.allowDependencyManagement,
+    dependencyManagementAllowlist: loaded.policy.dependencyManagementAllowlist
   };
+}
+
+/** 某个 artifact 是否允许写 dependencyManagement：全局开关或按项白名单任一命中 */
+export function isDependencyManagementAllowed(policy: UpgradePolicy, packageName: string): boolean {
+  return policy.allowDependencyManagement || policy.dependencyManagementAllowlist.includes(packageName);
 }
 
 /** 构建命令：按门禁级别与 mavenArgs 生成，供 CLI / MCP / 适配器共用 */

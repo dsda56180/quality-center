@@ -317,8 +317,10 @@ export function integrate(root: string, options: IntegrateOptions): IntegrateRes
     try {
       const current = JSON.parse(fs.readFileSync(policyFile, 'utf8')) as Record<string, unknown>;
       const defaults = defaultPolicyDocument(root) as unknown as Record<string, unknown>;
+      // 按项白名单是可选键：已有策略不写也能工作，避免升级插件后误报 drift
+      const optionalKeys = new Set(['dependencyManagementAllowlist']);
       const missing = Object.keys(defaults).filter(
-        (key) => defaults[key] !== undefined && !(key in current)
+        (key) => !optionalKeys.has(key) && defaults[key] !== undefined && !(key in current)
       );
       if (missing.length === 0) {
         record(policyFile, 'unchanged');

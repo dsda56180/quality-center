@@ -516,6 +516,26 @@ export function getHtml(nonce: string): string {
   .wz-plan-row .cve { flex: none; color: var(--vscode-editorWarning-foreground, #d29922); }
   .wz-plan-row.done { opacity: .65; }
   .wz-plan-note { margin-top: 4px; font-size: 10px; color: var(--vscode-descriptionForeground); }
+  .wz-decision {
+    margin-top: 7px; padding: 8px 9px; border-radius: 5px; line-height: 1.55;
+    border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
+    background: var(--vscode-inputValidation-warningBackground, rgba(204,167,0,.09));
+  }
+  .wz-decision-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .wz-decision-head strong { font-size: 11px; color: var(--vscode-foreground); }
+  .wz-decision-badge {
+    flex: none; padding: 0 5px; border-radius: 8px; font-size: 9px; font-weight: 600;
+    color: var(--vscode-editorWarning-foreground, #cca700);
+    background: rgba(204,167,0,.16);
+  }
+  .wz-decision-why { font-size: 10px; color: var(--vscode-foreground); }
+  .wz-decision-why b { color: var(--vscode-editorWarning-foreground, #cca700); }
+  .wz-decision-note { margin-top: 3px; font-size: 9px; color: var(--vscode-descriptionForeground); }
+  .wz-decision-btn {
+    margin-top: 6px; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px;
+    border: 1px solid var(--vscode-button-background);
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+  }
   .wz-fixplan { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--vscode-panel-border); }
   .wz-fixplan-head {
     display: flex; align-items: center; justify-content: flex-start; gap: 6px;
@@ -1363,8 +1383,24 @@ export function getHtml(nonce: string): string {
           : '<div class="wz-fixnote">发现 ' + depCount + ' 条依赖漏洞，尚未生成可回滚计划。</div>';
       }
       if (n.plan && n.plan.skippedCount) {
-        depBody += '<div class="wz-plan-note">另有 ' + n.plan.skippedCount +
-          ' 项未纳入：策略未授权或需人工处理，已记录在计划文件。</div>';
+        var skippedItems = n.plan.skipped || [];
+        var policySkipped = skippedItems.filter(function (item) {
+          return item.decision === 'policy-denied' || /dependencyManagement|策略未授权/.test(item.reason || '');
+        });
+        var decisionCount = policySkipped.length;
+        if (decisionCount) {
+          depBody += '<div class="wz-decision">' +
+            '<div class="wz-decision-head"><span class="wz-decision-badge">需要你决定</span>' +
+            '<strong>' + decisionCount + ' 项没有自动升级</strong></div>' +
+            '<div class="wz-decision-why"><b>原因：</b>这些包没有被 pom.xml 直接声明，是被其他依赖间接带入的。修它们需要插件在 pom 的“版本锁定”区写一条覆盖版本；当前策略只允许直接依赖升级，所以没有生成执行按钮。</div>' +
+            '<div class="wz-decision-note">不是漏扫，也不是升级失败；已有的 ' + (n.plan.directCount ?? n.plan.total) + ' 项直接依赖仍可正常升级。' +
+            '先升级带入它们的直接依赖（推荐）；如果引入方升不上去，再只授权选中的包，不要手改 pom。</div>' +
+            '<button class="wz-decision-btn" data-wz="explainSkipped">查看 ' + decisionCount + ' 项与处理方式</button>' +
+            '</div>';
+        } else {
+          depBody += '<div class="wz-plan-note">另有 ' + n.plan.skippedCount +
+            ' 项未纳入：没有同线修复版本或需人工判断，已记录在计划文件。</div>';
+        }
       }
       var dupRows = dupSuggestions.map(function (s) {
         return '<div class="wz-fixrow"><span class="fix-title">' + esc(s.title) + '</span>' +

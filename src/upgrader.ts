@@ -58,7 +58,12 @@ export interface UpgradeCandidate {
 export interface UpgradePlan {
   candidates: UpgradeCandidate[];
   /** 无法自动升级的包及原因，用于界面解释 */
-  skipped: { packageName: string; reason: string }[];
+  skipped: {
+    packageName: string;
+    reason: string;
+    /** dependency:tree 里直接引入该传递依赖的父节点 */
+    introducedBy?: string[];
+  }[];
 }
 
 /** 依赖树与 BOM 索引，用于判断版本来源与联动关系 */
@@ -73,6 +78,8 @@ export interface UpgradeContext {
   targetJavaVersion?: string;
   /** 是否允许新增 dependencyManagement 固定传递依赖；默认不允许 */
   allowDependencyManagement?: boolean;
+  /** 按 artifact 授权写 dependencyManagement 的白名单 */
+  dependencyManagementAllowlist?: string[];
 }
 
 export interface UpgradeChange {
@@ -264,7 +271,7 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
   }
 
   const candidates: UpgradeCandidate[] = [];
-  const skipped: { packageName: string; reason: string }[] = [];
+  const skipped: { packageName: string; reason: string; introducedBy?: string[] }[] = [];
   /** 已被框架层升级覆盖的依赖 → 覆盖它的候选包名 */
   const coveredBy = new Map<string, string>();
 
@@ -449,10 +456,14 @@ export function planUpgrades(root: string, issues: Issue[], context?: UpgradeCon
       note = '该依赖由 BOM 统一管理，单独固定版本可能与同源组件不一致；建议优先升级 BOM。';
     } else {
       sourceKind = 'transitive';
-      if (!context?.allowDependencyManagement) {
+      const manageAllowed =
+        Boolean(context?.allowDependencyManagement) ||
+        Boolean(context?.dependencyManagementAllowlist?.includes(packageName));
+      if (!manageAllowed) {
         skipped.push({
           packageName,
-          reason: '传递依赖需新增 dependencyManagement 固定版本，当前策略未授权（allowDependencyManagement=false）'
+          reason: '传递依赖，需要在 dependencyManagement 中锁定版本；当前策略未授权写版本覆盖',
+          introducedBy: node?.dependents
         });
         continue;
       }

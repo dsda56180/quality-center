@@ -333,7 +333,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
       '阶段 1 基线：先 `quality_build` 建立 target（失败也记录，用 quality_explain 判断）→ `quality_scan`（全量）→ `quality_report format=summary` 记录修复前的总数、按来源/严重度计数。没有 target 时 trivy 只按源码解析、SpotBugs 为 0，基线与最终不可比。',
       '阶段 2 确定性修复：`quality_fix write=true`；然后 `quality_build` 确认没有引入编译失败。',
       '阶段 3 依赖升级：`quality_upgrade_plan`（必须先有当前 pom 的成功构建记录）→ 按 framework/family/independent 顺序逐组 `quality_upgrade_apply write=true` → 每组 `quality_build` → 失败先 `quality_explain`，同组两次失败 `quality_upgrade_revert` 并把该组列为阻塞。',
-      '只允许一个升级计划：阶段 3 生成的计划必须一直用到收尾；阶段 5/6 不得再执行 `quality_upgrade_plan` 生成第二个计划。剩余 CVE 若需要新增 `<dependencyManagement>`，而策略 `allowDependencyManagement=false`，直接列为阻塞，不要追加计划、不要部分 apply 一组。',
+      '只允许一个升级计划：阶段 3 生成的计划必须一直用到收尾；阶段 5/6 不得再执行 `quality_upgrade_plan` 生成第二个计划。剩余 CVE 若需要新增 `<dependencyManagement>`，先看策略 `dependencyManagementAllowlist` 是否包含该 artifact；不在白名单就列为阻塞，提示用户在面板「查看未处理项」里按项授权，不要建议打开全局 `allowDependencyManagement`，不要手改 pom。',
       'apply 一组后若 `quality_upgrade_check` 显示该组只落盘了一部分候选，视为不完整：立即 `quality_upgrade_revert` 该组并列为阻塞，不能把半组状态当作完成。',
       '阶段 3.5 依赖收敛：读 `issues.json` 的 suggestions，只取 category=duplicate；先列每个能力类别的重复库、引用文件和迁移顺序，再按“先改代码、编译通过、最后删依赖”的顺序小步处理。不要自动删依赖，不要为了统一 JSON 重写业务序列化协议；BOM 项删除显式 version 后必须提示用 mvn dependency:tree 复核。每一类完成后 quality_build + quality_scan。',
       '阶段 4 静态代码：先 `quality_phase phase=static_fix`（让面板知道已进入静态修复），再 `quality_report format=json` 取剩余问题；按 `.quality-center/skills/quality-center-java-upgrade/SKILL.md` 的判定，优先修有明确文件/行号、改动局部、可编译验证的 Checkstyle/SpotBugs/astgrep 问题；安全设计类、需要改架构或密钥轮换的只记录不擅自改。每修 20 条或每 10 分钟做一次 `quality_build`。',

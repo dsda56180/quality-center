@@ -18,7 +18,7 @@ import {
   UpgradeContext,
   UpgradeMode
 } from './upgrader';
-import { buildCommandArgs, inferFrameworkVersion, loadPolicy } from './upgradePolicy';
+import { buildCommandArgs, inferFrameworkVersion, isDependencyManagementAllowed, loadPolicy } from './upgradePolicy';
 import { isManagedFrameworkProperty } from './explain';
 
 export const PLAN_SCHEMA_VERSION = '3';
@@ -59,6 +59,14 @@ export interface PlanSkipped {
   packageName: string;
   reason: string;
   decision: 'manual' | 'policy-denied' | 'unsupported';
+  /** 当前解析版本，来自扫描结果或依赖树 */
+  installedVersion?: string;
+  /** 可用的同线修复版本 */
+  fixedVersion?: string;
+  /** 该包关联的漏洞数 */
+  cveCount?: number;
+  /** dependency:tree 里直接引入该传递依赖的父节点 */
+  introducedBy?: string[];
 }
 
 export interface UpgradePlanFile {
@@ -414,17 +422,32 @@ export function createUpgradePlan(
     frameworkTarget: loaded.frameworkTarget,
     currentJavaVersion: loaded.javaVersion,
     targetJavaVersion: loaded.targetJavaVersion,
-    allowDependencyManagement: loaded.policy.allowDependencyManagement
+    allowDependencyManagement: loaded.policy.allowDependencyManagement,
+    dependencyManagementAllowlist: loaded.policy.dependencyManagementAllowlist
   };
   const raw = planUpgrades(root, issues, context);
 
   const forbidden = new Set(loaded.policy.forbiddenPackages);
   const blockedByPolicy: string[] = [];
   const candidates: PlanCandidate[] = [];
+  const issueSummary = (packageName: string): {
+    installedVersion?: string;
+    fixedVersion?: string;
+    cveCount: number;
+  } => {
+    const matched = issues.filter((issue) => (issue.packageName ?? '') === packageName);
+    return {
+      installedVersion: matched.find((issue) => issue.installedVersion)?.installedVersion,
+      fixedVersion: matched.find((issue) => issue.fixedVersion)?.fixedVersion,
+      cveCount: matched.length
+    };
+  };
   const skipped: PlanSkipped[] = raw.skipped.map((item) => ({
     packageName: item.packageName,
     reason: item.reason,
-    decision: 'manual' as const
+    decision: /dependencyManagement|策略未授权/.test(item.reason) ? ('policy-denied' as const) : ('manual' as const),
+    introducedBy: item.introducedBy,
+    ...issueSummary(item.packageName)
   }));
 
   let text = original;
@@ -434,7 +457,8 @@ export function createUpgradePlan(
       skipped.push({
         packageName: candidate.packageName,
         reason: '策略禁用该依赖（forbiddenPackages），需替换而不是升级',
-        decision: 'policy-denied'
+        decision: 'policy-denied',
+        ...issueSummary(candidate.packageName)
       });
       return;
     }
@@ -739,7 +763,7 @@ export function applyUpgradePlan(
   const appliedBefore = new Set(steps.flatMap((step) => step.packages));
   selected = selected.filter((item) => !appliedBefore.has(item.packageName));
   const policy = loadPolicy(root).policy;
-  const blocked = policyBlockedCandidates(plan, policy.allowDependencyManagement);
+  const blocked = policyBlockedCandidates(plan, policy);
   const blockedNames = new Set(blocked.map((item) => item.packageName));
   const blockedNow = selected.filter((item) => blockedNames.has(item.packageName));
   selected = selected.filter((item) => !blockedNames.has(item.packageName));
@@ -894,16 +918,13 @@ export function revertUpgradePlan(root: string, planId?: string): RevertPlanResu
 /** 当前策略下的不可落盘候选：manage 需要用 dependencyManagement，未授权时只报告 */
 function policyBlockedCandidates(
   plan: UpgradePlanFile,
-  allowDependencyManagement: boolean
+  policy: ReturnType<typeof loadPolicy>['policy']
 ): { packageName: string; reason: string }[] {
-  if (allowDependencyManagement) {
-    return [];
-  }
   return plan.candidates
-    .filter((item) => item.mode === 'manage')
+    .filter((item) => item.mode === 'manage' && !isDependencyManagementAllowed(policy, item.packageName))
     .map((item) => ({
       packageName: item.packageName,
-      reason: '需新增 dependencyManagement 固定传递依赖，策略 allowDependencyManagement=false'
+      reason: '需新增 dependencyManagement 固定传递依赖，策略未授权'
     }));
 }
 
@@ -917,7 +938,7 @@ export function checkUpgradePlan(root: string, planId?: string): CheckPlanResult
   const steps = readSteps(root, plan.planId);
   const appliedCount = new Set(steps.flatMap((step) => step.packages)).size;
   const appliedNames = new Set(steps.flatMap((step) => step.packages));
-  const blocked = policyBlockedCandidates(plan, loadPolicy(root).policy.allowDependencyManagement);
+  const blocked = policyBlockedCandidates(plan, loadPolicy(root).policy);
   const blockedNames = new Set(blocked.map((item) => item.packageName));
   const nextGroup = PLAN_GROUP_ORDER.find((name) =>
     plan.candidates.some(

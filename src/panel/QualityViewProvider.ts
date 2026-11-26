@@ -18,8 +18,9 @@ import { ScanRunner } from '../scanner';
 import { mavenMirrorArgs } from '../maven';
 import { buildDeepFixPreviewHtml, buildUpgradePreviewHtml, readPatchText, UpgradePreviewEntry } from './deepFixPanel';
 import { AutoFixPreviewItem, buildAutoFixPreviewHtml } from './autoFixPreview';
+import { buildSkippedPreviewHtml, SkippedPreviewItem } from './skippedPreview';
 import { applyUpgrade, planUpgrades, UpgradeCandidate, UpgradeContext } from '../upgrader';
-import { loadPolicy } from '../upgradePolicy';
+import { defaultPolicyDocument, loadPolicy } from '../upgradePolicy';
 import { buildAgentPrompt, type AgentScope } from '../agentPrompt';
 import { McpStatus, probeMcp } from '../mcpStatus';
 import { readRunState, runSnapshot, setRunActor } from '../runState';
@@ -548,6 +549,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'createUpgradePlan':
         await this.createPlanOnly();
+        break;
+      case 'explainSkipped':
+        await this.showSkippedExplanation();
         break;
       case 'buildGate':
         await this.buildGate();
@@ -2330,7 +2334,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       frameworkTarget: loaded.frameworkTarget,
       currentJavaVersion: loaded.javaVersion,
       targetJavaVersion: loaded.targetJavaVersion,
-      allowDependencyManagement: loaded.policy.allowDependencyManagement
+      allowDependencyManagement: loaded.policy.allowDependencyManagement,
+      dependencyManagementAllowlist: loaded.policy.dependencyManagementAllowlist
     };
     if (loaded.frameworkTarget) {
       this.log(`框架目标版本 ${loaded.frameworkTarget}（${loaded.sources[0] ?? '策略推导'}）`);
@@ -2654,6 +2659,175 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
           panel.dispose();
         }
       );
+    });
+  }
+
+  /** 说明并让用户按项授权：不直接改 pom，只写策略白名单后重新生成计划 */
+  private async showSkippedExplanation(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      return;
+    }
+    if (this.runner.isRunning) {
+      void vscode.window.showInformationMessage('扫描进行中，请稍后再查看未处理项。');
+      return;
+    }
+    if (this.deepFixState) {
+      void vscode.window.showInformationMessage('当前有修复任务在执行，请稍后再查看未处理项。');
+      return;
+    }
+    if (this.previewPanel) {
+      this.previewPanel.reveal();
+      void vscode.window.showInformationMessage('已有预览窗口打开，请先应用或取消。');
+      return;
+    }
+    const pomFile = path.join(root, 'pom.xml');
+    const openPom = vscode.workspace.textDocuments.find(
+      (document) => document.uri.fsPath.toLowerCase() === pomFile.toLowerCase()
+    );
+    if (openPom?.isDirty) {
+      void vscode.window.showWarningMessage('pom.xml 有未保存的修改，请先保存后再查看依赖处理方式。');
+      return;
+    }
+    const next = buildNextAction(root, { writeHandoff: false });
+    const plan = next.plan;
+    if (!plan || !plan.skipped?.length) {
+      void vscode.window.showInformationMessage('当前计划没有未处理的依赖项。');
+      return;
+    }
+
+    // 依赖树用于把“被谁带进来”直接写给人看；失败也不影响说明页打开
+    let nodes: UpgradeContext['nodes'];
+    try {
+      nodes = (await this.loadUpgradeContext(root)).nodes;
+    } catch {
+      nodes = undefined;
+    }
+    const items: SkippedPreviewItem[] = plan.skipped.map((item) => {
+      const matched = (this.runner.result?.issues ?? []).filter(
+        (issue) => (issue.packageName ?? '') === item.packageName
+      );
+      return {
+        packageName: item.packageName,
+        reason: item.reason,
+        decision: item.decision,
+        installedVersion:
+          item.installedVersion ?? matched.find((issue) => issue.installedVersion)?.installedVersion,
+        fixedVersion: item.fixedVersion ?? matched.find((issue) => issue.fixedVersion)?.fixedVersion,
+        cveCount: item.cveCount ?? (matched.length || undefined),
+        introducedBy: item.introducedBy?.length ? item.introducedBy : nodes?.get(item.packageName)?.dependents
+      };
+    });
+
+    const picks = await this.showSkippedPreview(path.basename(root), plan.planId, plan.directCount ?? plan.total, items);
+    if (!picks?.length) {
+      return;
+    }
+    const confirmed = await vscode.window.showWarningMessage(
+      `将把这 ${picks.length} 项加入按项白名单（dependencyManagementAllowlist），然后重新生成计划。\n\n只会改 .quality-center/upgrade-policy.json，不会直接改 pom.xml；之后仍会在预览页逐条确认 diff。`,
+      { modal: true },
+      '授权并重新生成'
+    );
+    if (confirmed !== '授权并重新生成') {
+      return;
+    }
+    await this.authorizeManagePackages(root, picks);
+  }
+
+  private async authorizeManagePackages(root: string, packages: string[]): Promise<void> {
+    const policyFile = path.join(root, '.quality-center', 'upgrade-policy.json');
+    let document: Record<string, unknown>;
+    if (fs.existsSync(policyFile)) {
+      try {
+        document = JSON.parse(fs.readFileSync(policyFile, 'utf8')) as Record<string, unknown>;
+      } catch {
+        void vscode.window.showErrorMessage('upgrade-policy.json 不是合法 JSON，未修改策略。');
+        return;
+      }
+    } else {
+      document = defaultPolicyDocument(root) as unknown as Record<string, unknown>;
+    }
+    const existing = Array.isArray(document.dependencyManagementAllowlist)
+      ? document.dependencyManagementAllowlist.filter((item): item is string => typeof item === 'string')
+      : [];
+    document.dependencyManagementAllowlist = Array.from(new Set([...existing, ...packages])).sort();
+    fs.mkdirSync(path.dirname(policyFile), { recursive: true });
+    fs.writeFileSync(policyFile, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+    this.depContextCache = undefined;
+
+    try {
+      const created = createUpgradePlan(root, readIssues(root));
+      const plan = created.plan;
+      this.log(
+        `按项授权 ${packages.length} 项写 dependencyManagement：` +
+          `${plan.candidates.length} 个候选，计划 ${plan.planId}`
+      );
+      this.push();
+      void vscode.window.showInformationMessage(
+        `已授权 ${packages.length} 项并重新生成计划 ${plan.planId}：` +
+          `${plan.candidates.length} 个候选。仍不会直接改 pom，应用前会逐条展示 diff。`
+      );
+    } catch (error) {
+      this.push();
+      void vscode.window.showErrorMessage(
+        `策略已写入，但重新生成计划失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private showSkippedPreview(
+    project: string,
+    planId: string,
+    directCount: number,
+    items: SkippedPreviewItem[]
+  ): Promise<string[] | null> {
+    const panel = vscode.window.createWebviewPanel(
+      'qualityCenter.skippedPreview',
+      '未自动升级的依赖',
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    this.previewPanel = panel;
+    panel.webview.html = buildSkippedPreviewHtml(createNonce(), {
+      project: project || 'Maven 项目',
+      planId,
+      directCount,
+      items
+    });
+    const known = new Set(
+      items
+        .filter((item) => item.decision === 'policy-denied' || /dependencyManagement|策略未授权/.test(item.reason))
+        .map((item) => item.packageName)
+    );
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value: string[] | null): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.previewPanel === panel) {
+          this.previewPanel = undefined;
+        }
+        resolve(value);
+      };
+      panel.onDidDispose(() => finish(null));
+      panel.webview.onDidReceiveMessage((message: { type?: string; packages?: string[] }) => {
+        if (message.type === 'cancel') {
+          finish(null);
+          panel.dispose();
+          return;
+        }
+        if (message.type !== 'authorize') {
+          return;
+        }
+        const picks = (message.packages ?? []).filter((name) => known.has(name));
+        if (!picks.length) {
+          return;
+        }
+        finish(picks);
+        panel.dispose();
+      });
     });
   }
 

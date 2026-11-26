@@ -80,6 +80,8 @@ export interface NextActionPayload {
     state: string;
     appliedCount: number;
     total: number;
+    /** 非 manage 候选数：直接声明或由 BOM/父 POM 管理的依赖 */
+    directCount?: number;
     nextGroup?: PlanGroup;
     nextLabel?: string;
     blocked?: { packageName: string; reason: string }[];
@@ -88,6 +90,16 @@ export interface NextActionPayload {
     frameworkTarget?: string;
     cveTotal?: number;
     skippedCount?: number;
+    /** 面板解释用：哪些包被跳过、为什么、版本与引入方 */
+    skipped?: {
+      packageName: string;
+      reason: string;
+      decision: string;
+      installedVersion?: string;
+      fixedVersion?: string;
+      cveCount?: number;
+      introducedBy?: string[];
+    }[];
     groups: NextGroupStatus[];
     /** 面板只读明细：让人直接看懂“升什么、升到哪”，不用打开 handoff.md */
     candidates?: {
@@ -330,6 +342,7 @@ function computeNextAction(root: string): NextActionPayload {
     state: check.state,
     appliedCount: check.appliedCount ?? 0,
     total: check.total ?? 0,
+    directCount: plan.candidates.filter((item) => item.mode !== 'manage').length,
     nextGroup: check.nextGroup,
     nextLabel: check.nextGroup ? PLAN_GROUP_LABEL[check.nextGroup] : undefined,
     blocked: check.blocked ?? [],
@@ -339,6 +352,15 @@ function computeNextAction(root: string): NextActionPayload {
     groups,
     cveTotal: plan.candidates.reduce((sum, item) => sum + (item.cveCount || 0), 0),
     skippedCount: plan.skipped.length,
+    skipped: plan.skipped.map((item) => ({
+      packageName: item.packageName,
+      reason: item.reason,
+      decision: item.decision,
+      installedVersion: item.installedVersion,
+      fixedVersion: item.fixedVersion,
+      cveCount: item.cveCount,
+      introducedBy: item.introducedBy
+    })),
     candidates: plan.candidates.map((item) => ({
       packageName: item.packageName,
       from: item.from,
@@ -480,17 +502,17 @@ function computeNextAction(root: string): NextActionPayload {
       blockers.push({
         code: 'policy-blocked',
         severity: 'blocking',
-        message: `${item.packageName}: ${item.reason}`,
-        suggestion: '这是需要新增 dependencyManagement 或人工决策的项；不要手改 pom 绕过，先问用户处理/跳过'
+        message: `${item.packageName}: 这是被其他依赖间接带入的包，需要先授权写版本锁定`,
+        suggestion: '先升级引入它的直接依赖；如果无法升级，在面板「查看未处理项」里只勾选需要处理的包，授权插件写版本锁定后重新生成计划'
       });
     }
     return {
       ...base,
       state: 'blocked',
-      title: `计划 ${plan.planId} 剩余候选被策略阻塞`,
+      title: `计划 ${plan.planId} 还有 ${check.blocked?.length ?? 0} 项需要你选择处理方式`,
       action: 'none',
       command: '',
-      why: '剩余候选都需要新增 dependencyManagement 固定传递依赖，当前策略未授权；继续 apply 只会反复空转。',
+      why: '这些包是被其他依赖间接带入的；需要先授权版本锁定，或者升级引入它们的直接依赖。不要手改 pom。',
       progress: `已落盘 ${check.appliedCount ?? 0}/${check.total ?? 0}`,
       plan: planInfo,
       pom: status.pom,
