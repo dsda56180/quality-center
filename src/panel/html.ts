@@ -512,21 +512,22 @@ export function getHtml(nonce: string): string {
   }
   .wz-choice-note { flex: 1; margin-top: 3px; font-size: 9px; line-height: 1.4; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
   .wz-choice .wz-primary {
-    display: block; width: 100%; margin-top: 5px; padding: 4px 7px;
-    font-size: 10px; font-weight: 500; text-align: left;
+    display: inline-flex; align-self: flex-start; width: auto; margin-top: 4px; padding: 3px 8px;
+    font-size: 10px; font-weight: 500; line-height: 1.2; text-align: left;
   }
   .wz-choice .secondary {
-    display: block; width: 100%; margin-top: 5px; padding: 4px 7px; font-size: 10px;
-    text-align: left; cursor: pointer; border: 1px solid var(--vscode-panel-border); border-radius: 4px;
+    display: inline-flex; align-self: flex-start; width: auto; margin-top: 4px; padding: 3px 8px;
+    font-size: 10px; line-height: 1.2; text-align: left; cursor: pointer;
+    border: 1px solid var(--vscode-panel-border); border-radius: 4px;
     background: var(--vscode-button-secondaryBackground, transparent);
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
   }
   .wz-choice .secondary:hover { background: var(--vscode-list-hoverBackground); }
   .wz-choice .secondary:disabled { opacity: .45; cursor: not-allowed; }
   .wz-ai-first {
-    border: 1px solid var(--vscode-focusBorder, #007acc);
-    background: rgba(88,166,255,.16);
-    box-shadow: 0 0 0 2px rgba(88,166,255,.30), 0 0 14px rgba(88,166,255,.18);
+    border: 2px solid #2ea043;
+    background: rgba(46,160,67,.16);
+    box-shadow: 0 0 0 1px rgba(46,160,67,.45), 0 0 16px rgba(46,160,67,.22);
   }
   .wz-star {
     margin-left: 5px; font-size: 11px; line-height: 1; vertical-align: 1px;
@@ -1470,6 +1471,7 @@ export function getHtml(nonce: string): string {
         : '已落盘 ' + n.plan.appliedCount + '/' + n.plan.total +
           (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
     }
+    if (hubMode) title = '';
     var purpose = '';
     if (blankState === 'scan') {
       purpose = state.scanning
@@ -1806,7 +1808,7 @@ export function getHtml(nonce: string): string {
         btn('deepFix', '打开重构', false) + '</div>' +
         '</div></details>'
       : '';
-    el.innerHTML = '<div class="wz-title">' + esc(title) + '</div>'
+    el.innerHTML = (title ? '<div class="wz-title">' + esc(title) + '</div>' : '')
       + (meta ? '<div class="wz-meta">' + esc(meta) + '</div>' : '')
       + overview
       + (purpose ? '<div class="wz-purpose">' + esc(purpose) + '</div>' : '')

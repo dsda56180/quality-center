@@ -36,6 +36,9 @@ const checks = {
     h.includes('升级计划明细'),
   aiFirstHub: h.includes('wz-ai-first') && h.includes('wz-star') && h.includes('★') &&
     !h.includes('为什么 AI 优先') && !h.includes('建议先交给 AI') && !h.includes('AI 负责编排'),
+  aiFirstGreen: h.includes('border: 2px solid #2ea043'),
+  hubTitleHidden: h.includes("if (hubMode) title = '';"),
+  compactChoiceButtons: h.includes('.wz-choice .secondary') && h.includes('align-self: flex-start; width: auto'),
   upgradeDetailOnly: h.includes('<strong>升级计划明细</strong>') &&
     !h.includes('配置安全（qcsec）') && !h.includes('SpotBugs / qcsec 不在一键修复范围内'),
   detailsLast: h.includes('upgradeFlow ? fixPlan') && h.indexOf('hubMode ? choiceHub') > h.indexOf('var primaryRow'),
