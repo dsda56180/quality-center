@@ -469,7 +469,9 @@ export function getHtml(nonce: string): string {
     background: var(--vscode-textBlockQuote-background, rgba(128,128,128,.08));
     border: 1px solid var(--vscode-panel-border);
     border-left: 3px solid var(--vscode-focusBorder, #007acc);
+    max-width: 100%; box-sizing: border-box;
   }
+  .wz-title, .wz-meta, .wz-purpose { overflow-wrap: anywhere; }
   .wz-title { font-weight: 600; line-height: 1.45; }
   .wz-meta { margin-top: 3px; font-size: 11px; color: var(--vscode-descriptionForeground); }
   .wz-purpose { margin-top: 4px; font-size: 11px; line-height: 1.5; color: var(--vscode-foreground); opacity: .9; }
@@ -484,13 +486,47 @@ export function getHtml(nonce: string): string {
   .wz-note { margin-top: 5px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
   .wz-note.warn { color: var(--vscode-editorWarning-foreground, #d29922); }
   .wz-note.block { color: var(--vscode-editorError-foreground, #f85149); }
-  .wz-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .wz-actions button {
-    flex: 0 0 auto; padding: 4px 10px; font-size: 11px; line-height: 1.4;
-    min-height: 24px; cursor: pointer;
+  .wz-primary-row { margin-top: 9px; }
+  .wz-primary {
+    display: block; width: 100%; padding: 7px 10px; font-size: 12px; font-weight: 600;
+    text-align: left; cursor: pointer; border: 1px solid transparent; border-radius: 4px;
+    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
   }
-  .wz-actions .wz-primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-  .wz-actions button:disabled { opacity: .45; cursor: not-allowed; }
+  .wz-primary:hover { background: var(--vscode-button-hoverBackground); }
+  .wz-primary:disabled { opacity: .5; cursor: not-allowed; }
+  .wz-primary-hint { margin-top: 4px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
+  .wz-secondary { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .wz-secondary button {
+    flex: 0 1 auto; min-width: 0; padding: 5px 9px; font-size: 11px; line-height: 1.4;
+    text-align: left; border-radius: 3px; border: 1px solid var(--vscode-panel-border); cursor: pointer;
+    background: var(--vscode-button-secondaryBackground, transparent);
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  }
+  .wz-secondary button:hover { background: var(--vscode-list-hoverBackground); }
+  .wz-secondary button:disabled { opacity: .45; cursor: not-allowed; }
+  .wz-section-label { margin-top: 9px; font-size: 10px; color: var(--vscode-descriptionForeground); }
+  .wz-ai { margin-top: 6px; padding: 6px 7px; border-radius: 6px; border: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background, rgba(128,128,128,.05)); }
+  .wz-ai-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-bottom: 5px; }
+  .wz-ai-head strong { font-size: 11px; }
+  .wz-ai-head span { font-size: 10px; color: var(--vscode-descriptionForeground); }
+  .wz-advanced { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--vscode-panel-border); }
+  .wz-advanced > summary { cursor: pointer; list-style: none; font-size: 11px; color: var(--vscode-descriptionForeground); }
+  .wz-advanced > summary::-webkit-details-marker { display: none; }
+  .wz-advanced > summary::before { content: '▸ '; }
+  .wz-advanced[open] > summary::before { content: '▾ '; }
+  .wz-advanced-body { margin-top: 5px; }
+  .wz-advanced-row {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
+    padding: 5px 6px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; margin-top: 4px;
+  }
+  .wz-advanced-row strong { display: block; font-size: 11px; }
+  .wz-advanced-row small { display: block; margin-top: 2px; font-size: 10px; line-height: 1.4; color: var(--vscode-descriptionForeground); }
+  .wz-advanced-row button {
+    flex: none; padding: 4px 8px; font-size: 10px; cursor: pointer;
+    border: 1px solid var(--vscode-panel-border); border-radius: 3px;
+    background: var(--vscode-button-secondaryBackground, transparent);
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  }
   .wz-plan { margin-top: 7px; border-top: 1px dashed var(--vscode-panel-border); padding-top: 6px; }
   .wz-plan-head {
     display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
@@ -508,10 +544,10 @@ export function getHtml(nonce: string): string {
     margin-bottom: 1px;
   }
   .wz-plan-row {
-    display: flex; gap: 6px; align-items: baseline; line-height: 1.55;
+    display: flex; flex-wrap: wrap; gap: 2px 6px; align-items: baseline; line-height: 1.55;
     font-size: 10px; color: var(--vscode-descriptionForeground);
   }
-  .wz-plan-row .pkg { flex: 1 1 auto; min-width: 0; word-break: break-all; }
+  .wz-plan-row .pkg { flex: 1 1 140px; min-width: 0; word-break: break-all; }
   .wz-plan-row .ver { flex: none; color: var(--vscode-foreground); }
   .wz-plan-row .cve { flex: none; color: var(--vscode-editorWarning-foreground, #d29922); }
   .wz-plan-row.done { opacity: .65; }
@@ -520,6 +556,7 @@ export function getHtml(nonce: string): string {
     margin-top: 7px; padding: 8px 9px; border-radius: 5px; line-height: 1.55;
     border: 1px solid var(--vscode-editorWarning-foreground, #cca700);
     background: var(--vscode-inputValidation-warningBackground, rgba(204,167,0,.09));
+    overflow-wrap: anywhere;
   }
   .wz-decision-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
   .wz-decision-head strong { font-size: 11px; color: var(--vscode-foreground); }
@@ -538,23 +575,23 @@ export function getHtml(nonce: string): string {
   }
   .wz-fixplan { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--vscode-panel-border); }
   .wz-fixplan-head {
-    display: flex; align-items: center; justify-content: flex-start; gap: 6px;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 4px 6px;
     font-size: 10px; color: var(--vscode-descriptionForeground); margin-bottom: 4px;
   }
   .wz-fixplan-head strong { flex: 0 0 auto; color: var(--vscode-foreground); font-size: 11px; }
   .wz-fixplan-head .fix-count { margin-left: auto; flex: none; }
   .wz-fixbody { margin-top: 2px; }
-  .wz-fixsection { margin-top: 6px; padding-top: 5px; border-top: 1px dashed var(--vscode-panel-border); }
+  .wz-fixsection { margin-top: 6px; padding-top: 5px; border-top: 1px dashed var(--vscode-panel-border); min-width: 0; }
   .wz-fixsection:first-child { margin-top: 2px; padding-top: 0; border-top: 0; }
   .wz-fixsection-head {
-    display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 6px;
     margin-bottom: 3px; font-size: 10px; color: var(--vscode-descriptionForeground);
   }
   .wz-fixsection-head .fix-tag {
     flex: none; font-size: 9px; padding: 0 4px; border-radius: 7px;
     color: var(--vscode-textLink-foreground); background: rgba(88,166,255,.12);
   }
-  .wz-fixrow { display: flex; gap: 5px; align-items: baseline; line-height: 1.5; margin-bottom: 3px; }
+  .wz-fixrow { display: flex; flex-wrap: wrap; gap: 2px 5px; align-items: baseline; line-height: 1.5; margin-bottom: 3px; }
   .wz-fixrow .fix-tag {
     flex: none; font-size: 9px; padding: 0 4px; border-radius: 7px;
     color: var(--vscode-textLink-foreground); background: rgba(88,166,255,.12);
@@ -562,14 +599,9 @@ export function getHtml(nonce: string): string {
   .wz-fixrow .fix-title { flex: 1 1 auto; min-width: 0; font-size: 10px; color: var(--vscode-foreground); }
   .wz-fixrow .fix-impact { flex: none; font-size: 9px; color: var(--vscode-descriptionForeground); }
   .wz-fixnote { margin-top: 4px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
-  .wz-scopebar {
-    margin-top: 7px; padding: 6px 7px; border-radius: 7px;
-    border: 1px solid var(--vscode-panel-border);
-    background: var(--vscode-sideBar-background, rgba(128,128,128,.05));
-  }
-  .wz-scope-row { display: flex; flex-wrap: nowrap; gap: 5px; align-items: center; max-width: 100%; }
+  .wz-scope-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; max-width: 100%; }
   .wz-scope-picker {
-    position: relative; flex: 1 1 auto; width: auto; max-width: none; min-width: 0;
+    position: relative; flex: 1 1 150px; width: auto; max-width: none; min-width: 0;
   }
   .wz-scope-picker summary {
     display: flex; align-items: center; gap: 4px;
@@ -601,23 +633,14 @@ export function getHtml(nonce: string): string {
     font-size: 10px; cursor: pointer; white-space: nowrap;
   }
   .wz-scope-option input { margin: 0; width: 12px; height: 12px; }
-  .wz-scope-menu-foot {
-    display: flex; align-items: center; gap: 5px; margin-top: 4px; padding-top: 4px;
-    border-top: 1px dashed var(--vscode-panel-border);
-    font-size: 9px; color: var(--vscode-descriptionForeground);
-  }
   .wz-scope-run {
     flex: none; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px;
-    border: 1px solid var(--vscode-button-background);
-    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-    font-weight: 600;
+    white-space: nowrap;
+    border: 1px solid var(--vscode-panel-border);
+    background: var(--vscode-button-secondaryBackground, transparent);
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
   }
   .wz-scope-run:disabled { opacity: .45; cursor: not-allowed; }
-  .wz-scope-plan {
-    flex: none; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 9px;
-    border: 1px solid var(--vscode-panel-border);
-    background: transparent; color: var(--vscode-textLink-foreground);
-  }
   .wz-scope-note { margin-top: 5px; font-size: 9px; line-height: 1.4; color: var(--vscode-descriptionForeground); }
   .wz-plan > summary, .wz-fixplan > summary {
     cursor: pointer; list-style: none; user-select: none;
@@ -718,9 +741,7 @@ export function getHtml(nonce: string): string {
     <button id="stop" class="icon-btn secondary" title="终止扫描" style="display:none"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M3 3h8v8H3z"/></svg></button>
     <span class="spacer"></span>
     <button id="mcpbtn" class="mcp-status-btn checking" title="MCP 检测中"><span class="mcp-dot"></span>MCP</button>
-    <button id="deepfix" class="icon-btn secondary" title="深度修复"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg></button>
-    <button id="upgrade" class="icon-btn secondary" title="升级依赖"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M5 4v2h14V4H5zm0 10h4v6h6v-6h4l-7-7-7 7z"/></svg></button>
-    <button id="copy" class="icon-btn secondary" title="复制给 AI"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 1h6l2 2v8H4zM2 4h1.5v9h7v1.5H2z"/></svg></button>
+    <button id="copy" class="icon-btn secondary" title="复制报告"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M4 1h6l2 2v8H4zM2 4h1.5v9h7v1.5H2z"/></svg></button>
     <button id="save" class="icon-btn secondary" title="导出报告"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M6 1h2v6h2.5L7 12 3.5 7H6zM2 12.5h10V14H2z"/></svg></button>
     <button id="settings" class="icon-btn secondary" title="扫描设置"><svg viewBox="0 0 14 14" width="14" height="14" fill="currentColor"><path d="M1 3h12v1.5H1zM1 9h12v1.5H1zM4 1.5h2v4.5H4zM8 7.5h2v4.5H8z"/></svg></button>
   </div>
@@ -1257,13 +1278,6 @@ export function getHtml(nonce: string): string {
 
     // 修复与优化：人工可执行的动作统一进消息栏，不再使用独立 fixbar
     var n = state.next;
-    var planPending = Boolean(n && ['plan', 'apply', 'confirm', 'build', 'explain', 'rescan'].indexOf(n.action) >= 0);
-    var fixable = (state.issues || []).filter(function (i) { return i.fixable; }).length;
-    if (!busy && fixable > 0 && !planPending) {
-      add('info',
-        '🔧 可自动修复 ' + fixable + ' 项（无用导入 / 冗余导入 / 修饰符顺序 / 布尔表达式简化）',
-        action('一键修复', 'fixAll'));
-    }
     if (!busy && n) {
       if (n.action === 'scan') {
         add('info', '还没有扫描结果，先扫描项目才能给出修复与升级建议。', wizard('开始扫描', 'scan'));
@@ -1307,7 +1321,7 @@ export function getHtml(nonce: string): string {
     }
     el.style.display = 'block';
     var label = n.plan && n.plan.nextLabel ? n.plan.nextLabel : '当前组';
-    var title = n.title;
+    var title = '修复工作台';
     var meta = n.progress || '';
     var issueTotal = (state.issues || []).length;
     var fixableCount = (state.issues || []).filter(function (i) { return i.fixable; }).length;
@@ -1324,13 +1338,13 @@ export function getHtml(nonce: string): string {
     var spotbugsCount = countSource('spotbugs');
     var qcsecCount = countSource('qcsec');
     if (n.action === 'plan') {
-      title = '质量修复方案';
-      meta = issueTotal + ' 项问题 · 可自动修复 ' + fixableCount;
+      title = '修复工作台';
+      meta = issueTotal + ' 项问题 · 可安全自动修复 ' + fixableCount;
     }
     if ((n.action === 'apply' || n.action === 'confirm') && n.plan) {
-      title = n.plan.state === 'partial' ? '质量修复方案 · 升级计划执行中' : '质量修复方案 · 升级计划已生成';
+      title = n.plan.state === 'partial' ? '修复工作台 · 计划执行中' : '修复工作台 · 计划已生成';
       if (state.final) {
-        title = n.plan.state === 'partial' ? '本次 AI 修复已收尾 · 剩余组需人工确认' : '本次 AI 修复已收尾';
+        title = n.plan.state === 'partial' ? '本次修复已收尾 · 剩余组需人工确认' : '本次修复已收尾';
       }
       meta = '已落盘 ' + n.plan.appliedCount + '/' + n.plan.total;
     }
@@ -1410,7 +1424,7 @@ export function getHtml(nonce: string): string {
       var secretRows = '<div class="wz-fixnote">先轮换密钥，再迁移到环境变量或配置中心。</div>';
       var manualCount = allSuggestions.filter(function (s) { return s.category === 'manual'; }).length;
       fixPlan = '<details class="wz-fixplan"><summary class="wz-fixplan-head">' +
-        '<span class="wz-fixplan-caret" aria-hidden="true"></span><strong>修复方案</strong>' +
+        '<span class="wz-fixplan-caret" aria-hidden="true"></span><strong>修复总览</strong>' +
         '<span class="wz-fixplan-fold"></span>' +
         '<span class="fix-count">' + (n.plan ? n.plan.total + ' 依赖' : depCount + ' 漏洞') + ' · ' +
         dupSuggestions.length + ' 收敛 · ' + (checkstyleCount + astgrepCount) + ' 代码 · ' +
@@ -1463,66 +1477,103 @@ export function getHtml(nonce: string): string {
       var validPick = scopeOptions.filter(function (o) { return o.count > 0 && scopePick.indexOf(o.key) >= 0; });
       var availableCount = scopeOptions.filter(function (o) { return o.count > 0; }).length;
       var pickText = validPick.length === availableCount
-        ? '全部 ' + availableCount + ' 项'
-        : validPick.length ? '已选 ' + validPick.length + ' 项' : '未选择';
+        ? '全部 ' + availableCount + ' 类'
+        : validPick.length ? '已选 ' + validPick.length + ' 类' : '未选择';
       var checks = scopeOptions.map(function (o) {
         return '<label class="wz-scope-option"><input type="checkbox" data-scope-pick="' + o.key + '"' +
           (scopePick.indexOf(o.key) >= 0 && o.count > 0 ? ' checked' : '') +
           (o.count ? '' : ' disabled') + '>' +
           esc(o.label) + '<span class="fix-impact">' + esc(String(o.note || '0')) + '</span></label>';
       }).join('');
-      var planShortcut = (!n.plan && depCount)
-        ? '<div class="wz-scope-menu-foot"><button id="scopePlanBtn" class="wz-scope-plan" data-wz="createPlan"' +
-          (scopePick.indexOf('upgrade') >= 0 ? '' : ' style="display:none"') +
-          '>仅生成依赖计划</button><span>只生成计划文件，不改 pom</span></div>'
-        : '';
-      scopeBar = '<div class="wz-scopebar"><div class="wz-scope-row">' +
-        '<details class="wz-scope-picker"><summary><span class="pick-label">修复范围</span>' +
+      scopeBar = '<div class="wz-ai"><div class="wz-ai-head"><strong>交给 AI 修复</strong>' +
+        '<span>只复制授权提示词</span></div><div class="wz-scope-row">' +
+        '<details class="wz-scope-picker"><summary><span class="pick-label">范围</span>' +
         '<span id="scopePickSummary">' + pickText + '</span>' +
         '<span class="wz-scope-caret" aria-hidden="true"></span></summary>' +
-        '<div class="wz-scope-menu">' + checks + planShortcut + '</div></details>' +
+        '<div class="wz-scope-menu">' + checks + '</div></details>' +
         '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
         (validPick.length ? '' : ' disabled') + '>复制给 AI 修复</button>' +
-        '</div><div class="wz-scope-note">选好范围后点右侧「复制给 AI 修复」；依赖计划的手动执行在下方。</div></div>';
+        '</div><div class="wz-scope-note">不会自动改代码；AI 仍按插件计划逐项确认。</div></div>';
     }
-    var actions = '';
-    var autoFixAction = fixableCount ? btn('fixAll', '自动修复可自动项 ' + fixableCount + ' 项') : '';
+    var primary = '';
+    var primaryHint = '';
+    var secondary = [];
+    var nextCount = n.plan && n.plan.nextGroup
+      ? (n.plan.candidates || []).filter(function (item) { return item.group === n.plan.nextGroup; }).length
+      : 0;
+    var autoFixAction = fixableCount ? btn('fixAll', '安全自动修复 ' + fixableCount + ' 项') : '';
     switch (n.action) {
-      case 'scan':
-        actions = btn('scan', '开始扫描', true);
-        break;
       case 'plan':
-        actions = autoFixAction;
+        if (depCount) {
+          primary = btn('createPlan', '生成升级计划', true);
+          primaryHint = '只生成计划文件，不改 pom；生成后按组确认执行。';
+        } else if (fixableCount) {
+          primary = btn('fixAll', '安全自动修复 ' + fixableCount + ' 项', true);
+          primaryHint = '只处理无用导入、冗余导入、修饰符顺序、布尔表达式等确定性问题。';
+        } else {
+          primary = btn('scan', '重新扫描', true);
+        }
+        if (primary.indexOf('fixAll') < 0 && autoFixAction) {
+          secondary.push(autoFixAction);
+        }
         break;
       case 'apply':
-        actions = btn('upgradeNext', '手动执行「' + label + '」') + autoFixAction;
-        break;
       case 'confirm':
-        actions = btn('upgradeNext', '确认并手动执行「' + label + '」') + autoFixAction;
+        primary = btn('upgradeNext', '继续升级：' + label + (nextCount ? ' ' + nextCount + ' 项' : ''), true);
+        primaryHint = '写 pom 后自动编译；失败只停在当前组，可回滚。';
+        if (autoFixAction) secondary.push(autoFixAction);
         break;
       case 'build':
-        actions = btn('buildGate', '编译并测试', true);
+        primary = btn('buildGate', '编译并测试', true);
+        primaryHint = '上一组已写入；验证通过后才进入下一组。';
         break;
       case 'explain':
-        actions = btn('explainBuild', '查看失败原因', true) + btn('revertPlan', '回滚到计划前');
+        primary = btn('explainBuild', '查看失败原因', true);
+        primaryHint = '先定位这一组的问题，避免把失败带到下一组。';
+        secondary.push(btn('revertPlan', '回滚到计划前'));
         break;
       case 'rescan':
-        actions = btn('scan', '复扫验收', true);
+        primary = btn('scan', '复扫验收', true);
+        primaryHint = '确认目标漏洞是否真的消失，再决定下一轮。';
+        secondary.push(btn('openHandoff', '查看交接文件'));
         break;
       case 'install':
-        actions = btn('install-mvn', '安装 Maven', true);
+        primary = btn('install-mvn', '安装 Maven', true);
+        primaryHint = '安装后才能生成计划和执行编译门禁。';
         break;
       case 'revert':
-        actions = btn('revertPlan', '回滚到计划前', true);
+        primary = btn('revertPlan', '回滚到计划前', true);
+        primaryHint = '撤销本次计划写入的 pom 改动，代码保持当前工作区状态。';
+        break;
+      case 'none':
+        primary = btn('scan', '重新扫描验收', true);
+        primaryHint = '升级与验证已完成；复扫确认剩余项，再人工评估。';
+        secondary.push(btn('openHandoff', '查看交接文件'));
         break;
       default:
-        actions = btn('openHandoff', '打开交接');
+        primary = btn('openHandoff', '打开交接', true);
+        break;
     }
+    var primaryRow = primary
+      ? '<div class="wz-primary-row">' + primary +
+        (primaryHint ? '<div class="wz-primary-hint">' + esc(primaryHint) + '</div>' : '') + '</div>'
+      : '';
+    var secondaryRow = secondary.length
+      ? '<div class="wz-section-label">其他修复</div><div class="wz-secondary">' + secondary.join('') + '</div>'
+      : '';
+    var advanced = '<details class="wz-advanced"><summary>高级修复（会改源码或 pom）</summary>' +
+      '<div class="wz-advanced-body">' +
+      '<div class="wz-advanced-row"><div><strong>OpenRewrite 源码重构</strong>' +
+      '<small>先预览 diff，改完编译；失败自动回滚</small></div>' +
+      btn('deepFix', '打开重构', false) + '</div>' +
+      (depCount ? '<div class="wz-advanced-row"><div><strong>全部依赖一次升级</strong>' +
+        '<small>不按组编译，多个依赖同时改，失败更难定位</small></div>' +
+        btn('upgradeDeps', '全部升级', false) + '</div>' : '') +
+      '</div></details>';
     el.innerHTML = '<div class="wz-title">' + esc(title) + '</div>'
       + (meta ? '<div class="wz-meta">' + esc(meta) + '</div>' : '')
       + (purpose ? '<div class="wz-purpose">' + esc(purpose) + '</div>' : '')
-      + scopeBar + fixPlan
-      + (actions ? '<div class="wz-actions">' + actions + '</div>' : '');
+      + primaryRow + secondaryRow + scopeBar + advanced + fixPlan;
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
       button.type = 'button';
@@ -1546,13 +1597,11 @@ export function getHtml(nonce: string): string {
     var summary = document.getElementById('scopePickSummary');
     if (summary) {
       summary.textContent = picked.length === available.length
-        ? '全部 ' + available.length + ' 项'
-        : picked.length ? '已选 ' + picked.length + ' 项' : '未选择';
+        ? '全部 ' + available.length + ' 类'
+        : picked.length ? '已选 ' + picked.length + ' 类' : '未选择';
     }
     var copyBtn = document.getElementById('scopeCopyBtn');
     if (copyBtn) copyBtn.disabled = picked.length === 0;
-    var planBtn = document.getElementById('scopePlanBtn');
-    if (planBtn) planBtn.style.display = picked.indexOf('upgrade') >= 0 ? '' : 'none';
   }
 
   function handleWizardAction(key) {
@@ -1566,6 +1615,10 @@ export function getHtml(nonce: string): string {
       vscode.postMessage({ type: 'copyScope', scope: key.slice('copyScope:'.length) });
     } else if (key === 'fixAll') {
       vscode.postMessage({ type: 'fixAll' });
+    } else if (key === 'deepFix') {
+      vscode.postMessage({ type: 'deepFix' });
+    } else if (key === 'upgradeDeps') {
+      vscode.postMessage({ type: 'upgradeDeps' });
     } else if (key === 'createPlan') {
       vscode.postMessage({ type: 'createUpgradePlan' });
     } else if (key === 'upgradeNext') {
@@ -1627,10 +1680,6 @@ export function getHtml(nonce: string): string {
     renderAiStatus();
     updateTabs();
     renderWizard();
-    var upgradeBtn = document.getElementById('upgrade');
-    if (upgradeBtn) {
-      upgradeBtn.style.display = state.upgradeEnabled === false ? 'none' : '';
-    }
     var deep = state.deepFix;
     var runBusy = !!state.run && state.run.status === 'running' &&
       (!state.run.updatedAt || Date.now() - Date.parse(state.run.updatedAt) < 30 * 60 * 1000);
@@ -1638,7 +1687,7 @@ export function getHtml(nonce: string): string {
     var progressBusy = !!state.scanning || !!deep;
     var busy = progressBusy || runBusy;
     document.body.classList.toggle('ai-busy', runBusy);
-    ['scan', 'deepfix', 'upgrade'].forEach(function (id) {
+    ['scan'].forEach(function (id) {
       var button = document.getElementById(id);
       if (button) {
         button.disabled = busy;
@@ -1863,12 +1912,6 @@ export function getHtml(nonce: string): string {
   });
   document.getElementById('stop').addEventListener('click', function () {
     vscode.postMessage({ type: 'stopScan' });
-  });
-  document.getElementById('deepfix').addEventListener('click', function () {
-    vscode.postMessage({ type: 'deepFix' });
-  });
-  document.getElementById('upgrade').addEventListener('click', function () {
-    vscode.postMessage({ type: 'upgradeDeps' });
   });
   var wizardEl = document.getElementById('wizard');
   if (wizardEl) {

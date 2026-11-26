@@ -16,21 +16,25 @@ const checks = {
   scopeCopyAi: h.includes('data-wz="copyScopes"') && h.includes('wz-scope-run'),
   scopeCaret: h.includes('wz-scope-caret'),
   fixCaret: h.includes('wz-fixplan-caret') && h.includes('wz-fixplan-fold'),
-  msgBarDedupesPlan: h.includes('var planPending') && h.includes('fixable > 0 && !planPending'),
+  msgBarDedupesPlan: !h.includes("action('一键修复'") && !h.includes("action('自动修复'"),
   onePlanActionCenter: !h.includes('升级计划待执行') && h.indexOf('id="wizard"') < h.indexOf('id="tabs"'),
   planDetail: h.includes('wz-fixsection') && h.includes('n.plan.candidates') &&
     !h.includes('<details class="wz-plan">'),
-  fullRepairPlan: h.includes('修复方案') && h.includes('静态与配置') &&
+  fullRepairPlan: h.includes('修复总览') && h.includes('静态与配置') &&
     h.includes('配置安全（qcsec）') && h.includes('语义规则（astgrep）'),
   noDuplicateGroupChips: !h.includes('<div class="wz-groups">'),
   noLongPurpose: !h.includes('先选范围：全面修复交给 AI'),
   notesInsideFixPlan: h.includes('<div class="wz-fixbody">') && h.includes('wz-note block'),
   noHandoffCtaAfterPlan: !provider.includes('升级第一组'),
-  aiFirstInPlanCard: h.includes('data-wz="copyScopes"') && h.includes('全面修复'),
+  aiFirstInPlanCard: h.includes('data-wz="copyScopes"') && h.includes('交给 AI 修复'),
   scopeChooser: h.includes('wz-scope-picker') && h.includes('scopePickSummary') && h.includes('data-scope-pick="'),
-  scopePlanInMenu: h.includes('wz-scope-menu-foot') && h.includes('只生成计划文件，不改 pom'),
+  scopePlanInMenu: !h.includes('scopePlanBtn') && !h.includes('wz-scope-menu-foot'),
   scopeMenuOverlay: h.includes('position: absolute; left: 0; right: 0; top: calc(100% + 4px)'),
-  autoFixInPlan: h.includes("btn('fixAll', '自动修复可自动项 ") && h.includes("type: 'fixAll'"),
+  autoFixInPlan: h.includes("btn('fixAll', '安全自动修复 ") && h.includes("type: 'fixAll'"),
+  singlePrimaryAction: h.includes('wz-primary-row') && h.includes('wz-primary') &&
+    !h.includes('wz-actions'),
+  advancedRepairs: h.includes('高级修复') && h.includes("btn('deepFix'") && h.includes("btn('upgradeDeps'"),
+  noToolbarWrites: !h.includes('id="deepfix"') && !h.includes('id="upgrade"'),
   upgradePreviewPage: provider.includes('await this.showUpgradePreview'),
   upgradePreviewExplain: fs.readFileSync(path.join(__dirname, '..', 'src', 'panel', 'deepFixPanel.ts'), 'utf8')
     .includes('id="authorizeSkips"') && provider.includes("message.type === 'authorizeSkips'"),

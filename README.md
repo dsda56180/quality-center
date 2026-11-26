@@ -128,8 +128,8 @@ code --install-extension dsda56180.quality-center
 | `qualityCenter.astgrep.enabled` | `true` | 启用 AST 语义规则（astgrep）：解析 Java 语法树与 Thymeleaf/JSP/FreeMarker/Velocity 模板，覆盖 27 条规则（permitAll 敏感路径、日志敏感字段、上传校验、SQL 拼接、@CrossOrigin、SpEL、命令执行、MyBatis 注解 SQL、SSRF、XSS、路径穿越、Zip Slip、开放重定向、XXE、不安全随机数、JWT 不验签、时序比较、Cookie 标志、任意文件读取、SSTI、LDAP/JDBC/日志注入、敏感打印、反序列化、上传扩展名） |
 | `qualityCenter.rules.mute` | `[]` | 规则静音（单规则开关）：规则 id、前缀通配 `SEC_DRUID_*` 或来源名 `trivy`；静音条数记入 `summary.mutedByRule`，不进面板与报告 |
 | `qualityCenter.aggregate` | `false` | 同文件聚合：同规则同文件 ≥3 处合并为一条（仅 medium 及以下，高危逐条展示） |
-| `qualityCenter.dependencyUpgrade.enabled` | `true` | 显示「升级依赖」按钮，允许一键改写 pom 版本 |
-| `qualityCenter.openRewrite.enabled` | `true` | 启用「深度修复」 |
+| `qualityCenter.dependencyUpgrade.enabled` | `true` | 启用依赖升级；入口在修复工作台，有计划时按组执行 |
+| `qualityCenter.openRewrite.enabled` | `true` | 启用源码重构（OpenRewrite）；入口在修复工作台的高级修复 |
 | `qualityCenter.openRewrite.recipes` | `[]` | 手动启用的进阶配方；面板「设置」里按风险分组勾选，且只展示当前项目适用的配方 |
 | `qualityCenter.openRewrite.autoRecipes` | `true` | 自动启用当前项目适用的低风险配方（8 个等价改写） |
 | `qualityCenter.openRewrite.showAllRecipes` | `false` | 设置中显示 discover 列出的全部配方（含官方描述），新增配方无需升级插件 |
@@ -147,7 +147,7 @@ code --install-extension dsda56180.quality-center
 | --- | --- |
 | `质量中心：重新扫描` | 立即执行全部扫描 |
 | `质量中心：自动修复可确定性问题` | 修复无导入、修饰符顺序、布尔表达式等确定性规则 |
-| `质量中心：深度修复（OpenRewrite）` | 用 OpenRewrite 执行白名单配方，编译失败可回滚 |
+| `质量中心：源码重构（OpenRewrite）` | 用 OpenRewrite 执行白名单配方，编译失败可回滚 |
 | `质量中心：复制报告为 Markdown` | 把当前结果复制到剪贴板 |
 | `质量中心：导出报告文件` | 保存为 `.md` 并打开 |
 | `质量中心：打开问题位置` | 跳到某条问题对应的文件行 |
@@ -286,7 +286,7 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 
 `--json` 输出 `schemaVersion: "2"` 的 `AgentPayload`：`summary`（按严重度与来源计数）、`issues`（含相对路径 `file`、绝对路径 `abs`、`rule`、`zhSummary`、`advice`、`fixable`、`package`/`installedVersion`/`fixedVersion`/`cvss`）、`ignored`、`suggestions`（根因级方案）、`skipped`、`errors`、`missingTools`、`nextActions`。字段只增不减，结构变化时升版本号。
 
-`fix` 覆盖与面板「一键修复」相同的四条确定性规则（`UnusedImports`、`RedundantImport`、`ModifierOrder`、`SimplifyBooleanExpression`），不碰其他问题；删除类规则只删真正的 `import` 行，行号漂移时宁可不改。
+`fix` 覆盖与面板「安全自动修复」相同的四条确定性规则（`UnusedImports`、`RedundantImport`、`ModifierOrder`、`SimplifyBooleanExpression`），不碰其他问题；删除类规则只删真正的 `import` 行，行号漂移时宁可不改。
 
 ### Skills
 
@@ -332,10 +332,10 @@ SpotBugs 失败时会给出真正的原因（`Failed to execute goal` 段落或 
 | --- | --- |
 | 打开项目 | 先展示上次结果，再后台自动扫描六类问题 |
 | 保存文件 | 仅当保存的是 java/xml/properties/yml/toml/json 等文件时触发，防抖 1.5 秒 |
-| 点击「一键修复」 | 修完自动复扫验证 |
+| 点击「安全自动修复」 | 修完自动复扫验证 |
 | 点击「构建并扫描」 | 执行 `mvn -B -DskipTests package` 后自动复扫；构建过程实时显示当前模块/阶段与用时，成功会报出 target 下的 jar 并注明耗时，失败给出末尾几行原因与「查看日志」，可取消 |
 
-后台扫描期间，面板继续展示上一次的结果，只有扫描完成后才整体替换，不会闪成空白；顶部会显示猫咪进度条：每个待执行扫描器对应一只不同品种的猫咪（橘猫、狸花、奶牛、黑猫、白猫、三花、暹罗、蓝猫、银渐层、玳瑁），猫队持续从左向右循环奔跑，蓝色填充按完成度增长，完成一项就减少一只，同时标注当前运行的扫描器、已完成数量和已用时间。深度修复与依赖升级也复用这条进度条，按执行阶段显示多只猫咪和「第 N/M 步」。
+后台扫描期间，面板继续展示上一次的结果，只有扫描完成后才整体替换，不会闪成空白；顶部会显示猫咪进度条：每个待执行扫描器对应一只不同品种的猫咪（橘猫、狸花、奶牛、黑猫、白猫、三花、暹罗、蓝猫、银渐层、玳瑁），猫队持续从左向右循环奔跑，蓝色填充按完成度增长，完成一项就减少一只，同时标注当前运行的扫描器、已完成数量和已用时间。源码重构与依赖升级也复用这条进度条，按执行阶段显示多只猫咪和「第 N/M 步」。
 
 ### 扫描速度
 
@@ -429,7 +429,7 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 ## 依赖一键升级
 
-面板工具栏点「升级依赖」，或在某条 CVE 详情里点「升级此依赖」，会先打开「依赖升级预览」页签：
+在「修复工作台」点「继续升级」或「生成升级计划」，或在某条 CVE 详情里点「升级此依赖」，会先打开「依赖升级预览」页签：
 
 - 每个可升级项一张卡片，展示当前版本来源（父 POM / 导入的 BOM / pom 直接声明 / 传递依赖）、将被改动的内容（红删绿增）与覆盖漏洞数；
 - 会在预览前执行一次 `mvn dependency:tree -Dverbose`（按 pom 内容哈希缓存），用于识别真实解析版本、版本冲突与 BOM 联动关系；
@@ -463,9 +463,9 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 未收录的规则会回退到通用说明，不会显示空白。
 
-## 一键修复
+## 安全自动修复
 
-面板会统计可确定性修复的问题，点击「一键修复」或单条「修复」即可改写：
+面板会统计可确定性修复的问题，点击「安全自动修复」或单条「修复」即可改写：
 
 | 规则 | 修复动作 |
 | --- | --- |
@@ -475,14 +475,14 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 含字符串字面量或注释的行会保守跳过；修完自动重新扫描。
 
-## 深度修复（OpenRewrite）
+## 源码重构（OpenRewrite）
 
-「一键修复」只处理插件内置的确定性改写。更复杂的结构性问题（无用导入、等价写法、冗余修饰等）交给 OpenRewrite——它的配方库是开源社区长期维护、被大量项目验证过的，按编译单元（AST）改写，不做文本替换。
+「安全自动修复」只处理插件内置的确定性改写。更复杂的结构性问题（无用导入、等价写法、冗余修饰等）交给 OpenRewrite——它的配方库是开源社区长期维护、被大量项目验证过的，按编译单元（AST）改写，不做文本替换。
 
-面板工具栏点「深度修复」后：
+在「修复工作台 → 高级修复」点「源码重构」后：
 
-1. 先执行 dry-run 预演，然后在编辑器页签打开「深度修复预览」：左侧文件列表、右侧逐行 diff，可勾选要应用的文件（`qualityCenter.openRewrite.dryRunPreview`，默认开启）；
-2. 预览页可以一直留着慢慢看，切到其他编辑器或点击别处不会关闭；只有点「应用选中文件」才执行，点「取消」或直接关闭页签则放弃；再次点击「深度修复」会复用上次预演结果，不重复 dry-run（代码或配方变化后自动重新预演）；
+1. 先执行 dry-run 预演，然后在编辑器页签打开「源码重构预览」：左侧文件列表、右侧逐行 diff，可勾选要应用的文件（`qualityCenter.openRewrite.dryRunPreview`，默认开启）；
+2. 预览页可以一直留着慢慢看，切到其他编辑器或点击别处不会关闭；只有点「应用选中文件」才执行，点「取消」或直接关闭页签则放弃；再次点击「源码重构」会复用上次预演结果，不重复 dry-run（代码或配方变化后自动重新预演）；
 3. 若有未提交改动，先把 `git diff HEAD` 与未跟踪文件备份到系统临时目录，**不执行 stash、不移动你的工作区代码**；
 4. 直接在现有代码上运行 OpenRewrite（全限定坐标调用 `rewrite-maven-plugin`，不修改项目 pom），因此不会产生 stash 恢复冲突；
 5. 自动运行 `mvn -DskipTests compile` 门禁；失败或配方执行出错时，可一键恢复到修复前（包含你的未提交改动）；
@@ -496,7 +496,7 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 - 中风险（手动勾选，6 个）：统一代码格式、equals 常量左置、简化布尔返回、Lambda 改方法引用、使用 `StandardCharsets`、简化常量条件分支；
 - 高风险（手动勾选，5 个，带项目条件）：Spring Boot 2.7 代码迁移（仅 Spring Boot 2.x < 2.7）、Spring Boot 3.0 代码迁移（仅 Spring Boot 2.x 且 Java ≥ 17）、Java 8 → 11 迁移（仅 Java ≤ 8）、升级到 Java 17（仅 Java 11–16）、JUnit 4 → JUnit 5 迁移（仅检测到 JUnit 4）。
 
-设置弹窗顶部会显示「已按当前项目过滤：Java 8 · Spring Boot 2.4.2 · JUnit 4」；不适用的配方直接隐藏，切换项目后重新打开设置即按新项目过滤。在「设置 → 深度修复配方」里可以：
+设置弹窗顶部会显示「已按当前项目过滤：Java 8 · Spring Boot 2.4.2 · JUnit 4」；不适用的配方直接隐藏，切换项目后重新打开设置即按新项目过滤。在「设置 → 源码重构配方」里可以：
 
 - 关闭「自动启用低风险配方」，改为逐项勾选；
 - 按风险分组查看配方说明，勾选需要的高风险配方；
@@ -507,9 +507,9 @@ ch.qos.logback:logback-classic 1.2.3 命中高危漏洞，CVSS 7.5，
 
 - 项目画像，例如 `Java 8 · Spring Boot 2.4.2`；
 - 低风险配方已自动启用；
-- 若识别到 Spring Boot 2.x（<2.7），提示可通过「升级依赖」升级到 2.7.18 后再执行代码级迁移。
+- 若识别到 Spring Boot 2.x（<2.7），提示可通过修复工作台的依赖升级到 2.7.18 后再执行代码级迁移。
 
-问题详情里还有「深度修复此规则」：只运行该条问题对应的配方（如 `UnusedImports` → 清理无用导入、`SimplifyBooleanExpression` → 简化布尔表达式），适合逐类处理，不必全量执行。
+问题详情里还有「源码重构此规则」：只运行该条问题对应的配方（如 `UnusedImports` → 清理无用导入、`SimplifyBooleanExpression` → 简化布尔表达式），适合逐类处理，不必全量执行。
 
 需要配方库之外的自定义配方包时，把坐标填进 `openRewrite.recipeArtifacts` 即可；插件只执行设置中明确勾选的配方，不会自动加载任意来源的配方包。
 
@@ -551,3 +551,4 @@ npx ovsx publish quality-center-<version>.vsix -p <YOUR_TOKEN>
 ## 许可证
 
 MIT
+
