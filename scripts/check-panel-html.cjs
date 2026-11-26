@@ -23,7 +23,7 @@ const checks = {
     !h.includes('<details class="wz-plan">'),
   fullRepairPlan: h.includes('升级计划明细'),
   overviewFirst: h.includes('扫描结果总览') && h.indexOf('扫描结果总览') < h.indexOf('var gate =') &&
-    h.indexOf('扫描结果总览') < h.indexOf('建议先交给 AI</div>'),
+    h.indexOf('扫描结果总览') < h.indexOf('var primaryRow'),
   choiceRoutes: h.includes('wz-choices') && h.includes('wz-choice-grid') &&
     ['升级依赖', '自动修复', '全部依赖', '交给 AI 修复'].every((label) => h.includes(label)),
   choiceButtons: ["btn('chooseUpgrade'", "btn('fixAll'", "btn('upgradeDeps'", 'data-wz="copyScopes"'].every((key) =>
@@ -34,8 +34,8 @@ const checks = {
     h.includes('buildGate(false)') === false,
   routeBack: h.includes("btn('showRoutes'") && h.includes('wz-route-head') &&
     h.includes('升级计划明细'),
-  aiFirstHub: h.includes('建议先交给 AI') && h.includes('或者自己处理') &&
-    h.includes('wz-ai-first') && h.includes('为什么 AI 优先'),
+  aiFirstHub: h.includes('wz-ai-first') && h.includes('>首选<') &&
+    !h.includes('为什么 AI 优先') && !h.includes('建议先交给 AI') && !h.includes('AI 负责编排'),
   upgradeDetailOnly: h.includes('<strong>升级计划明细</strong>') &&
     !h.includes('配置安全（qcsec）') && !h.includes('SpotBugs / qcsec 不在一键修复范围内'),
   detailsLast: h.includes('upgradeFlow ? fixPlan') && h.indexOf('hubMode ? choiceHub') > h.indexOf('var primaryRow'),

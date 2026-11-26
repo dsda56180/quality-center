@@ -492,6 +492,7 @@ export function getHtml(nonce: string): string {
   .wz-choices { margin-top: 8px; }
   .wz-choices-note { margin-top: 2px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
   .wz-choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 5px; }
+  .wz-choice-full { grid-column: 1 / -1; }
   .wz-choice {
     display: flex; flex-direction: column; min-width: 0; padding: 6px 7px;
     border: 1px solid var(--vscode-panel-border); border-radius: 6px;
@@ -526,7 +527,16 @@ export function getHtml(nonce: string): string {
     border-color: var(--vscode-focusBorder, #007acc);
     background: rgba(88,166,255,.07);
   }
-  .wz-ai-first .wz-ai-head .wz-choice-tag { margin-left: 2px; }
+  .wz-scope-run .wz-choice-tag {
+    margin-left: 4px; vertical-align: 1px;
+    color: inherit; background: rgba(255,255,255,.16);
+  }
+  .wz-ai-first .wz-scope-run {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border-color: var(--vscode-button-background);
+  }
+  .wz-ai-first .wz-scope-run:hover { background: var(--vscode-button-hoverBackground); }
   .wz-route-head {
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
     margin-top: 8px; padding: 5px 0 5px 7px;
@@ -1441,9 +1451,9 @@ export function getHtml(nonce: string): string {
       meta = '扫描只读执行中';
     }
     if (n.action === 'plan') {
-      title = '修复工作台';
+      title = hubMode ? '修复工作台 · 先选处理路线' : '修复工作台';
       meta = hubMode
-        ? '先选一条处理路线'
+        ? ''
         : issueTotal + ' 项问题 · 可安全自动修复 ' + fixableCount +
           (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
     }
@@ -1455,7 +1465,7 @@ export function getHtml(nonce: string): string {
         title = n.plan.state === 'partial' ? '本次修复已收尾 · 剩余组需人工确认' : '本次修复已收尾';
       }
       meta = hubMode
-        ? '先选一条处理路线'
+        ? ''
         : '已落盘 ' + n.plan.appliedCount + '/' + n.plan.total +
           (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
     }
@@ -1472,11 +1482,11 @@ export function getHtml(nonce: string): string {
     } else if (n.action === 'plan') {
       purpose = upgradeFlow
         ? '只显示依赖升级相关内容；先看提醒和待决定项，再生成计划。'
-        : '扫描完成；先选一条路线，写操作都会先预览。';
+        : (hubMode ? '' : '先看总览，再选择从哪条路线开始；依赖升级只生成计划，不改 pom。');
     } else if ((n.action === 'apply' || n.action === 'confirm') && appliedCount === 0) {
       purpose = upgradeFlow
         ? '只显示依赖升级相关计划；先处理提醒和待决定项，再写入 pom。'
-        : '扫描完成；先选一条路线，写操作都会先预览。';
+        : (hubMode ? '' : '计划已生成但还没写入；先选一条路线，写操作都会先预览。');
     } else if (n.action === 'build') {
       purpose = '升级已写入，编译并运行测试，确认没有破坏现有功能。';
     } else if (n.action === 'explain') {
@@ -1656,15 +1666,14 @@ export function getHtml(nonce: string): string {
           (o.count ? '' : ' disabled') + '>' +
           esc(o.label) + '<span class="fix-impact">' + esc(String(o.note || '0')) + '</span></label>';
       }).join('');
-      scopeBar = '<div class="wz-ai"><div class="wz-ai-head"><strong>交给 AI 修复</strong>' +
-        '<span>复制后发给 Trae AI</span></div><div class="wz-scope-row">' +
+      scopeBar = '<div class="wz-ai"><div class="wz-scope-row">' +
         '<details class="wz-scope-picker"><summary><span class="pick-label">范围</span>' +
         '<span id="scopePickSummary">' + pickText + '</span>' +
         '<span class="wz-scope-caret" aria-hidden="true"></span></summary>' +
         '<div class="wz-scope-menu">' + checks + '</div></details>' +
         '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
-        (validPick.length ? '' : ' disabled') + '>复制给 AI 修复</button>' +
-        '</div><div class="wz-scope-note">AI 会通过 MCP 调用插件的扫描、自动修复和依赖升级工具；写 pom 仍按组预览、编译和回滚。</div></div>';
+        (validPick.length ? '' : ' disabled') + '>交给 AI 修复<span class="wz-choice-tag">首选</span></button>' +
+        '</div></div>';
     }
     var primary = '';
     var primaryHint = '';
@@ -1757,24 +1766,18 @@ export function getHtml(nonce: string): string {
           btn('fixAll', '安全自动修复 ' + fixableCount + ' 项', false, 'wz-choice-btn') + '</div>'
         : '';
       var allCard = depCount
-        ? '<div class="wz-choice risk"><div class="wz-choice-title"><span>全部依赖</span>' +
+        ? '<div class="wz-choice wz-choice-full risk"><div class="wz-choice-title"><span>全部依赖</span>' +
           '<span class="wz-choice-tag risk">高风险</span>' +
           '<span class="wz-choice-count">' + (n.plan ? totalCount : depCount) + ' 项</span></div>' +
           '<div class="wz-choice-note">一次升级全部依赖；不分组编译，失败更难定位，跨大版本仍会跳过。</div>' +
           btn('upgradeDeps', '全部升级 ' + (n.plan ? totalCount : depCount) + ' 项', false, 'wz-choice-btn') +
           '</div>'
         : '';
-      var guideCard = '<div class="wz-choice"><div class="wz-choice-title"><span>为什么 AI 优先</span></div>' +
-        '<div class="wz-choice-note">AI 能按状态调用扫描、自动修复、依赖升级和复扫；' +
-        '手动路线适合只改一类、或想逐步确认。</div></div>';
       var aiFirstBlock = scopeBar
-        .replace('<div class="wz-ai">', '<div class="wz-ai wz-ai-first">')
-        .replace('<strong>交给 AI 修复</strong>', '<strong>交给 AI 修复</strong><span class="wz-choice-tag">首选</span>');
-      choiceHub = '<div class="wz-choices"><div class="wz-section-label">建议先交给 AI</div>' +
-        '<div class="wz-choices-note">AI 负责编排；扫描、自动修复、依赖升级都走插件工具。</div>' +
-        aiFirstBlock +
-        '<div class="wz-section-label">或者自己处理</div>' +
-        '<div class="wz-choice-grid">' + depCard + fixCard + allCard + guideCard + '</div>' +
+        .replace('<div class="wz-ai">', '<div class="wz-ai wz-ai-first">');
+      choiceHub = '<div class="wz-choices">' + aiFirstBlock +
+        '<div class="wz-section-label">手动处理</div>' +
+        '<div class="wz-choice-grid">' + depCard + fixCard + allCard + '</div>' +
         '</div>';
     }
     var routeHead = '';
