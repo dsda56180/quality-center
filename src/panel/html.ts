@@ -501,7 +501,7 @@ export function getHtml(nonce: string): string {
   .wz-overview-note { margin-top: 5px; font-size: 9px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
   .wz-choices { margin-top: 8px; }
   .wz-choices-note { margin-top: 2px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
-  .wz-choice-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 5px; margin-top: 5px; }
+  .wz-choice-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 5px; margin-top: 5px; }
   .wz-choice {
     display: flex; flex-direction: column; min-width: 0; padding: 6px 7px;
     border: 1px solid var(--vscode-panel-border); border-radius: 6px;
@@ -509,8 +509,8 @@ export function getHtml(nonce: string): string {
   }
   .wz-choice.recommend { border-color: var(--vscode-focusBorder, #007acc); }
   .wz-choice.risk { border-color: var(--vscode-editorWarning-foreground, #d29922); }
-  .wz-choice-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 5px; font-size: 11px; font-weight: 600; }
-  .wz-choice-title .wz-choice-count { margin-left: auto; flex: none; font-size: 9px; font-weight: 400; color: var(--vscode-descriptionForeground); }
+  .wz-choice-title { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 3px 5px; font-size: 11px; font-weight: 600; }
+  .wz-choice-title .wz-choice-count { margin-left: auto; flex: none; font-size: 9px; font-weight: 400; color: var(--vscode-descriptionForeground); white-space: nowrap; }
   .wz-choice-tag {
     flex: none; font-size: 8px; font-weight: 400; padding: 0 4px; border-radius: 7px;
     color: var(--vscode-textLink-foreground); background: rgba(88,166,255,.14);
@@ -522,11 +522,11 @@ export function getHtml(nonce: string): string {
   .wz-choice-note { flex: 0 0 auto; min-height: 2.8em; margin-top: 3px; font-size: 9px; line-height: 1.4; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .wz-choice .wz-primary {
     display: inline-flex; align-self: flex-start; width: auto; margin-top: 4px; padding: 3px 8px;
-    font-size: 10px; font-weight: 500; line-height: 1.2; text-align: left;
+    font-size: 10px; font-weight: 500; line-height: 1.2; text-align: left; white-space: nowrap;
   }
   .wz-choice .secondary {
     display: inline-flex; align-self: flex-start; width: auto; margin-top: 4px; padding: 3px 8px;
-    font-size: 10px; line-height: 1.2; text-align: left; cursor: pointer;
+    font-size: 10px; line-height: 1.2; text-align: left; cursor: pointer; white-space: nowrap;
     border: 1px solid var(--vscode-panel-border); border-radius: 4px;
     background: var(--vscode-button-secondaryBackground, transparent);
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
@@ -1775,7 +1775,7 @@ export function getHtml(nonce: string): string {
         ? '<div class="wz-choice"><div class="wz-choice-title"><span>自动修复</span>' +
           '<span class="wz-choice-count">' + fixableCount + ' 项</span></div>' +
           '<div class="wz-choice-note">只改确定性问题，逐行 diff 预览；不改 pom。</div>' +
-          btn('fixAll', '安全自动修复 ' + fixableCount + ' 项', false, 'wz-choice-btn') + '</div>'
+          btn('fixAll', '安全修复 ' + fixableCount, false, 'wz-choice-btn') + '</div>'
         : '';
       var allCard = depCount
         ? '<div class="wz-choice risk"><div class="wz-choice-title"><span>全部依赖</span>' +
