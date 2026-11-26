@@ -120,6 +120,8 @@ export interface Snapshot {
   /** 唯一状态机：现在到哪、下一步只做什么 */
   next?: SnapshotNext;
   deepFix?: { stage: string; startedAt: number; total?: number; done?: number } | null;
+  /** 普通扫描后的深度预演结果；只记录可改文件数，不自动应用 */
+  deepScan?: { status: 'running' | 'done' | 'empty' | 'failed' | 'unavailable'; files: number; at: number } | null;
   /** 安装外部工具 / 构建 jar 等长任务的实时进度 */
   task?: { label: string; stage: string; startedAt: number } | null;
   scanStartedAt?: number | null;
@@ -143,6 +145,8 @@ export interface Snapshot {
     qcsec: boolean;
     astgrep: boolean;
     scanOnSave: boolean;
+    /** 扫描结束后自动运行 OpenRewrite 深度预演 */
+    rewriteScan?: boolean;
     /** 手动启用的深度修复配方 */
     recipes: string[];
     /** 自动启用低风险配方 */
@@ -624,6 +628,20 @@ export function getHtml(nonce: string): string {
   .wz-ai-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; margin-bottom: 5px; }
   .wz-ai-head strong { font-size: 11px; }
   .wz-ai-head span { font-size: 10px; color: var(--vscode-descriptionForeground); }
+  .wz-deep {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-top: 8px; padding: 6px 7px; border: 1px dashed var(--vscode-panel-border); border-radius: 6px;
+    background: rgba(128,128,128,.04);
+  }
+  .wz-deep strong { display: block; font-size: 11px; }
+  .wz-deep small { display: block; margin-top: 2px; font-size: 10px; line-height: 1.4; color: var(--vscode-descriptionForeground); }
+  .wz-deep button {
+    flex: none; padding: 3px 8px; font-size: 10px; line-height: 1.2; white-space: nowrap; cursor: pointer;
+    border: 1px solid var(--vscode-panel-border); border-radius: 4px;
+    background: var(--vscode-button-secondaryBackground, transparent);
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  }
+  .wz-deep button:disabled { opacity: .45; cursor: not-allowed; }
   .wz-advanced { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--vscode-panel-border); }
   .wz-advanced > summary { cursor: pointer; list-style: none; font-size: 11px; color: var(--vscode-descriptionForeground); }
   .wz-advanced > summary::-webkit-details-marker { display: none; }
@@ -887,7 +905,8 @@ export function getHtml(nonce: string): string {
       <label class="dlg-row"><input type="checkbox" id="opt-qcsec" /> 配置安全（qcsec：Druid/Actuator/CORS/明文口令/默认账号/日志与会话）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-astgrep" /> 语义规则（AST：敏感路径/注入/SSTI/反序列化/XXE 等 27 条）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-scansave" /> 保存文件后自动扫描</label>
-      <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。保存后下次扫描生效。</div>
+      <label class="dlg-row"><input type="checkbox" id="opt-rewritescan" /> 手动扫描后运行 OpenRewrite 深度预演（只生成 diff，较慢）</label>
+      <div class="dlg-hint">快速模式关闭 SpotBugs，约 15 秒；完整模式约 35 秒。深度预演首次约 1–5 分钟，工作区未变化时复用缓存；保存触发的扫描不叠加，保存后下次扫描生效。</div>
       <div class="dlg-sec">深度修复配方</div>
       <label class="dlg-row"><input type="checkbox" id="opt-autorecipes" /> 自动启用低风险配方（推荐）</label>
       <label class="dlg-row"><input type="checkbox" id="opt-allrecipes" /> 显示全部可用配方（discover，首次加载约 10 秒）</label>
@@ -923,7 +942,7 @@ export function getHtml(nonce: string): string {
   const SUG_LABEL = { framework: '框架', dependency: '依赖', duplicate: '收敛', secret: '密钥', manual: '人工' };
   const SEV_LABEL = { critical: '严重', high: '高危', medium: '中危', low: '低危', info: '提示' };
   const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
-  let state = { run: null, scanning: false, paused: false, deepFix: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, qcsec: true, astgrep: true, scanOnSave: true, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
+  let state = { run: null, scanning: false, paused: false, deepFix: null, deepScan: null, task: null, scanStartedAt: null, scanProgress: { done: 0, total: 0, active: [] }, finishedAt: null, issues: [], ignored: [], suggestions: [], errors: [], skipped: [], upgradeEnabled: true, scanOptions: { checkstyle: true, gitleaks: true, trivy: true, spotbugs: true, qcsec: true, astgrep: true, scanOnSave: true, rewriteScan: false, recipes: [], autoRecipes: true, showAllRecipes: false }, recipeLibrary: [], recipesDiscovering: false, projectProfile: {} };
   let activeTab = 'all';
   /** 修复范围多选；跨渲染保留，默认全选（等同于“全面修复”） */
   let scopePick = ['upgrade', 'consolidation', 'code', 'secrets', 'static'];
@@ -1650,12 +1669,12 @@ export function getHtml(nonce: string): string {
       scan: 1, createPlan: 1, upgradeNext: 1, buildGate: 1, revertPlan: 1,
       fixAll: 1, deepFix: 1, upgradeDeps: 1, openPolicy: 1, 'install-mvn': 1
     };
-    function btn(key, text, primary, extraClass) {
+    function btn(key, text, primary, extraClass, disabled) {
       var cls = primary ? 'wz-primary' : 'secondary';
       if (extraClass) {
         cls += ' ' + extraClass;
       }
-      return '<button class="' + cls + '"' + (busy && writeKeys[key] ? ' disabled' : '') +
+      return '<button class="' + cls + '"' + (disabled || (busy && writeKeys[key]) ? ' disabled' : '') +
         ' data-wz="' + key + '">' + esc(text) + '</button>';
     }
     var scopeBar = '';
@@ -1808,13 +1827,29 @@ export function getHtml(nonce: string): string {
         '</div><div class="wz-secondary">' + secondary.join('') + '</div>' +
         (hasWriteSecondary ? '<div class="wz-secondary-hint">修改类操作会先打开预览，确认后才写入；失败可回滚。</div>' : '')
       : '';
-    var advanced = hubMode
-      ? '<details class="wz-advanced"><summary>高级修复（会改源码或 pom）</summary>' +
-        '<div class="wz-advanced-body">' +
-        '<div class="wz-advanced-row"><div><strong>OpenRewrite 源码重构</strong>' +
-        '<small>先预览 diff，改完编译；失败自动回滚</small></div>' +
-        btn('deepFix', '打开重构', false) + '</div>' +
-        '</div></details>'
+    var deep = state.deepScan;
+    var deepHint = '';
+    var deepAction = btn('deepScan', '建议深度扫描', false);
+    if (deep && deep.status === 'running') {
+      deepHint = '正在运行 OpenRewrite dry-run，只生成 diff，不改源码…';
+      deepAction = btn('deepScan', '预演中', false, '', true);
+    } else if (deep && deep.status === 'done') {
+      deepHint = 'OpenRewrite 预演发现 ' + deep.files + ' 个文件可改；打开预览后可逐文件勾选。';
+      deepAction = btn('deepFix', '打开深度预览', false);
+    } else if (deep && deep.status === 'empty') {
+      deepHint = 'OpenRewrite 预演没有发现可改文件，当前代码已符合已启用配方。';
+      deepAction = btn('deepScan', '重新预演', false);
+    } else if (deep && deep.status === 'failed') {
+      deepHint = '深度预演失败，详见输出日志；普通扫描结果不受影响。';
+      deepAction = btn('deepScan', '重试预演', false);
+    } else if (deep && deep.status === 'unavailable') {
+      deepHint = '当前项目没有可用配方，或深度重构已在设置中关闭。';
+      deepAction = '';
+    }
+    var deepBlock = hubMode
+      ? '<div class="wz-deep"><div><strong>深度重构（OpenRewrite）</strong><small>' +
+        (deepHint || '普通扫描不含结构重构；建议单独预演一次，只生成 diff，确认后才写入。') +
+        '</small></div>' + deepAction + '</div>'
       : '';
     el.innerHTML = (title ? '<div class="wz-title">' + esc(title) + '</div>' : '')
       + (meta ? '<div class="wz-meta">' + esc(meta) + '</div>' : '')
@@ -1823,7 +1858,7 @@ export function getHtml(nonce: string): string {
       + routeHead + gate + emptyBody + lockNote
       + (hubMode ? choiceHub : primaryRow + secondaryRow)
       + (upgradeFlow ? fixPlan : '')
-      + advanced;
+      + deepBlock;
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
       button.type = 'button';
@@ -1875,6 +1910,8 @@ export function getHtml(nonce: string): string {
       vscode.postMessage({ type: 'fixAll' });
     } else if (key === 'deepFix') {
       vscode.postMessage({ type: 'deepFix' });
+    } else if (key === 'deepScan') {
+      vscode.postMessage({ type: 'deepScan' });
     } else if (key === 'upgradeDeps') {
       vscode.postMessage({ type: 'upgradeDeps' });
     } else if (key === 'createPlan') {
@@ -2301,6 +2338,7 @@ export function getHtml(nonce: string): string {
       settingBox(key).checked = options[key] !== false;
     });
     document.getElementById('opt-scansave').checked = options.scanOnSave !== false;
+    document.getElementById('opt-rewritescan').checked = options.rewriteScan === true;
     document.getElementById('opt-autorecipes').checked = options.autoRecipes !== false;
     document.getElementById('opt-allrecipes').checked = options.showAllRecipes === true;
     document.getElementById('recipe-filter').value = '';
@@ -2357,7 +2395,7 @@ export function getHtml(nonce: string): string {
     applyPreset(false);
   });
   document.getElementById('set-apply').addEventListener('click', function () {
-    var options = { scanOnSave: document.getElementById('opt-scansave').checked };
+    var options = { scanOnSave: document.getElementById('opt-scansave').checked, rewriteScan: document.getElementById('opt-rewritescan').checked };
     SETTING_KEYS.forEach(function (key) {
       options[key] = settingBox(key).checked;
     });

@@ -74,7 +74,8 @@ const checks = {
   autoFixInPlan: h.includes("btn('fixAll', '安全自动修复 ") && h.includes("type: 'fixAll'"),
   singlePrimaryAction: h.includes('wz-primary-row') && h.includes('wz-primary') &&
     !h.includes('wz-actions'),
-  advancedRepairs: h.includes('高级修复') && h.includes("btn('deepFix'") && h.includes("btn('upgradeDeps'"),
+  advancedRepairs: h.includes('深度重构（OpenRewrite）') && h.includes("btn('deepFix'") &&
+    h.includes("btn('deepScan'") && h.includes('opt-rewritescan'),
   noToolbarWrites: !h.includes('id="deepfix"') && !h.includes('id="upgrade"'),
   upgradePreviewPage: provider.includes('await this.showUpgradePreview'),
   upgradePreviewOnlySkips: fs.readFileSync(path.join(__dirname, '..', 'src', 'panel', 'deepFixPanel.ts'), 'utf8')

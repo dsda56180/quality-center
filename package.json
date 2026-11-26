@@ -2,7 +2,7 @@
   "name": "quality-center",
   "displayName": "Quality Center 质量中心",
   "description": "聚合代码质量、密钥泄露、依赖漏洞(CVE)、字节码静态缺陷与配置安全的统一面板，支持一键导出给 AI 修复",
-  "version": "0.27.70",
+  "version": "0.27.71",
   "publisher": "dsda56180",
   "license": "MIT",
   "engines": {
@@ -235,7 +235,12 @@
         "qualityCenter.openRewrite.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "启用源码重构（OpenRewrite）；入口在修复工作台的高级修复"
+          "description": "启用源码重构（OpenRewrite）；入口在修复工作台的深度重构"
+        },
+        "qualityCenter.openRewrite.scanEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "普通扫描结束后自动运行 OpenRewrite 深度预演（只生成 diff，不改代码）；首次较慢，缓存命中后很快"
         },
         "qualityCenter.openRewrite.recipes": {
           "type": "array",

@@ -87,6 +87,7 @@ interface ScanSettingsInput {
   qcsec?: boolean;
   astgrep?: boolean;
   scanOnSave?: boolean;
+  rewriteScan?: boolean;
   recipes?: string[];
   autoRecipes?: boolean;
   showAllRecipes?: boolean;
@@ -289,6 +290,13 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   private previewPanel?: vscode.WebviewPanel;
   /** 上一次 dry-run 的结果，工作区未变化时直接复用，避免重复预演 */
   private fixCache?: { key: string; patchFile?: string; files: string[] };
+  /** 普通扫描后额外的深度预演结果：只记录可改文件，不自动打开预览 */
+  private deepScanResult: {
+    status: 'running' | 'done' | 'empty' | 'failed' | 'unavailable';
+    files: number;
+    patchFile?: string;
+    at: number;
+  } | null = null;
   private scanStartedAt: number | null = null;
   private scanProgress: { done: number; total: number; active: string[] } = {
     done: 0,
@@ -538,6 +546,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       case 'deepFix':
         await this.deepFix();
         break;
+      case 'deepScan':
+        await this.runDeepScan(this.runner.root() ?? '');
+        break;
       case 'deepFixRule':
         await this.deepFixRule(message.id ?? 0);
         break;
@@ -633,6 +644,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     this.scanStartedAt = Date.now();
     this.scanProgress = { done: 0, total: 0, active: [] };
+    this.deepScanResult = null;
     this.push({ scanning: true });
     try {
       const result = await this.runner.scan((progress) => {
@@ -650,6 +662,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       this.scanStartedAt = null;
       this.scanProgress = { done: 0, total: 0, active: [] };
       this.push();
+    }
+    const config = vscode.workspace.getConfiguration('qualityCenter');
+    // 只在用户主动扫描后自动预演；保存触发的扫描不叠加 Maven，避免每次保存都变慢
+    if (force && this.runner.root() && config.get<boolean>('openRewrite.scanEnabled', false)) {
+      void this.runDeepScan(this.runner.root()!);
     }
   }
 
@@ -1072,6 +1089,88 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
    * 深度修复：调用 OpenRewrite 跑白名单配方。
    * 不改项目 pom，用全限定插件坐标临时加载；因此只支持插件内置类路径自带的配方。
    */
+  /**
+   * 普通扫描后的深度预演：只跑 OpenRewrite dryRun，记录可改文件，不打开预览、不改代码。
+   * 命中上一次缓存时直接复用，因此扫描选项打开后重复扫描通常不再付出 Maven 时间。
+   */
+  private async runDeepScan(root: string): Promise<void> {
+    if (!root) {
+      return;
+    }
+    if (this.deepFixState || this.runner.isRunning) {
+      void vscode.window.showInformationMessage('当前有扫描或深度修复在运行，稍后再试。');
+      return;
+    }
+    const config = vscode.workspace.getConfiguration('qualityCenter');
+    if (!config.get<boolean>('openRewrite.enabled', true)) {
+      this.deepScanResult = { status: 'unavailable', files: 0, at: Date.now() };
+      this.push();
+      return;
+    }
+    const profile = this.projectProfile(root);
+    const configured = config.get<string[]>('openRewrite.recipes', []);
+    const recipes = Array.from(new Set([
+      ...configured,
+      ...(config.get<boolean>('openRewrite.autoRecipes', true) ? autoRecipeIds(profile) : [])
+    ]));
+    if (recipes.length === 0) {
+      this.deepScanResult = { status: 'unavailable', files: 0, at: Date.now() };
+      this.push();
+      return;
+    }
+    const artifacts = dedupeArtifacts([
+      ...artifactsForRecipes(recipes),
+      ...config.get<string[]>('openRewrite.recipeArtifacts', [])
+        .map((item) => item.trim())
+        .filter(Boolean)
+    ]);
+    const version = requiredPluginVersion(recipes)
+      ?? config.get<string>('openRewrite.pluginVersion', '5.44.0');
+    const status = await run('git', ['status', '--porcelain'], root, 30_000);
+    if (status.code !== 0) {
+      this.deepScanResult = { status: 'unavailable', files: 0, at: Date.now() };
+      this.push();
+      return;
+    }
+    const key = await this.fixPreviewKey(root, status.stdout, recipes, artifacts, version);
+    this.deepScanResult = { status: 'running', files: 0, at: Date.now() };
+    this.deepFixState = null;
+    this.push();
+    if (this.fixCache?.key === key) {
+      this.deepScanResult = {
+        status: this.fixCache.files.length ? 'done' : 'empty',
+        files: this.fixCache.files.length,
+        patchFile: this.fixCache.patchFile,
+        at: Date.now()
+      };
+      this.push();
+      return;
+    }
+    this.beginDeepFix('深度预演（只生成 diff）', 3);
+    let preview: { files: string[]; patchFile?: string } | null = null;
+    try {
+      preview = await this.previewDeepFix(root, recipes, artifacts, version);
+    } catch (error) {
+      this.log(`深度预演失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.deepFixState = null;
+    }
+    if (!preview) {
+      this.deepScanResult = { status: 'failed', files: 0, at: Date.now() };
+    } else {
+      this.deepScanResult = {
+        status: preview.files.length ? 'done' : 'empty',
+        files: preview.files.length,
+        patchFile: preview.patchFile,
+        at: Date.now()
+      };
+      if (preview.files.length) {
+        this.fixCache = { key, patchFile: preview.patchFile, files: preview.files };
+      }
+    }
+    this.push();
+  }
+
   async deepFix(override?: {
     recipes: string[];
     artifacts?: string[];
@@ -1235,6 +1334,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     // 一旦执行修复，工作区就变了，缓存失效
     this.fixCache = undefined;
+    this.deepScanResult = null;
 
     // 不 stash：先备份改动，再直接在现有代码上跑配方，从根本上避免 stash 恢复冲突
     interface Backup {
@@ -2546,6 +2646,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     if (typeof options.showAllRecipes === 'boolean') {
       await config.update('openRewrite.showAllRecipes', options.showAllRecipes, target);
     }
+    if (typeof options.rewriteScan === 'boolean') {
+      await config.update('openRewrite.scanEnabled', options.rewriteScan, target);
+    }
     // 配方变化后，预演缓存不再可信
     this.fixCache = undefined;
     this.log(
@@ -3010,6 +3113,14 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const encoding = sourceEncoding(root);
     const args = [
       '-B',
+      // dryRun 会 fork 到 process-test-classes；跳过测试编译与无关插件，多模块并行解析
+      '-T', '1C',
+      '-DskipTests',
+      '-Dmaven.test.skip=true',
+      '-Dcheckstyle.skip=true',
+      '-Dspotbugs.skip=true',
+      '-Djacoco.skip=true',
+      '-Dmaven.javadoc.skip=true',
       ...mavenMirrorArgs(),
       `-Dproject.build.sourceEncoding=${encoding}`,
       `-Drewrite.activeRecipes=${recipes.join(',')}`
@@ -3238,6 +3349,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       scanning: override ? override.scanning : this.runner.isRunning,
       paused: this.runner.isPaused,
       deepFix: this.deepFixState,
+      deepScan: this.deepScanResult,
       task: this.taskState,
       next,
       scanStartedAt: this.scanStartedAt,
@@ -3273,6 +3385,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         qcsec: config.get<boolean>('qcsec.enabled', true),
         astgrep: config.get<boolean>('astgrep.enabled', true),
         scanOnSave: config.get<boolean>('scanOnSave', true),
+        rewriteScan: config.get<boolean>('openRewrite.scanEnabled', false),
         recipes: config.get<string[]>('openRewrite.recipes', []),
         autoRecipes: config.get<boolean>('openRewrite.autoRecipes', true),
         showAllRecipes: config.get<boolean>('openRewrite.showAllRecipes', false)

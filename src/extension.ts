@@ -93,7 +93,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const projectRoot = (): string | undefined => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('qualityCenter.scan', () => provider.scanAndPush()),
+    vscode.commands.registerCommand('qualityCenter.scan', () => provider.scanAndPush(true)),
     vscode.commands.registerCommand('qualityCenter.autoFix', () => provider.fixAll()),
     vscode.commands.registerCommand('qualityCenter.deepFix', () => provider.deepFix()),
     vscode.commands.registerCommand('qualityCenter.copyMarkdown', () => provider.copyMarkdown()),
