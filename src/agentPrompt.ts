@@ -11,6 +11,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PLAN_GROUP_LABEL, readUpgradePlan } from './upgradePlanFile';
+import type { Severity } from './model';
 
 export type AgentScope = 'all' | 'upgrade' | 'consolidation' | 'code' | 'secrets' | 'static';
 
@@ -32,6 +33,8 @@ export interface AgentPromptOptions {
   scope?: AgentScope;
   /** 多选范围；与 scope 同时存在时以 scopes 为准。包含 all 等价于全选 */
   scopes?: AgentScope[];
+  /** 严重度下限；缺省 info（全部）。低于该等级的只报告，不改代码 */
+  minSeverity?: Severity;
 }
 
 const SCOPE_LABEL: Record<Exclude<AgentScope, 'all'>, string> = {
@@ -43,6 +46,21 @@ const SCOPE_LABEL: Record<Exclude<AgentScope, 'all'>, string> = {
 };
 
 const ALL_SCOPES: Exclude<AgentScope, 'all'>[] = ['upgrade', 'consolidation', 'code', 'secrets', 'static'];
+
+const SEVERITY_LABEL: Record<Severity, string> = {
+  critical: '严重',
+  high: '高危',
+  medium: '中危',
+  low: '低危',
+  info: '提示'
+};
+
+function severityBoundary(minSeverity?: Severity): string {
+  if (!minSeverity || minSeverity === 'info') {
+    return '';
+  }
+  return `严重度过滤：只处理 ${SEVERITY_LABEL[minSeverity]} 及以上；低于该等级的问题只报告，不改代码。`;
+}
 
 function normalizeScopes(options: AgentPromptOptions): AgentScope[] {
   const raw = options.scopes && options.scopes.length ? options.scopes : [options.scope ?? 'all'];
@@ -69,8 +87,10 @@ function buildCombinedAgentPrompt(root: string, scopes: Exclude<AgentScope, 'all
     static:
       '静态缺陷：只处理 SpotBugs/qcsec；局部改动，每 20 条或每 10 分钟 build；安全设计/架构问题只报告。'
   };
+  const sevLine = severityBoundary(options.minSeverity);
   const lines = [
     `你本次处理以下范围：${labels}。未列出的类别只报告、不修改；不要用“全面修复”默认扩大授权。`,
+    ...(sevLine ? [sevLine] : []),
     `处理顺序：${ordered.map((scope) => SCOPE_LABEL[scope]).join(' → ')}。`,
     '每个范围完成后执行 quality_build + quality_scan；失败先 quality_explain，同一类连续两次失败就停手。',
     '',
@@ -102,8 +122,10 @@ function buildCombinedAgentPrompt(root: string, scopes: Exclude<AgentScope, 'all
  */
 function buildScopedAgentPrompt(root: string, scope: Exclude<AgentScope, 'all'>, options: AgentPromptOptions): string {
   const label = SCOPE_LABEL[scope];
+  const sevLine = severityBoundary(options.minSeverity);
   const lines: string[] = [
     `你本次只处理「${label}」，其他类别只报告、不修改；不要因为“顺手”去改 pom、依赖、测试、配置或无关代码。`,
+    ...(sevLine ? [sevLine] : []),
     '事实源仍然是 .quality-center/issues.json / suggestions / report.md；不要凭聊天记忆推断问题数量。',
     '编辑器内优先用 quality_* MCP；没有 MCP 时用 .quality-center/bin/qc.cjs。',
     ''
@@ -197,6 +219,10 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
         : '按 quality-center 的标准化流程完成本项目依赖升级与 CVE 整改。',
     ''
   ];
+  const baseSevLine = severityBoundary(options.minSeverity);
+  if (baseSevLine) {
+    lines.push(baseSevLine, '');
+  }
 
   let planContext = '';
   try {

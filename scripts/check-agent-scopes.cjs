@@ -20,9 +20,15 @@ const comboFive = buildAgentPrompt(root, {
   ...base,
   scopes: ['upgrade', 'consolidation', 'code', 'secrets', 'static']
 });
+const highOnly = buildAgentPrompt(root, { ...base, scope: 'code', minSeverity: 'high' });
+const comboHigh = buildAgentPrompt(root, { ...base, scopes: ['code', 'static'], minSeverity: 'medium' });
 const checks = {
   allRunsFullFlow: texts.all.includes('一次性执行流程'),
   allIncludesConsolidation: texts.all.includes('阶段 3.5 依赖收敛'),
+  severityScoped: highOnly.includes('只处理 高危 及以上') &&
+    highOnly.includes('低于该等级的问题只报告'),
+  severityCombined: comboHigh.includes('只处理 中危 及以上'),
+  severityDefaultAll: !texts.all.includes('严重度过滤'),
   upgradeOnly: texts.upgrade.includes('只处理「依赖版本升级 / CVE」') &&
     texts.upgrade.includes('不得调用 quality_fix'),
   consolidationOnly: texts.consolidation.includes('只处理「依赖收敛') &&

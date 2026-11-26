@@ -10,7 +10,7 @@ import { exportForAgent, formatIssueForCopy } from '../agentExport';
 import { resolveBinary, run, runStreaming, StreamHandle, tailMessage } from '../exec';
 import { applyAutoFixes, isFixable } from '../fixer';
 import { FIXABLE_RULE_LABELS, planLineFix } from '../fixerCore';
-import { Issue, ScanResult, SOURCE_LABEL } from '../model';
+import { Issue, ScanResult, SOURCE_LABEL, Severity } from '../model';
 import { EXTERNAL_TOOLS, ExternalTool, installLocation, installPlan, InstallPlan, ToolId } from '../tools';
 import { detectProjectProfile, ProjectProfile, recipeAdvice } from '../projectProfile';
 import { toMarkdown } from '../report';
@@ -486,6 +486,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     tool?: string;
     scope?: string;
     scopes?: string[];
+    minSeverity?: string;
     options?: ScanSettingsInput;
   }): Promise<void> {
     const readOnly = new Set([
@@ -587,7 +588,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         await this.copyScopePrompt(message.scope);
         break;
       case 'copyScopes':
-        await this.copyScopePrompt(undefined, message.scopes);
+        await this.copyScopePrompt(undefined, message.scopes, message.minSeverity);
         break;
       case 'checkMcp':
         await this.refreshMcpStatus();
@@ -2382,7 +2383,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   /** 按范围复制给 AI：全面 / 只升级 / 收敛 / 代码 / 密钥 / 静态；scopes 支持多选组合 */
-  private async copyScopePrompt(rawScope: unknown, rawScopes?: unknown): Promise<void> {
+  private async copyScopePrompt(rawScope: unknown, rawScopes?: unknown, rawMinSeverity?: unknown): Promise<void> {
     const root = this.runner.root();
     if (!root) {
       void vscode.window.showInformationMessage('还没有打开项目。');
@@ -2397,6 +2398,10 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     if (scopes.includes('all') || allScopes.every((scope) => scopes.includes(scope))) {
       scopes = ['all'];
     }
+    const severityValues: Severity[] = ['critical', 'high', 'medium', 'low', 'info'];
+    const minSeverity: Severity = severityValues.includes(rawMinSeverity as Severity)
+      ? rawMinSeverity as Severity
+      : 'info';
     const label: Record<AgentScope, string> = {
       all: '全面修复',
       upgrade: '仅升级依赖',
@@ -2405,10 +2410,20 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       secrets: '硬编码密钥',
       static: '静态缺陷'
     };
-    await vscode.env.clipboard.writeText(buildAgentPrompt(root, { mode: 'autopilot', scopes }));
+    const severityLabel: Record<Severity, string> = {
+      critical: '严重',
+      high: '高危',
+      medium: '中危',
+      low: '低危',
+      info: '全部'
+    };
+    await vscode.env.clipboard.writeText(
+      buildAgentPrompt(root, { mode: 'autopilot', scopes, minSeverity })
+    );
     const labelText = scopes.map((scope) => label[scope]).join(' + ');
+    const severityText = minSeverity === 'info' ? '全部严重度' : `${severityLabel[minSeverity]}及以上`;
     void vscode.window.showInformationMessage(
-      `已复制「${labelText}」指令：AI 只会改所选范围，其他类别只报告。`
+      `已复制「${labelText} · ${severityText}」指令：AI 只会改所选范围和严重度，其他只报告。`
     );
   }
 

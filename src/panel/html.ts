@@ -719,8 +719,19 @@ export function getHtml(nonce: string): string {
   .wz-fixrow .fix-impact { flex: none; font-size: 9px; color: var(--vscode-descriptionForeground); }
   .wz-fixnote { margin-top: 4px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
   .wz-scope-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; max-width: 100%; }
+  .wz-sev {
+    display: flex; align-items: center; gap: 4px; flex: 0 0 auto;
+    font-size: 10px; color: var(--vscode-descriptionForeground);
+  }
+  .wz-sev select {
+    max-width: 108px; padding: 2px 4px; font-size: 10px; line-height: 1.3;
+    background: var(--vscode-dropdown-background, var(--vscode-sideBar-background, transparent));
+    color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+    border-radius: 4px;
+  }
   .wz-scope-picker {
-    position: relative; flex: 1 1 150px; width: auto; max-width: none; min-width: 0;
+    position: relative; flex: 1 1 110px; width: auto; max-width: none; min-width: 0;
   }
   .wz-scope-picker summary {
     display: flex; align-items: center; gap: 4px;
@@ -953,6 +964,8 @@ export function getHtml(nonce: string): string {
   let activeTab = 'all';
   /** 修复范围多选；跨渲染保留，默认全选（等同于“全面修复”） */
   let scopePick = ['upgrade', 'consolidation', 'code', 'secrets', 'static'];
+  /** AI 修复的严重度下限；info 表示全部 */
+  let severityPick = 'info';
   let routePick = '';
   let routeScanKey = '';
   /** 各来源分组的折叠状态，跨渲染保留 */
@@ -1704,6 +1717,18 @@ export function getHtml(nonce: string): string {
           (o.count ? '' : ' disabled') + '>' +
           esc(o.label) + '<span class="fix-impact">' + esc(String(o.note || '0')) + '</span></label>';
       }).join('');
+      var severityOptions = [
+        { key: 'info', label: '全部' },
+        { key: 'low', label: '≥ 低危' },
+        { key: 'medium', label: '≥ 中危' },
+        { key: 'high', label: '≥ 高危' }
+      ];
+      var severitySelect = '<label class="wz-sev" title="AI 只处理该严重度及以上，低于该等级只报告">' +
+        '<span>严重度</span><select id="sevPick">' +
+        severityOptions.map(function (o) {
+          return '<option value="' + o.key + '"' + (severityPick === o.key ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+        }).join('') +
+        '</select></label>';
       scopeBar = '<div class="wz-ai"><div class="wz-scope-row">' +
         '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
         (validPick.length ? '' : ' disabled') + '>AI 修复<span class="wz-star" title="首选" aria-label="首选">★</span></button>' +
@@ -1711,6 +1736,7 @@ export function getHtml(nonce: string): string {
         '<span id="scopePickSummary">' + pickText + '</span>' +
         '<span class="wz-scope-caret" aria-hidden="true"></span></summary>' +
         '<div class="wz-scope-menu">' + checks + '</div></details>' +
+        severitySelect +
         '</div></div>';
     }
     var primary = '';
@@ -1866,6 +1892,12 @@ export function getHtml(nonce: string): string {
       + (hubMode ? choiceHub : primaryRow + secondaryRow)
       + (upgradeFlow ? fixPlan : '')
       + deepBlock;
+    var severitySelectEl = el.querySelector('#sevPick');
+    if (severitySelectEl) {
+      severitySelectEl.addEventListener('change', function () {
+        severityPick = severitySelectEl.value;
+      });
+    }
     // 直接绑定每个按钮：webview 内委托偶尔拿不到 closest，这里不赌
     Array.prototype.forEach.call(el.querySelectorAll('[data-wz]'), function (button) {
       button.type = 'button';
@@ -1910,7 +1942,7 @@ export function getHtml(nonce: string): string {
       vscode.postMessage({ type: 'scan' });
     } else if (key === 'copyScopes') {
       updateScopePickerUI();
-      vscode.postMessage({ type: 'copyScopes', scopes: scopePick.slice() });
+      vscode.postMessage({ type: 'copyScopes', scopes: scopePick.slice(), minSeverity: severityPick });
     } else if (key.indexOf('copyScope:') === 0) {
       vscode.postMessage({ type: 'copyScope', scope: key.slice('copyScope:'.length) });
     } else if (key === 'fixAll') {

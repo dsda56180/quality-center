@@ -16,6 +16,8 @@ const checks = {
   emptyWorkbench: h.includes("case 'scan':") && h.includes('wz-empty') && !h.includes("wizard('开始扫描'"),
   msgBarActions: h.includes("action('构建并扫描'"),
   scopeCopyAi: h.includes('data-wz="copyScopes"') && h.includes('wz-scope-run'),
+  severityPicker: h.includes('id="sevPick"') && h.includes('严重度') &&
+    h.includes('minSeverity'),
   scopeCaret: h.includes('wz-scope-caret'),
   fixCaret: h.includes('wz-fixplan-caret') && h.includes('wz-fixplan-fold'),
   msgBarDedupesPlan: !h.includes("action('一键修复'") && !h.includes("action('自动修复'"),
