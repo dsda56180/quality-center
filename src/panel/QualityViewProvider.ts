@@ -3537,30 +3537,21 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       void vscode.window.showWarningMessage(`无法写入扫描报告：${(err as Error).message}`);
       return;
     }
-    // Markdown 预览对同一文件可能复用旧内容；先关掉旧页签再打开，确保看到本轮结果
-    const staleTabs: vscode.Tab[] = [];
-    for (const group of vscode.window.tabGroups.all) {
-      for (const tab of group.tabs) {
-        const uri = (tab.input as { uri?: vscode.Uri } | undefined)?.uri;
-        if (uri && uri.fsPath === reportPath) {
-          staleTabs.push(tab);
-        }
-      }
-    }
-    if (staleTabs.length > 0) {
-      await vscode.window.tabGroups.close(staleTabs);
-    }
-    const uri = vscode.Uri.file(reportPath);
-    // Markdown 预览更适合读报告；没有预览扩展时退回纯文本页签
-    for (const command of ['markdown.showPreviewToSide', 'markdown.showPreview']) {
+    // 固定用当前编辑器组打开预览，避免每次在右侧新开一个编辑器窗口
+    try {
+      await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.file(reportPath));
+      // 文件刚被重写，主动刷新一次，防止预览复用旧内容
       try {
-        await vscode.commands.executeCommand(command, uri);
-        return;
+        await vscode.commands.executeCommand('markdown.preview.refresh');
       } catch {
-        // 继续尝试下一种打开方式
+        // 旧版编辑器没有 refresh 命令时忽略
       }
+      return;
+    } catch {
+      // 没有 Markdown 预览扩展时退回纯文本页签
     }
     try {
+      const uri = vscode.Uri.file(reportPath);
       const document = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(document, { preview: true, preserveFocus: true });
     } catch (err) {
