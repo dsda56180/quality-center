@@ -366,6 +366,11 @@ function buildCombinedAgentPrompt(root: string, scopes: Exclude<AgentScope, 'all
     '范围边界：'
   ];
   lines.push(...readPreviousRoundSection(root));
+  if (scopes.includes('static')) {
+    lines.push(
+      '静态阶段门禁：进入静态修复前先 quality_phase(static_fix)；没有该声明就 finalize 会被拒绝。不能因为需要逐项确认而整段跳过。'
+    );
+  }
   for (const scope of ordered) {
     lines.push(`- ${boundaries[scope]}`);
   }
@@ -449,6 +454,7 @@ function buildScopedAgentPrompt(root: string, scope: Exclude<AgentScope, 'all'>,
       '1. quality_report format=json 取剩余项，按严重度排序，先 critical/high。',
       '2. 每条修复必须说明规则、调用上下文和影响范围；先给文件:行 + diff + 风险，用户确认后才写入。',
       '3. 每批最多 5 条；每批后 quality_build；最后 quality_scan 复核。',
+      '4. 动手前先 quality_phase(static_fix)；没有这个声明就 finalize 会被插件拒绝。不能因为需要逐项确认就整段跳过。',
       options.repairMode === 'safe'
         ? '边界：安全设计、权限模型、架构重构只报告；不改依赖、不改测试；不猜业务语义。'
         : '边界：可提出语义重构/防御性改造方案，但必须逐项给 diff 并等用户确认；安全设计、权限模型、数据迁移只报告方案；不改依赖、不改测试。'
@@ -498,6 +504,13 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
 
   const facts = readPromptFacts(root, options);
   lines.push(...readPreviousRoundSection(root));
+  const wantsStatic = scopes.includes('all') || scopes.includes('static');
+  if (wantsStatic) {
+    lines.push(
+      '',
+      '静态阶段门禁：本次授权包含静态缺陷，必须先调用 quality_phase(static_fix)，至少产出第一批（1-5 条）文件:行 + diff + 风险；consult 模式下也不能以“需要逐项确认”为由整段跳过。没有进入 static_fix 就调用 quality_finalize 会被插件拒绝。'
+    );
+  }
 
   if (autopilot) {
     lines.push(

@@ -498,8 +498,10 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       const upgradeScope = scopes.includes('all') || scopes.includes('upgrade');
       const next = upgradeScope ? buildNextAction(root, { writeHandoff: true }) : undefined;
       beginRun(root, mode as RunMode, {
-        phase: (upgradeScope ? 'baseline_build' : 'static_fix') as RunPhase
+        phase: (upgradeScope ? 'baseline_build' : 'static_fix') as RunPhase,
+        scopes
       });
+      patchRun(root, { scopes }, 'run.scopes', { scopes });
       return asText({
         scopes,
         // 结构化事实：面板 / 其他 Agent 想直接读字段时不用解析 prompt 文本
@@ -1000,7 +1002,12 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       }
       const state = patchRun(
         root,
-        { phase: phase as RunPhase },
+        {
+          phase: phase as RunPhase,
+          declaredPhases: [
+            ...new Set([...(readRunState(root)?.declaredPhases ?? []), phase as RunPhase])
+          ]
+        },
         'phase.changed',
         { phase }
       );

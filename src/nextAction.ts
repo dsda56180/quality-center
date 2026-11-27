@@ -441,7 +441,7 @@ function computeNextAction(root: string): NextActionPayload {
       title: `计划 ${plan.planId} 已完成并通过构建`,
       action: 'none',
       command: '',
-      why: '计划全部落盘、门禁通过、复扫已覆盖；剩余项按报告人工评估即可',
+      why: '升级计划全部落盘、门禁通过、复扫已覆盖；若本次授权包含静态缺陷/密钥，继续对应阶段，不要直接 finalize',
       plan: planInfo,
       pom: status.pom,
       scan,

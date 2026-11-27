@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.28.21
+
+- `quality_finalize` 增加静态阶段门禁：本次授权范围含 `all/static`、且 SpotBugs/qcsec/astgrep 仍有问题、但没有 `quality_phase(static_fix)` 声明时，拒绝收尾并说明还剩多少条
+- 运行态记录本次 `scopes` 与显式声明过的阶段 `declaredPhases`，避免 build 的兜底阶段冒充 static_fix
+- prompt 明确：静态阶段不是可选项；`consult` 模式也不能以“需要逐项确认”为由整段跳过，至少先产出第一批 1-5 条 diff
+- `quality_next` 的 done 文案改为：若授权含静态/密钥，继续对应阶段，不要直接 finalize
+
 ## 0.28.20
 
 - 上一轮复盘未回答时不默认执行 A，只做只读复盘与候选验证，不落盘；用户明确选择后再继续

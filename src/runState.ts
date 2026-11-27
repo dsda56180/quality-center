@@ -42,6 +42,10 @@ export interface RunState {
   schemaVersion: '1';
   runId: string;
   mode: RunMode;
+  /** 本次授权范围；用于收尾时校验静态/密钥等阶段是否真的进入过 */
+  scopes?: string[];
+  /** 只记录显式 quality_phase 声明的阶段，避免 build 的兜底阶段把 static_fix 冒充成已进入 */
+  declaredPhases?: RunPhase[];
   phase: RunPhase;
   status: RunStatus;
   actor: RunActor;
@@ -156,7 +160,7 @@ export function readRunState(root: string): RunState | undefined {
 export function beginRun(
   root: string,
   mode: RunMode,
-  options: { phase?: RunPhase; force?: boolean; actor?: RunActor } = {}
+  options: { phase?: RunPhase; force?: boolean; actor?: RunActor; scopes?: string[] } = {}
 ): RunState {
   const existing = readRunState(root);
   if (
@@ -177,6 +181,8 @@ export function beginRun(
     schemaVersion: '1',
     runId: newRunId(),
     mode,
+    scopes: options.scopes,
+    declaredPhases: options.phase ? [options.phase] : [],
     phase: options.phase ?? 'baseline_build',
     status: 'running',
     actor: options.actor ?? currentActor,

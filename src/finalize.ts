@@ -173,6 +173,7 @@ export function finalizeRun(root: string, options: FinalizeOptions = {}): Finali
     total: currentRaw.issues.length,
     bySource: summaryOf(currentRaw.summary, currentRaw.issues.length)
   };
+  const state = readRunState(root);
   // 收尾必须基于“改动之后的复扫”：AI 经常做完修复直接 finalize，面板于是永远看不到新结果。
   // 用事实文件的 mtime 兜底，和 AI 自己怎么说无关。
   const currentMs = Date.parse(current.at) || fs.statSync(issuesFile).mtimeMs;
@@ -183,6 +184,20 @@ export function finalizeRun(root: string, options: FinalizeOptions = {}): Finali
       reason:
         `当前扫描结果早于源码/依赖变更（扫描 ${new Date(currentMs).toISOString()}，` +
         `最新变更 ${new Date(latestChange).toISOString()}）：先完成改动，再 quality_scan 复扫，最后 quality_finalize。`
+    };
+  }
+  const scopes = state?.scopes ?? [];
+  const wantsStatic = scopes.includes('all') || scopes.includes('static');
+  const staticCount =
+    Number(current.bySource.spotbugs ?? 0) +
+    Number(current.bySource.qcsec ?? 0) +
+    Number(current.bySource.astgrep ?? 0);
+  if (wantsStatic && staticCount > 0 && !(state?.declaredPhases ?? []).includes('static_fix')) {
+    return {
+      ok: false,
+      reason:
+        `本次授权范围包含静态缺陷，但运行中没有进入 static_fix 阶段：SpotBugs/qcsec/astgrep 共 ${staticCount} 条仍未处理。` +
+        '先调用 quality_phase(static_fix)，按批给出文件:行 + diff + 风险，完成或明确隔离后再 quality_finalize。'
     };
   }
   const baselineDigest = readScanBaseline(root);
@@ -299,7 +314,6 @@ export function finalizeRun(root: string, options: FinalizeOptions = {}): Finali
   }
 
   const build = readJson<Record<string, unknown>>(path.join(root, '.quality-center', 'build-result.json'));
-  const state = readRunState(root);
   const blocked = [
     ...(state?.blocked.map((item) => item.message) ?? []),
     ...((plan?.blocked as { packageName: string; reason: string }[] | undefined) ?? []).map(
