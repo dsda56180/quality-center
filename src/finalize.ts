@@ -25,6 +25,24 @@ export interface FinalizeResult {
   plan?: Record<string, unknown>;
   build?: Record<string, unknown>;
   blocked?: string[];
+  /** 收尾后仍未自动处理的项：必须写进报告，不能只留在面板或聊天里 */
+  remaining?: {
+    policyDenied: {
+      packageName: string;
+      installedVersion?: string;
+      fixedVersion?: string;
+      cveCount?: number;
+      reason?: string;
+    }[];
+    crossLine: {
+      packageName: string;
+      from?: string;
+      to: string;
+      cveCount?: number;
+    }[];
+    reportOnly: { source: string; label: string; count: number; reason: string }[];
+    secrets: number;
+  };
   evidence?: string[];
   reportFile?: string;
   markdownFile?: string;
@@ -162,6 +180,7 @@ export function finalizeRun(root: string): FinalizeResult {
   }
 
   let plan: Record<string, unknown> | undefined;
+  let remaining: FinalizeResult['remaining'];
   try {
     const check = checkUpgradePlan(root);
     const file = readUpgradePlan(root, check.planId);
@@ -186,8 +205,45 @@ export function finalizeRun(root: string): FinalizeResult {
       applied: group.candidates.filter((candidate) => appliedNames.has(candidate)).length
     }));
     plan.applied = appliedNames.size;
+
+    const skipped = file.skipped
+      .filter((item) => item.decision === 'policy-denied' || /dependencyManagement|策略未授权/.test(item.reason))
+      .map((item) => ({
+        packageName: item.packageName,
+        installedVersion: item.installedVersion,
+        fixedVersion: item.fixedVersion,
+        cveCount: item.cveCount,
+        reason: item.reason
+      }));
+    const crossLine = file.candidates
+      .filter((item) => item.crossLine === true)
+      .map((item) => ({
+        packageName: item.packageName,
+        from: item.from,
+        to: item.to,
+        cveCount: item.cveCount
+      }));
+    const bySource = current.bySource;
+    const reportOnly: NonNullable<FinalizeResult['remaining']>['reportOnly'] = [];
+    const addReport = (source: string, label: string, reason: string): void => {
+      const count = Number(bySource[source] ?? 0);
+      if (count > 0) {
+        reportOnly.push({ source, label, count, reason });
+      }
+    };
+    addReport('spotbugs', 'SpotBugs 静态缺陷', '防御性拷贝、构造器注入、业务语义判断，超出可逆小改');
+    addReport('qcsec', '配置安全', '暴露面、权限模型与凭证策略要按部署环境决定');
+    addReport('astgrep', 'AST 语义规则', '权限模型、输入校验、安全设计需要业务判断');
+    addReport('checkstyle', '代码质量', '未命中确定性修复清单，需人工复核');
+    remaining = {
+      policyDenied: skipped,
+      crossLine,
+      reportOnly,
+      secrets: Number(bySource.gitleaks ?? 0)
+    };
   } catch {
     plan = undefined;
+    remaining = undefined;
   }
 
   const build = readJson<Record<string, unknown>>(path.join(root, '.quality-center', 'build-result.json'));
@@ -207,6 +263,7 @@ export function finalizeRun(root: string): FinalizeResult {
     plan,
     build,
     blocked,
+    remaining,
     evidence: [
       '.quality-center/issues.json',
       '.quality-center/scan-baseline.json',
@@ -243,7 +300,7 @@ export function finalizeRun(root: string): FinalizeResult {
 }
 
 function renderMarkdown(result: FinalizeResult): string {
-  const lines: string[] = ['# 质量中心 · 最终验收', ''];
+  const lines: string[] = ['# 质量中心 · 最终验收', '', '## 本次修复结果', ''];
   if (!result.baseline) {
     lines.push('> 没有基线快照：本轮无法给出修复前/后对比，只能给当前计数。');
   } else {
@@ -265,11 +322,86 @@ function renderMarkdown(result: FinalizeResult): string {
   if (result.plan) {
     lines.push('', '## 升级计划', '', `- 计划：${String(result.plan.planId)}（${String(result.plan.state)}）`);
     lines.push(`- 落盘：${String(result.plan.applied)}/${String(result.plan.total)}，下一组 ${String(result.plan.nextLabel ?? '无')}`);
+    const groups = result.plan.groups as { label: string; total: number; applied: number }[] | undefined;
+    if (groups && groups.length > 0) {
+      lines.push('', '分组进度：');
+      for (const group of groups) {
+        lines.push(`- ${group.label}：${group.applied}/${group.total} 已落盘`);
+      }
+    }
+  }
+  if (result.remaining) {
+    const remaining = result.remaining;
+    lines.push('', '## 剩余项', '');
+    if (remaining.policyDenied.length > 0) {
+      lines.push('### 待授权间接依赖（' + remaining.policyDenied.length + ' 项）', '');
+      lines.push('> 由其他依赖带入，需要写 dependencyManagement 锁版本；当前策略未授权，AI 默认不写。');
+      lines.push('> 授权方式：面板「授权覆盖」按项勾选，写入 upgrade-policy.json 后重新生成计划；不直接改 pom。');
+      lines.push('', '| 包 | 当前版本 | 修复版本 | CVE | 原因 |', '| --- | --- | --- | --- | --- |');
+      for (const item of remaining.policyDenied) {
+        lines.push(
+          '| ' + item.packageName + ' | ' + (item.installedVersion ?? '?') + ' | ' +
+          (item.fixedVersion ?? '?') + ' | ' + (item.cveCount ?? 0) + ' | ' + (item.reason ?? '') + ' |'
+        );
+      }
+      lines.push('');
+    }
+    if (remaining.crossLine.length > 0) {
+      lines.push('### 跨大版本（' + remaining.crossLine.length + ' 项）', '');
+      lines.push('> 会改变 API、驱动协议或依赖基线；默认不写，确认兼容性后才允许 --allow-cross-line。');
+      lines.push('', '| 包 | 当前版本 | 目标版本 | CVE |', '| --- | --- | --- | --- |');
+      for (const item of remaining.crossLine) {
+        lines.push(
+          '| ' + item.packageName + ' | ' + (item.from ?? '?') + ' | ' + item.to + ' | ' + (item.cveCount ?? 0) + ' |'
+        );
+      }
+      lines.push('');
+    }
+    if (remaining.reportOnly.length > 0) {
+      let reportOnlyTotal = 0;
+      for (const item of remaining.reportOnly) {
+        reportOnlyTotal += item.count;
+      }
+      lines.push('### 只报告、需人工判断（' + reportOnlyTotal + ' 项）', '');
+      lines.push('| 来源 | 数量 | 为什么没自动改 |', '| --- | --- | --- |');
+      for (const item of remaining.reportOnly) {
+        lines.push('| ' + item.label + ' | ' + item.count + ' | ' + item.reason + ' |');
+      }
+      lines.push('');
+    }
+    if (remaining.secrets > 0) {
+      lines.push('### 密钥（' + remaining.secrets + ' 处）', '', '- 不读取、不打印原值；先轮换并清理历史，再改配置引用。', '');
+    }
+    lines.push('## 下一步', '');
+    if (remaining.policyDenied.length > 0) {
+      lines.push('- 先决定 ' + remaining.policyDenied.length + ' 项间接依赖是否授权写 dependencyManagement；授权后重新生成计划，不手改 pom。');
+    }
+    if (remaining.crossLine.length > 0) {
+      lines.push('- 再确认 ' + remaining.crossLine.length + ' 项跨大版本的 JDK/框架/API 兼容性；确认后单独执行这一组并显式允许。');
+    }
+    if (remaining.reportOnly.length > 0) {
+      lines.push('- 静态/安全剩余项按来源筛选，优先高严重度；可让 AI 尝试生成 diff，也可手动逐项处理。');
+    }
+    if (remaining.secrets > 0) {
+      lines.push('- 密钥先轮换，再改配置引用；不要交给 AI 自动改原值。');
+    }
   }
   if (result.build) {
-    const tests = (result.build.tests as { state?: string; total?: number; failures?: number } | undefined)?.state ?? 'unknown';
-    lines.push('', '## 构建', '', `- 结果：${result.build.ok === true ? '成功' : '失败'}`);
-    lines.push(`- 测试：${tests}${tests === 'executed' ? `（${String((result.build.tests as { total?: number }).total ?? 0)} 个）` : tests === 'skipped' ? '（构建成功不代表测试通过）' : ''}`);
+    const tests = result.build.tests as
+      | { state?: string; total?: number; failures?: number; errors?: number; skipped?: number }
+      | undefined;
+    const testState = tests?.state ?? 'unknown';
+    const testDetail = testState === 'executed'
+      ? `（${tests?.total ?? 0} 个，失败 ${tests?.failures ?? 0}，错误 ${tests?.errors ?? 0}，跳过 ${tests?.skipped ?? 0}）`
+      : testState === 'skipped' ? '（构建成功不代表测试通过）' : '';
+    lines.push('', '## 构建与测试', '', `- 结果：${result.build.ok === true ? '成功' : '失败'}`);
+    lines.push(`- 测试：${testState}${testDetail}`);
+    if (result.build.gate) {
+      lines.push(`- 门禁：${String(result.build.gate)}`);
+    }
+    if (result.build.seconds !== undefined) {
+      lines.push(`- 耗时：${String(result.build.seconds)} 秒`);
+    }
     lines.push(`- pom drift：${result.build.drift === true ? '是（结果不可验收）' : '否'}`);
   }
   if (result.blocked && result.blocked.length > 0) {

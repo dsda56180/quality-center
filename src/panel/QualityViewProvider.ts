@@ -252,10 +252,26 @@ function readFinalSummary(
     const build = (raw.build as Record<string, any> | undefined) ?? {};
     const tests = build.tests as { state?: string } | string | undefined;
     const planId = plan.planId ? String(plan.planId) : undefined;
-    // 结果卡必须用报告自己那份计划的剩余项；当前工作台可能已经换成新计划
-    let planSkipped: NonNullable<Snapshot['final']>['planSkipped'] = [];
-    let planCrossLine: NonNullable<Snapshot['final']>['planCrossLine'] = [];
-    if (planId) {
+    // 报告里已经算好的剩余项优先；老报告没有 remaining 时再回读计划文件
+    const remainingRaw = (raw.remaining as Record<string, any> | undefined) ?? {};
+    let planSkipped: NonNullable<Snapshot['final']>['planSkipped'] = Array.isArray(remainingRaw.policyDenied)
+      ? remainingRaw.policyDenied.map((item: Record<string, any>) => ({
+          packageName: String(item.packageName ?? ''),
+          installedVersion: item.installedVersion ? String(item.installedVersion) : undefined,
+          fixedVersion: item.fixedVersion ? String(item.fixedVersion) : undefined,
+          cveCount: item.cveCount !== undefined ? Number(item.cveCount) : undefined,
+          reason: item.reason ? String(item.reason) : undefined,
+          decision: 'policy-denied'
+        }))
+      : [];
+    let planCrossLine: NonNullable<Snapshot['final']>['planCrossLine'] = Array.isArray(remainingRaw.crossLine)
+      ? remainingRaw.crossLine.map((item: Record<string, any>) => ({
+          packageName: String(item.packageName ?? ''),
+          from: item.from ? String(item.from) : undefined,
+          to: String(item.to ?? '')
+        }))
+      : [];
+    if (planId && !planSkipped.length && !planCrossLine.length) {
       try {
         const planFile = path.join(root, '.quality-center', 'upgrade', planId, 'plan.json');
         const planRaw = JSON.parse(fs.readFileSync(planFile, 'utf8')) as Record<string, any>;
@@ -722,7 +738,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   }): Promise<void> {
     const readOnly = new Set([
       'copy', 'copyIssue', 'openAgent', 'copySuggestion', 'explainBuild', 'openHandoff',
-      'copyDrivePrompt', 'copyScope', 'copyScopes', 'checkMcp', 'openMcpConfig', 'open', 'openLink', 'openReport', 'saveSettings',
+      'copyDrivePrompt', 'copyScope', 'copyScopes', 'copyRemaining', 'copyReportOnly', 'checkMcp', 'openMcpConfig', 'open', 'openLink', 'openReport', 'saveSettings',
       'pauseScan', 'stopScan'
     ]);
     if (message.type && !readOnly.has(message.type) && this.runLocked()) {
@@ -861,6 +877,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'copyRemaining':
         await this.copyRemainingPrompt();
+        break;
+      case 'copyReportOnly':
+        await this.copyReportOnlyPrompt();
         break;
       case 'open':
         if (message.file) {
@@ -3929,6 +3948,60 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     await vscode.env.clipboard.writeText(`${lines.join('\n')}\n`);
     void vscode.window.showInformationMessage('已复制剩余项与边界，可直接粘贴给 AI 继续修复。');
+  }
+
+  /**
+   * 只报告项不再默认“永远不能碰”：用户可以明确要求 AI 尝试，
+   * 但必须先出 diff、逐条确认后才写入；密钥永远排除。
+   */
+  private async copyReportOnlyPrompt(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      void vscode.window.showInformationMessage('还没有打开的项目。');
+      return;
+    }
+    const issues = this.runner.result?.issues ?? [];
+    const sources = ['spotbugs', 'qcsec', 'astgrep', 'checkstyle'] as const;
+    const labels: Record<string, string> = {
+      spotbugs: 'SpotBugs 静态缺陷',
+      qcsec: '配置安全',
+      astgrep: 'AST 语义规则',
+      checkstyle: '代码质量'
+    };
+    const ranks: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+    const targets = issues
+      .filter((issue) => sources.includes(issue.source as (typeof sources)[number]))
+      .sort((a, b) => (ranks[a.severity] ?? 9) - (ranks[b.severity] ?? 9))
+      .slice(0, 30);
+    const counts = sources
+      .map((source) => `${labels[source]} ${issues.filter((issue) => issue.source === source).length}`)
+      .join('、');
+    const lines = [
+      '用户明确要求：尝试修复当前“只报告”项。这不是自动写入授权，任何改动都必须先生成 diff，等用户确认后才写入。',
+      `- 范围：${counts}。`,
+      '- 不包含密钥：密钥不读取、不打印、不自动改；只保留位置与轮换提醒。',
+      '- 不改 pom，不重新全量扫描；以 .quality-center/issues.json 的当前问题为准。',
+      '',
+      '执行方式：',
+      '1. 按严重度从高到低处理；每批最多 5 条，先给问题和改动方案。',
+      '2. 每条必须给出：文件:行、规则、diff、风险、验证方式；业务语义/权限模型不明确时直接列为“需人工”，不要猜。',
+      '3. 用户逐条确认后才应用；每批后执行 quality_build，失败先 quality_explain，必要时回滚，不把失败带到下一批。',
+      '4. 不得为了减少数量改业务逻辑、放宽校验、吞异常或改安全策略；只做能说明原因的最小改动。',
+      '5. 用户未确认前禁止写入；结束时列出已改、未改、仍需人工的条目。',
+      '',
+      '建议先处理的条目：'
+    ];
+    for (const issue of targets) {
+      const location = issue.file ? `${issue.file}${issue.line ? `:${issue.line}` : ''}` : '未定位';
+      lines.push(
+        `- [${labels[issue.source] ?? issue.source}] ${location} · ${issue.severity} · ${issue.rule || 'rule'}：` +
+        `${issue.zhSummary || issue.message}`.slice(0, 160)
+      );
+    }
+    await vscode.env.clipboard.writeText(`${lines.join('\n')}\n`);
+    void vscode.window.showInformationMessage(
+      '已复制“尝试修复只报告项”指令：AI 会先给 diff，逐条确认后才写入；密钥不在范围内。'
+    );
   }
 
   async openScanReport(): Promise<void> {

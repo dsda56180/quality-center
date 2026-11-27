@@ -4,6 +4,7 @@ const { getHtml } = require('../out/panel/html.js');
 const h = getHtml({ cspSource: 'x', nonce: 'n' });
 const chooseBranch = h.slice(h.indexOf("key === 'chooseUpgrade'"), h.indexOf("} else if (key === 'showRoutes'"));
 const provider = fs.readFileSync(path.join(__dirname, '..', 'src', 'panel', 'QualityViewProvider.ts'), 'utf8');
+const finalize = fs.readFileSync(path.join(__dirname, '..', 'src', 'finalize.ts'), 'utf8');
 const checks = {
   aiBusy: h.includes('body.ai-busy'),
   aiStatus: h.includes('id="aistatus"'),
@@ -141,6 +142,13 @@ const checks = {
     h.includes('可自动 '),
   scopeTruthGate: h.includes('当前范围没有可自动写入项') &&
     h.includes('密钥只能报告位置'),
+  reportOnlyOverride: h.includes('copyReportOnly') && h.includes('尝试修复只报告项') &&
+    provider.includes('copyReportOnlyPrompt') && provider.includes("case 'copyReportOnly'") &&
+    provider.includes('先生成 diff'),
+  finalReportComplete: finalize.includes('remaining?:') && finalize.includes('policyDenied') &&
+    finalize.includes('crossLine') && finalize.includes('reportOnly') &&
+    finalize.includes('## 剩余项') && finalize.includes('## 下一步') &&
+    finalize.includes('授权覆盖'),
   finalResultNotDuplicated: !h.includes('本次 AI 修复已生成最终验收（') &&
     h.includes('最终验收的明细由下方结果卡展示')
 };

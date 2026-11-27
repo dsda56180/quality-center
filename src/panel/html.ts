@@ -1565,7 +1565,7 @@ export function getHtml(nonce: string): string {
 
     if (state.final) {
       var f = state.final;
-      var finalPending = n.plan ? Number(n.plan.skippedCount || 0) : 0;
+      var finalPending = state.next && state.next.plan ? Number(state.next.plan.skippedCount || 0) : 0;
       if (f.stale && f.planSkipped) {
         finalPending = f.planSkipped.length;
       }
@@ -1803,6 +1803,8 @@ export function getHtml(nonce: string): string {
         ? '构建通过' + (f.tests === 'skipped' ? '（⚠ 跳过测试）' : f.tests === 'executed' ? '（测试已执行）' : '')
         : f.buildOk === false ? '构建未通过' : '';
       var reportOnly = staticCount + secretCount + astgrepCount + checkstyleCount;
+      // 密钥永远不交给 AI 自动改；其余只报告项可以给“尝试生成 diff”的入口
+      var attemptCount = staticCount + astgrepCount + checkstyleCount;
       var policyRows = policySkipped.slice(0, 4).map(function (item) {
         return '<div class="wz-result-item"><span class="pkg">' + esc(item.packageName) + '</span>' +
           '<span class="ver">' + esc(item.installedVersion || '?') + ' → ' + esc(item.fixedVersion || '?') + '</span></div>';
@@ -1834,10 +1836,13 @@ export function getHtml(nonce: string): string {
       }
       var resultActions = '';
       if (finalPolicy.length && !f.stale) {
-        resultActions += '<button class="wz-result-btn" data-wz="openPolicy">处理待授权 ' + finalPolicy.length + ' 项</button>';
+        resultActions += '<button class="wz-result-btn" data-wz="openPolicy">授权覆盖 ' + finalPolicy.length + ' 项</button>';
       }
       if (finalCross.length && !f.stale) {
         resultActions += '<button class="wz-result-btn" data-wz="openHandoff">查看跨大版本说明</button>';
+      }
+      if (attemptCount && !f.stale) {
+        resultActions += '<button class="wz-result-btn" data-wz="copyReportOnly">尝试修复只报告项</button>';
       }
       resultActions += '<button class="wz-result-btn" data-wz="copyRemaining">复制剩余项给 AI</button>' +
         '<button class="wz-result-btn" data-wz="openFinalReport">查看最终报告</button>' +
@@ -2336,6 +2341,8 @@ export function getHtml(nonce: string): string {
     } else if (key === 'copyScopes') {
       updateScopePickerUI();
       vscode.postMessage({ type: 'copyScopes', scopes: scopePick.slice(), minSeverity: severityPick });
+    } else if (key === 'copyReportOnly') {
+      vscode.postMessage({ type: 'copyReportOnly' });
     } else if (key.indexOf('copyScope:') === 0) {
       vscode.postMessage({ type: 'copyScope', scope: key.slice('copyScope:'.length) });
     } else if (key === 'fixAll') {
