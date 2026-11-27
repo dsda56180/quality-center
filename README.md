@@ -275,6 +275,7 @@ node <扩展目录>/out/cli.js upgrade apply <项目> --plan <id> --hash <pomHas
 node <扩展目录>/out/cli.js upgrade apply <项目> --plan <id> --hash <hashAfter> --only a:b,c:d --write
 node <扩展目录>/out/cli.js upgrade check <项目> --plan <id>         # pending / partial / applied / drift
 node <扩展目录>/out/cli.js upgrade revert <项目> --plan <id>        # 回到计划前快照
+node <扩展目录>/out/cli.js upgrade log <项目>                       # 事件流 + 计划汇总（--plan / --limit / --json）
 node <扩展目录>/out/cli.js integrate <项目> --all                  # 写策略/启动器/Skill 与各编辑器适配器
 node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂移检测，不写文件
 ```
@@ -290,6 +291,7 @@ node <扩展目录>/out/cli.js integrate <项目> --all --check          # 漂�
 - 需要新增 `<dependencyManagement>` 才能固定的传递依赖 CVE 默认只报告：策略里 `allowDependencyManagement=false` 时，面板会解释原因并允许按 artifact 写入 `dependencyManagementAllowlist`，只授权选中的包，不打开全局开关；确认版本组合可靠后再应用。
 - **同一时间只允许一个活动计划**：已有 `pending/partial` 计划时，`upgrade plan` / `quality_upgrade_plan` 会拒绝再生成第二个（CLI 用 `--replace`、MCP 用 `replace=true` 才能显式替换）；已 `revert` 的计划不再占用“当前计划”。
 - 每次落盘都记录 `steps.json` 与 `pom.before.xml`，`upgrade revert` 可回到计划前状态；手工改过 pom 时回滚会被拒绝。
+- **升级过程留档**：plan / apply / revert / 门禁执行都会追加事件到 `.quality-center/upgrade/upgrade-events.jsonl`，含来源（panel / cli / mcp）、前后哈希、包名、失败原因码与耗时；`index.json` 汇总每个计划的状态与进度，`<planId>/gates.json` 记录构建/复扫的退出码与耗时，回滚前的步骤轨迹也留在事件里，`upgrade log` 可直接读。
 - `integrate` 生成 `.quality-center/bin/qc.cjs` 启动器，MCP 配置统一写成它的**项目内绝对路径**并带 `cwd`（Trae 不展开 `${workspaceFolder}`）；扩展升级后不需要改各编辑器的配置；已适配 Trae / Cursor / VS Code / Copilot 与 Claude 风格 `.mcp.json`。面板检测到配置里仍是字面量变量时会显示“MCP 配置未展开变量”。
 - 生成物按“目录集中”原则组织：策略、启动器、Skill、扫描结果与升级计划全在 `.quality-center/` 内，并自带 `.gitignore`（只放行策略/启动器/Skill）；编辑器目录里只留 ≤10 行的指针文件。默认只为检测到的编辑器生成，额外要 `AGENTS.md` 与根 `.mcp.json` 时加 `--fallback`。
 

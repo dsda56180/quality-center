@@ -37,6 +37,7 @@ import {
   readUpgradePlan,
   revertUpgradePlan
 } from '../upgradePlanFile';
+import { recordUpgradeGate } from '../upgradeEvents';
 import { indexBomManagement, localRepository, parseBomRefs, parseDependencyTree } from '../dependencies';
 import {
   artifactsForRecipes,
@@ -614,6 +615,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       this.output = vscode.window.createOutputChannel('质量中心');
     }
     this.output.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
+  }
+
+  /** 当前依赖漏洞条数：升级前后各取一次，用差值评估这次升级的真实收益 */
+  private upgradeCveCount(): number {
+    return (this.runner.result?.issues ?? []).filter((issue) => issue.source === 'trivy').length;
   }
 
   /** 开始一个多阶段任务：每个阶段对应进度条上的一只猫 */
@@ -1893,7 +1899,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     // 面板与 CLI/MCP 走同一条路：先出 Plan V3（plan.json + pom.diff），再按 planId + pomHash 落盘。
     let plan: ReturnType<typeof createUpgradePlan>;
     try {
-      plan = createUpgradePlan(root, readIssues(root));
+      plan = createUpgradePlan(root, readIssues(root), { source: 'panel' });
     } catch (error) {
       void vscode.window.showErrorMessage(
         `生成升级计划失败：${error instanceof Error ? error.message : String(error)}`
@@ -1994,6 +2000,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
     this.fixCache = undefined;
+    // 升级前的依赖漏洞数，复扫后用来算“消除了多少”，写进门禁事件
+    const cvesBefore = this.upgradeCveCount();
 
     this.beginDeepFix('写入 pom', 2);
     this.log(
@@ -2008,7 +2016,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         planId: planFile.planId,
         write: true,
         expectedHash: planFile.pomHash,
-        packages: chosen.map((item) => item.packageName)
+        packages: chosen.map((item) => item.packageName),
+        source: 'panel'
       });
       if (!applied.ok) {
         void vscode.window.showErrorMessage(`写入 pom 失败：${applied.reason ?? '未知原因'}`);
@@ -2016,6 +2025,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       }
       appliedCount = applied.applied?.length ?? chosen.length;
       this.setDeepFixStage('校验编译');
+      const buildStartedAt = Date.now();
       const build = await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
@@ -2024,13 +2034,28 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         },
         () => run('mvn', ['-B', '-q', ...mavenMirrorArgs(), '-DskipTests', 'compile'], root, 20 * 60_000)
       );
+      const buildTail = (build.stderr || build.stdout)
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .slice(-6)
+        .join('\n');
+      // 门禁结果落盘：退出码、耗时、输出尾部，后续优化直接读事实而不是猜
+      recordUpgradeGate(
+        root,
+        planFile.planId,
+        'panel',
+        {
+          name: 'compile',
+          ok: build.code === 0,
+          exitCode: build.code,
+          durationMs: Date.now() - buildStartedAt,
+          outputTail: buildTail
+        },
+        { hashAfter: applied.hashAfter, packages: applied.applied }
+      );
       if (build.code !== 0) {
-        const revert = revertUpgradePlan(root, planFile.planId);
-        const tail = (build.stderr || build.stdout)
-          .split(/\r?\n/)
-          .filter(Boolean)
-          .slice(-6)
-          .join('\n');
+        const revert = revertUpgradePlan(root, planFile.planId, { source: 'panel' });
+        const tail = buildTail;
         const rollback = revert.ok
           ? '已回滚到计划前快照'
           : `回滚失败：${revert.reason ?? '未知原因'}（请先确认 pom.xml 状态）`;
@@ -2063,6 +2088,14 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     if (compiled) {
       await this.scanAndPush();
+      const cvesAfter = this.upgradeCveCount();
+      recordUpgradeGate(
+        root,
+        planFile.planId,
+        'panel',
+        { name: 'rescan', ok: true, exitCode: 0 },
+        { stats: { cvesBefore, cvesAfter, resolved: Math.max(0, cvesBefore - cvesAfter) } }
+      );
       const state = checkUpgradePlan(root, planFile.planId);
       const leftover =
         state.state === 'applied'
@@ -2106,7 +2139,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       return;
     }
     try {
-      const plan = createUpgradePlan(root, readIssues(root), { reuse: true }).plan;
+      const plan = createUpgradePlan(root, readIssues(root), { reuse: true, source: 'panel' }).plan;
       if (plan.candidates.length === 0) {
         const detail = plan.skipped.slice(0, 5).map((item) => `· ${item.packageName}：${item.reason}`).join('\n');
         void vscode.window.showInformationMessage(`没有可直接升级的依赖${detail ? `：\n${detail}` : ''}`);
@@ -2156,7 +2189,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     let planFile: ReturnType<typeof createUpgradePlan>['plan'];
     try {
-      planFile = createUpgradePlan(root, readIssues(root), { reuse: true }).plan;
+      planFile = createUpgradePlan(root, readIssues(root), { reuse: true, source: 'panel' }).plan;
     } catch (error) {
       void vscode.window.showErrorMessage(
         `生成升级计划失败：${error instanceof Error ? error.message : String(error)}`
@@ -2239,6 +2272,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
 
     const current = fs.readFileSync(pomFile, 'utf8');
+    const cvesBefore = this.upgradeCveCount();
     this.beginDeepFix('写入 pom', 2);
     this.log(
       `向导升级「${label}」：${chosen.map((item) => `${item.packageName} ${item.from}→${item.to}`).join(', ')}`
@@ -2249,7 +2283,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         write: true,
         expectedHash: hashText(current),
         packages: chosen.map((item) => item.packageName),
-        allowCrossLine: crossLine
+        allowCrossLine: crossLine,
+        source: 'panel'
       });
       if (!applied.ok) {
         this.deepFixState = null;
@@ -2303,6 +2338,14 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
 
       const after = checkUpgradePlan(root, planFile.planId);
       await this.scanAndPush();
+      const cvesAfter = this.upgradeCveCount();
+      recordUpgradeGate(
+        root,
+        planFile.planId,
+        'panel',
+        { name: 'rescan', ok: true, exitCode: 0 },
+        { stats: { cvesBefore, cvesAfter, resolved: Math.max(0, cvesBefore - cvesAfter) } }
+      );
       if (after.state === 'applied') {
         const pick = await vscode.window.showInformationMessage(
           `「${label}」已升级并通过构建，计划全部落盘。下一步复扫验收。`,
@@ -2361,7 +2404,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     let planFile: ReturnType<typeof createUpgradePlan>['plan'];
     try {
-      planFile = createUpgradePlan(root, readIssues(root), { reuse: true }).plan;
+      planFile = createUpgradePlan(root, readIssues(root), { reuse: true, source: 'panel' }).plan;
     } catch (error) {
       void vscode.window.showErrorMessage(
         `读取升级计划失败：${error instanceof Error ? error.message : String(error)}`
@@ -2492,7 +2535,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     if (confirm !== '回滚到计划前') {
       return;
     }
-    const result = revertUpgradePlan(root, planId);
+    const result = revertUpgradePlan(root, planId, { source: 'panel' });
     this.push();
     if (!result.ok) {
       void vscode.window.showErrorMessage(`回滚失败：${result.reason ?? '未知原因'}`);
@@ -3183,7 +3226,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     this.depContextCache = undefined;
 
     try {
-      const created = createUpgradePlan(root, readIssues(root));
+      const created = createUpgradePlan(root, readIssues(root), { source: 'panel' });
       const plan = created.plan;
       this.log(
         `按项授权 ${packages.length} 项写 dependencyManagement：` +

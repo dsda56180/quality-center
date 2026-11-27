@@ -27,6 +27,7 @@ import {
 import { AgentScanEvent } from './agentApi';
 import { EXTERNAL_TOOLS, ToolId } from './tools';
 import { applyUpgradePlan, checkUpgradePlan, createUpgradePlan, readIssues, revertUpgradePlan } from './upgradePlanFile';
+import { readUpgradeEvents, readUpgradeIndex, refreshUpgradeIndex } from './upgradeEvents';
 import { digestScan } from './scanDigest';
 import { projectStatus } from './status';
 import { buildNextAction } from './nextAction';
@@ -52,6 +53,7 @@ const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 
   quality-center upgrade apply [目录]    按计划落盘（默认只预览，--write 才写；--group/--only 分批）
   quality-center upgrade check [目录]    校验当前 pom 是否与计划一致（CI 门禁）
   quality-center upgrade revert [目录]   回滚到计划生成前的 pom 快照
+  quality-center upgrade log [目录]      查看升级事件流与计划汇总（--plan / --limit / --json）
   quality-center integrate [目录]        写入策略/启动器/Skill 与各编辑器适配器
   quality-center mcp                     以 MCP(stdio) 服务端运行，供 agent 直接调用
   quality-center help | version
@@ -466,7 +468,7 @@ async function upgradeCommand(args: Args): Promise<number> {
       }
     }
     const issues = readIssues(root);
-    const result = createUpgradePlan(root, issues, { planId, reuse: args.flags['--reuse'] === true });
+    const result = createUpgradePlan(root, issues, { planId, reuse: args.flags['--reuse'] === true, source: 'cli' });
     if (result.plan.candidates.length === 0) {
       const detail = result.plan.skipped.length
         ? result.plan.skipped
@@ -529,7 +531,8 @@ async function upgradeCommand(args: Args): Promise<number> {
       expectedHash,
       packages,
       group,
-      allowCrossLine: args.flags['--allow-cross-line'] === true
+      allowCrossLine: args.flags['--allow-cross-line'] === true,
+      source: 'cli'
     });
     if (args.flags['--json'] === true) {
       process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
@@ -553,6 +556,58 @@ async function upgradeCommand(args: Args): Promise<number> {
     return 0;
   }
 
+  if (action === 'log') {
+    refreshUpgradeIndex(root);
+    const limitFlag = typeof args.flags['--limit'] === 'string' ? Number(args.flags['--limit']) : 20;
+    const limit = Number.isFinite(limitFlag) && limitFlag > 0 ? Math.min(limitFlag, 500) : 20;
+    const events = readUpgradeEvents(root, { planId, limit });
+    const index = readUpgradeIndex(root);
+    if (args.flags['--json'] === true) {
+      process.stdout.write(`${JSON.stringify({ index: index ?? null, events }, null, 2)}\n`);
+      return 0;
+    }
+    const plans = index?.plans ?? [];
+    const stateLabel: Record<string, string> = {
+      pending: '待落盘',
+      partial: '进行中',
+      applied: '已完成',
+      reverted: '已回滚'
+    };
+    const lines: string[] = [];
+    lines.push(`计划 ${plans.length} 个 · 事件 ${events.length} 条（最近 ${limit} 条）`);
+    if (plans.length === 0) {
+      lines.push('还没有升级计划：先执行 upgrade plan');
+      process.stdout.write(`${lines.join('\n')}\n`);
+      return 0;
+    }
+    plans.slice(-5).forEach((plan) => {
+      lines.push(
+        `  ${plan.planId}  ${stateLabel[plan.state] ?? plan.state}  ${plan.applied}/${plan.candidates} 项` +
+          `${plan.skipped ? `，跳过 ${plan.skipped}` : ''}${plan.revertedAt ? `，回滚于 ${plan.revertedAt}` : ''}`
+      );
+    });
+    if (events.length > 0) {
+      lines.push('最近事件：');
+      events.forEach((event) => {
+        const when = new Date(event.at).toLocaleString('zh-CN', { hour12: false });
+        const mark = event.ok ? '✓' : '✗';
+        const detail = [
+          event.packages?.length ? event.packages.join(',') : '',
+          event.gate ? `门禁 ${event.gate.name} 退出码 ${event.gate.exitCode ?? '?'}` : '',
+          event.code ?? '',
+          event.reason && !event.gate ? event.reason : '',
+          event.durationMs !== undefined ? `${event.durationMs}ms` : ''
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        lines.push(`  ${when}  ${mark} ${event.action}  ${event.planId}  ${event.source}${detail ? `  ${detail}` : ''}`);
+      });
+    }
+    lines.push(`事件流：${path.relative(root, path.join('.quality-center', 'upgrade', 'upgrade-events.jsonl'))}`);
+    process.stdout.write(`${lines.join('\n')}\n`);
+    return 0;
+  }
+
   if (action === 'check') {
     const outcome = checkUpgradePlan(root, planId);
     const stateLabel: Record<string, string> = {
@@ -573,7 +628,7 @@ async function upgradeCommand(args: Args): Promise<number> {
   }
 
   if (action === 'revert') {
-    const outcome = revertUpgradePlan(root, planId);
+    const outcome = revertUpgradePlan(root, planId, { source: 'cli' });
     if (args.flags['--json'] === true) {
       process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
       return outcome.ok ? 0 : 2;
@@ -586,7 +641,7 @@ async function upgradeCommand(args: Args): Promise<number> {
     return 0;
   }
 
-  progress(`未知子命令：upgrade ${action}（可选 plan / apply / check / revert）`);
+  progress(`未知子命令：upgrade ${action}（可选 plan / apply / check / revert / log）`);
   return 3;
 }
 

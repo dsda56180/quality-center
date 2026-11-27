@@ -681,7 +681,11 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       }
       const issues = readIssues(root);
       const customId = typeof params.planId === 'string' && params.planId.trim() ? params.planId.trim() : undefined;
-      const result = createUpgradePlan(root, issues, { planId: customId, reuse: params.reuse !== false });
+      const result = createUpgradePlan(root, issues, {
+        planId: customId,
+        reuse: params.reuse !== false,
+        source: 'mcp'
+      });
       if (result.plan.candidates.length === 0) {
         return asText({
           empty: true,
@@ -772,7 +776,8 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
         expectedHash,
         packages,
         group,
-        allowCrossLine: Boolean(params.allowCrossLine)
+        allowCrossLine: Boolean(params.allowCrossLine),
+        source: 'mcp'
       });
       if (!outcome.ok) {
         return asText(
@@ -830,7 +835,7 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
     }
     case 'quality_upgrade_revert': {
       const planId = typeof params.planId === 'string' && params.planId.trim() ? params.planId.trim() : undefined;
-      const outcome = revertUpgradePlan(root, planId);
+      const outcome = revertUpgradePlan(root, planId, { source: 'mcp' });
       if (outcome.ok) {
         patchRun(
           root,

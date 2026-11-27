@@ -207,7 +207,19 @@ async function main() {
   fs.writeFileSync(path.join(emptyDir, 'pom.xml'), POM, 'utf8');
   const emptyPlan = createUpgradePlan(emptyDir, []);
   check('0 候选不生成计划', emptyPlan.plan.candidates.length === 0 && emptyPlan.planPath === '');
-  check('0 候选不写目录', !fs.existsSync(path.join(emptyDir, '.quality-center', 'upgrade')));
+  check(
+    '0 候选不生成计划目录（只留事件）',
+    !fs.existsSync(path.join(emptyDir, '.quality-center', 'upgrade', emptyPlan.plan.planId))
+  );
+  const emptyEventFile = path.join(emptyDir, '.quality-center', 'upgrade', 'upgrade-events.jsonl');
+  const emptyEvents = fs.existsSync(emptyEventFile)
+    ? fs.readFileSync(emptyEventFile, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
+    : [];
+  check(
+    '0 候选也记空计划事件（供策略优化）',
+    emptyEvents.some((item) => item.action === 'plan.created' && item.code === 'no-candidates'),
+    JSON.stringify(emptyEvents.map((item) => item.code))
+  );
   fs.rmSync(emptyDir, { recursive: true, force: true });
   check('pom 未被改动', fs.readFileSync(pomFile, 'utf8') === original);
   check('pom.diff 已生成', fs.existsSync(path.join(dir, '.quality-center', 'upgrade', plan.planId, 'pom.diff')));
@@ -837,6 +849,107 @@ async function main() {
   );
   const java17Diff = fs.readFileSync(path.join(java17Dir, '.quality-center', 'upgrade', java17Plan.planId, 'pom.diff'), 'utf8');
   check('pom.diff 含 8 → 17', java17Diff.includes('-    <java.version>8</java.version>') && java17Diff.includes('+    <java.version>17</java.version>'));
+
+  console.log('\n12) 升级过程事件日志：plan / apply / 门禁 / 回滚都留档');
+  const logDir = prepare();
+  const logPlan = JSON.parse(run(['upgrade', 'plan', logDir, '--json']).out);
+  const eventFile = path.join(logDir, '.quality-center', 'upgrade', 'upgrade-events.jsonl');
+  const readEvents = () =>
+    fs
+      .readFileSync(eventFile, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  const indexFile = path.join(logDir, '.quality-center', 'upgrade', 'index.json');
+  const readIndex = () => JSON.parse(fs.readFileSync(indexFile, 'utf8'));
+
+  check('plan 后写入事件流', fs.existsSync(eventFile));
+  const createdEvent = readEvents().find((item) => item.action === 'plan.created' && item.planId === logPlan.planId);
+  check(
+    'plan.created 带来源与候选计数',
+    createdEvent?.source === 'cli' && createdEvent?.stats?.candidates === logPlan.candidates.length,
+    JSON.stringify(createdEvent?.stats)
+  );
+  check(
+    'index.json 汇总计划为 pending',
+    readIndex().plans?.find((item) => item.planId === logPlan.planId)?.state === 'pending'
+  );
+
+  run(['upgrade', 'apply', logDir, '--plan', logPlan.planId, '--hash', 'sha256:deadbeef', '--write']);
+  const failEvent = readEvents().find((item) => item.action === 'apply.fail');
+  check('错误哈希记为 apply.fail + pom-drift', failEvent?.code === 'pom-drift', String(failEvent?.code));
+
+  run(['upgrade', 'apply', logDir, '--plan', logPlan.planId, '--hash', logPlan.pomHash, '--group', 'framework']);
+  check(
+    '预览记为 apply.preview（未落盘）',
+    readEvents().some((item) => item.action === 'apply.preview' && item.durationMs !== undefined)
+  );
+
+  const writeRun = run([
+    'upgrade',
+    'apply',
+    logDir,
+    '--plan',
+    logPlan.planId,
+    '--hash',
+    logPlan.pomHash,
+    '--write',
+    '--allow-cross-line',
+    '--json'
+  ]);
+  const writeResult = writeRun.code === 0 ? JSON.parse(writeRun.out) : {};
+  const writeEvent = readEvents().find((item) => item.action === 'apply.write');
+  check(
+    '落盘事件带包名与结果哈希',
+    writeEvent?.packages?.length === writeResult.applied?.length && writeEvent?.hashAfter === writeResult.hashAfter,
+    JSON.stringify({ packages: writeEvent?.packages, hashAfter: writeEvent?.hashAfter })
+  );
+  check(
+    'index 随落盘推进到 applied',
+    readIndex().plans?.find((item) => item.planId === logPlan.planId)?.state === 'applied'
+  );
+
+  const { recordUpgradeGate } = await import(pathToFileURL(path.join(ROOT, 'out', 'upgradeEvents.js')).href);
+  recordUpgradeGate(
+    logDir,
+    logPlan.planId,
+    'cli',
+    { name: 'build', ok: false, exitCode: 1, durationMs: 1234, outputTail: 'BUILD FAILURE' },
+    { stats: { cvesBefore: 5, cvesAfter: 2, resolved: 3 } }
+  );
+  const gateEvent = readEvents().find((item) => item.action === 'gate.result');
+  check(
+    '门禁结果落事件流（退出码/耗时/前后漏洞数）',
+    gateEvent?.gate?.name === 'build' &&
+      gateEvent?.gate?.exitCode === 1 &&
+      gateEvent?.stats?.cvesBefore === 5 &&
+      gateEvent?.stats?.resolved === 3,
+    JSON.stringify(gateEvent?.gate)
+  );
+  const gatesFile = JSON.parse(
+    fs.readFileSync(path.join(logDir, '.quality-center', 'upgrade', logPlan.planId, 'gates.json'), 'utf8')
+  );
+  check('gates.json 按计划留档', gatesFile.length === 1 && gatesFile[0].exitCode === 1);
+
+  const revertRun = run(['upgrade', 'revert', logDir, '--plan', logPlan.planId]);
+  check('回滚退出码 0', revertRun.code === 0, revertRun.err.trim());
+  const revertEvent = readEvents().find((item) => item.action === 'revert.ok');
+  check(
+    '回滚事件保留步骤轨迹',
+    revertEvent?.ok === true && Array.isArray(revertEvent?.steps) && revertEvent.steps.length > 0,
+    JSON.stringify(revertEvent?.steps?.length)
+  );
+  check(
+    'index 标记 reverted',
+    readIndex().plans?.find((item) => item.planId === logPlan.planId)?.state === 'reverted'
+  );
+
+  const logRun = run(['upgrade', 'log', logDir, '--json']);
+  const logPayload = logRun.code === 0 ? JSON.parse(logRun.out) : {};
+  check(
+    'upgrade log 读回事件与索引',
+    logRun.code === 0 && logPayload.events?.length > 0 && logPayload.index?.plans?.length > 0
+  );
 
   console.log(`\n结果：${passed} 通过，${failures.length} 失败`);
   if (failures.length) {

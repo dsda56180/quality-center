@@ -22,6 +22,7 @@ import { Issue, IssueSource, ScanResult, Severity } from './model';
 import { EXTERNAL_TOOLS, installLocation, installPlan, ToolId } from './tools';
 import { loadPolicy } from './upgradePolicy';
 import { readRunState, recordBuild as recordRunBuild, recordFix as recordRunFix, recordScan as recordRunScan } from './runState';
+import { recordUpgradeGate } from './upgradeEvents';
 import { ensureScanBaseline } from './scanDigest';
 
 export const PACKAGE_ROOT = path.resolve(__dirname, '..');
@@ -255,6 +256,24 @@ function recordBuild(root: string, outcome: BuildOutcome, gate: string, args: st
     seconds: outcome.seconds,
     gate
   });
+  // 构建门禁也进升级事件流：AI 用 qc build 验收时，升级过程同样有连续记录
+  if (outcome.planId) {
+    recordUpgradeGate(
+      root,
+      outcome.planId,
+      'build',
+      {
+        name: gate,
+        ok: outcome.ok,
+        exitCode: outcome.code,
+        durationMs: Math.round(outcome.seconds * 1000),
+        outputTail: outcome.tail || undefined
+      },
+      {
+        hashAfter: pomHashOf(root)
+      }
+    );
+  }
   return outcome;
 }
 

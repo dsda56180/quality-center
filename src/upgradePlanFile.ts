@@ -4,7 +4,8 @@
  * 关键约定：
  * - plan 只写 .quality-center/upgrade/<planId>/ 下的 plan.json 与 pom.diff，绝不改 pom.xml；
  * - apply 必须带 planId + pomHash，哈希对不上就拒绝落盘（AI 在会话中间改过 pom 时不会误覆盖）；
- * - apply 重新执行同一组候选后校验 pomHashAfter，保证落盘结果与预览的 diff 完全一致。
+ * - apply 重新执行同一组候选后校验 pomHashAfter，保证落盘结果与预览的 diff 完全一致；
+ * - 每次 plan / apply / revert 都追加一条事件到 upgrade/upgrade-events.jsonl，失败原因也落盘。
  */
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -20,6 +21,12 @@ import {
 } from './upgrader';
 import { buildCommandArgs, inferFrameworkVersion, isDependencyManagementAllowed, loadPolicy } from './upgradePolicy';
 import { isManagedFrameworkProperty } from './explain';
+import {
+  appendUpgradeEvent,
+  refreshUpgradeIndex,
+  UpgradeEventSource,
+  UpgradeEventStep
+} from './upgradeEvents';
 
 export const PLAN_SCHEMA_VERSION = '3';
 
@@ -118,6 +125,8 @@ export interface ApplyPlanResult {
     new: string;
   }[];
   patch: string;
+  /** 失败/跳过原因码，便于统计哪类拒绝最常见 */
+  code?: string;
   reason?: string;
   hashBefore: string;
   hashAfter: string;
@@ -138,6 +147,7 @@ export interface RevertPlanResult {
   planId: string;
   hashBefore: string;
   hashAfter: string;
+  code?: string;
   reason?: string;
 }
 
@@ -400,8 +410,9 @@ function issueSetHash(issues: Issue[]): string {
 export function createUpgradePlan(
   root: string,
   issues: Issue[],
-  options?: { planId?: string; reuse?: boolean }
+  options?: { planId?: string; reuse?: boolean; source?: UpgradeEventSource }
 ): CreatePlanResult {
+  const eventSource = options?.source ?? 'unknown';
   const pomFile = path.join(root, 'pom.xml');
   if (!fs.existsSync(pomFile)) {
     throw new Error(`未找到 pom.xml：${pomFile}`);
@@ -414,6 +425,20 @@ export function createUpgradePlan(
   if (options?.reuse && !options?.planId) {
     const reusable = findReusablePlan(root, pomHash, issuesHash);
     if (reusable) {
+      appendUpgradeEvent(root, {
+        planId: reusable.plan.planId,
+        action: 'plan.reused',
+        source: eventSource,
+        ok: true,
+        hashBefore: reusable.plan.pomHash,
+        hashAfter: reusable.plan.pomHashAfter,
+        groups: reusable.plan.groups.map((group) => group.name),
+        stats: {
+          candidates: reusable.plan.candidates.length,
+          skipped: reusable.plan.skipped.length
+        }
+      });
+      refreshUpgradeIndex(root);
       return reusable;
     }
   }
@@ -563,6 +588,17 @@ export function createUpgradePlan(
 
   // 没有候选就不落盘：避免留下 0 候选的空计划，让 check / status / apply 走进死胡同
   if (candidates.length === 0) {
+    appendUpgradeEvent(root, {
+      planId: plan.planId,
+      action: 'plan.created',
+      source: eventSource,
+      ok: true,
+      code: 'no-candidates',
+      hashBefore: pomHash,
+      hashAfter: plan.pomHashAfter,
+      stats: { candidates: 0, skipped: skipped.length }
+    });
+    refreshUpgradeIndex(root);
     return { plan, planDir: '', planPath: '', patchPath: '', patch: '', blockedByPolicy };
   }
 
@@ -572,6 +608,22 @@ export function createUpgradePlan(
   const patchPath = path.join(dir, 'pom.diff');
   fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, 'utf8');
   fs.writeFileSync(patchPath, patch, 'utf8');
+
+  appendUpgradeEvent(root, {
+    planId: plan.planId,
+    action: 'plan.created',
+    source: eventSource,
+    ok: true,
+    hashBefore: plan.pomHash,
+    hashAfter: plan.pomHashAfter,
+    groups: plan.groups.map((group) => group.name),
+    stats: {
+      candidates: candidates.length,
+      skipped: skipped.length,
+      blocked: blockedByPolicy.length
+    }
+  });
+  refreshUpgradeIndex(root);
 
   return { plan, planDir: dir, planPath, patchPath, patch, blockedByPolicy };
 }
@@ -698,8 +750,69 @@ export function planCandidateToUpgrade(plan: UpgradePlanFile, item: PlanCandidat
   return toCandidate(plan, item);
 }
 
-/** 应用计划：默认只预览；write=true 时原子写回。支持按分组 / 按包推进，失败可二分定位 */
+/** 应用计划（对外入口）：执行 core 并把结果写进事件流，成功与失败都留档 */
 export function applyUpgradePlan(
+  root: string,
+  options: {
+    planId?: string;
+    write: boolean;
+    expectedHash?: string;
+    packages?: string[];
+    group?: PlanGroup;
+    allowCrossLine?: boolean;
+    source?: UpgradeEventSource;
+  }
+): ApplyPlanResult {
+  const eventSource = options.source ?? 'unknown';
+  const startedAt = Date.now();
+  let result: ApplyPlanResult;
+  try {
+    result = applyUpgradePlanCore(root, options);
+  } catch (error) {
+    appendUpgradeEvent(root, {
+      planId: options.planId ?? '',
+      action: 'apply.fail',
+      source: eventSource,
+      ok: false,
+      code: 'exception',
+      reason: error instanceof Error ? error.message : String(error),
+      durationMs: Date.now() - startedAt
+    });
+    throw error;
+  }
+  const durationMs = Date.now() - startedAt;
+  const action = !result.ok
+    ? 'apply.fail'
+    : result.mode === 'dry-run'
+      ? 'apply.preview'
+      : result.applied && result.applied.length > 0
+        ? 'apply.write'
+        : 'apply.skip';
+  appendUpgradeEvent(root, {
+    planId: result.planId,
+    action,
+    source: eventSource,
+    ok: result.ok,
+    code: result.code,
+    reason: result.reason,
+    hashBefore: result.hashBefore,
+    hashAfter: result.hashAfter,
+    packages: result.applied && result.applied.length > 0 ? result.applied : options.packages,
+    group: options.group,
+    durationMs,
+    stats: {
+      applied: result.applied?.length,
+      blocked: result.blocked?.length
+    }
+  });
+  if (result.mode === 'write') {
+    refreshUpgradeIndex(root);
+  }
+  return result;
+}
+
+/** 应用计划：默认只预览；write=true 时原子写回。支持按分组 / 按包推进，失败可二分定位 */
+function applyUpgradePlanCore(
   root: string,
   options: {
     planId?: string;
@@ -731,14 +844,17 @@ export function applyUpgradePlan(
   });
 
   if (options.expectedHash && options.expectedHash !== hashBefore) {
-    return fail(`pom 已被改动（当前 ${hashBefore}，期望 ${options.expectedHash}）；请重新执行 upgrade plan`);
+    return fail(`pom 已被改动（当前 ${hashBefore}，期望 ${options.expectedHash}）；请重新执行 upgrade plan`, {
+      code: 'pom-drift'
+    });
   }
 
   const steps = readSteps(root, plan.planId);
   const knownHashes = [plan.pomHash, ...steps.map((step) => step.hashAfter)];
   if (!knownHashes.includes(hashBefore)) {
     return fail(
-      `当前 pom 与计划的任何已知状态都不一致（${hashBefore}）；可能被手工改过，请重新执行 upgrade plan`
+      `当前 pom 与计划的任何已知状态都不一致（${hashBefore}）；可能被手工改过，请重新执行 upgrade plan`,
+      { code: 'unknown-state' }
     );
   }
 
@@ -747,16 +863,16 @@ export function applyUpgradePlan(
     const wanted = new Set(options.packages);
     selected = plan.candidates.filter((item) => wanted.has(item.packageName) || wanted.has(item.id));
     if (selected.length === 0) {
-      return fail(`指定的包不在这份计划里：${options.packages.join(', ')}`);
+      return fail(`指定的包不在这份计划里：${options.packages.join(', ')}`, { code: 'not-in-plan' });
     }
   }
   if (options.group) {
     if (!PLAN_GROUP_ORDER.includes(options.group)) {
-      return fail(`未知分组：${options.group}（可选 ${PLAN_GROUP_ORDER.join(' / ')}）`);
+      return fail(`未知分组：${options.group}（可选 ${PLAN_GROUP_ORDER.join(' / ')}）`, { code: 'bad-group' });
     }
     selected = selected.filter((item) => item.group === options.group);
     if (selected.length === 0) {
-      return fail(`分组 ${options.group} 里没有候选`);
+      return fail(`分组 ${options.group} 里没有候选`, { code: 'empty-group' });
     }
   }
 
@@ -782,6 +898,7 @@ export function applyUpgradePlan(
       patch: '',
       applied: [],
       partial: remainingGroups.length > 0,
+      code: blockedNow.length > 0 ? 'policy-blocked' : 'already-applied',
       reason:
         blockedNow.length > 0
           ? `策略拒绝 ${blockedNow.map((item) => item.packageName).join(', ')}：需要新增 dependencyManagement，当前策略未授权；已跳过，继续 ${remainingGroups[0] ?? '收尾'}`
@@ -797,7 +914,7 @@ export function applyUpgradePlan(
   if (crossLinePkgs.length > 0 && !options.allowCrossLine) {
     return fail(
       `包含跨大版本候选：${crossLinePkgs.join(', ')}；确认兼容性后传 allowCrossLine=true 或用计划逐个人工处理`,
-      { crossLine: crossLinePkgs }
+      { code: 'cross-line-denied', crossLine: crossLinePkgs }
     );
   }
 
@@ -806,7 +923,7 @@ export function applyUpgradePlan(
   for (const item of selected) {
     const applied = applyUpgrade(text, toCandidate(plan, item));
     if (!applied) {
-      return fail(`无法定位 ${item.packageName}，已中止且未改动 pom`);
+      return fail(`无法定位 ${item.packageName}，已中止且未改动 pom`, { code: 'locate-failed' });
     }
     text = applied.text;
     applied.changes.forEach((change) => changed.push({ label: change.label, old: change.old, new: change.new }));
@@ -815,7 +932,7 @@ export function applyUpgradePlan(
   const hashAfter = hashText(text);
   const wholePlan = appliedBefore.size === 0 && selected.length === plan.candidates.length;
   if (wholePlan && hashAfter !== plan.pomHashAfter) {
-    return fail(`应用结果与计划不一致（${hashAfter} ≠ ${plan.pomHashAfter}）`);
+    return fail(`应用结果与计划不一致（${hashAfter} ≠ ${plan.pomHashAfter}）`, { code: 'plan-mismatch' });
   }
 
   const patch = unifiedDiff(original, text);
@@ -878,8 +995,58 @@ export function applyUpgradePlan(
   };
 }
 
+/** 回滚（对外入口）：执行 core 并把结果、回滚前的步骤轨迹一起写进事件流 */
+export function revertUpgradePlan(
+  root: string,
+  planId?: string,
+  options?: { source?: UpgradeEventSource }
+): RevertPlanResult {
+  const eventSource = options?.source ?? 'unknown';
+  const startedAt = Date.now();
+  let resolvedId = planId ?? '';
+  let steps: UpgradeEventStep[] = [];
+  try {
+    resolvedId = readUpgradePlan(root, planId).planId;
+    steps = readSteps(root, resolvedId);
+  } catch {
+    // 读取失败时交给 core 抛同样的错
+  }
+  let result: RevertPlanResult;
+  try {
+    result = revertUpgradePlanCore(root, planId);
+  } catch (error) {
+    appendUpgradeEvent(root, {
+      planId: resolvedId,
+      action: 'revert.fail',
+      source: eventSource,
+      ok: false,
+      code: 'exception',
+      reason: error instanceof Error ? error.message : String(error),
+      durationMs: Date.now() - startedAt
+    });
+    throw error;
+  }
+  const appliedBefore = new Set(steps.flatMap((step) => step.packages)).size;
+  appendUpgradeEvent(root, {
+    planId: result.planId,
+    action: result.ok ? 'revert.ok' : 'revert.fail',
+    source: eventSource,
+    ok: result.ok,
+    code: result.code,
+    reason: result.reason,
+    hashBefore: result.hashBefore,
+    hashAfter: result.hashAfter,
+    durationMs: Date.now() - startedAt,
+    // steps.json 会被清空，这里留档，revert 之后仍能复盘走了哪几步
+    steps: result.ok ? steps : undefined,
+    stats: { applied: appliedBefore }
+  });
+  refreshUpgradeIndex(root);
+  return result;
+}
+
 /** 回滚：把 pom 恢复到计划生成前的快照；当前内容必须与最后一次落盘一致才允许回滚 */
-export function revertUpgradePlan(root: string, planId?: string): RevertPlanResult {
+function revertUpgradePlanCore(root: string, planId?: string): RevertPlanResult {
   const plan = readUpgradePlan(root, planId);
   const dir = path.join(planRoot(root), plan.planId);
   const backupFile = path.join(dir, 'pom.before.xml');
@@ -887,7 +1054,14 @@ export function revertUpgradePlan(root: string, planId?: string): RevertPlanResu
   const current = fs.readFileSync(pomFile, 'utf8');
   const hashBefore = hashText(current);
   if (!fs.existsSync(backupFile)) {
-    return { ok: false, planId: plan.planId, hashBefore, hashAfter: hashBefore, reason: '没有可回滚的快照（计划尚未落盘）' };
+    return {
+      ok: false,
+      planId: plan.planId,
+      hashBefore,
+      hashAfter: hashBefore,
+      code: 'no-snapshot',
+      reason: '没有可回滚的快照（计划尚未落盘）'
+    };
   }
   const steps = readSteps(root, plan.planId);
   const lastApplied = steps.length > 0 ? steps[steps.length - 1].hashAfter : plan.pomHashAfter;
@@ -897,6 +1071,7 @@ export function revertUpgradePlan(root: string, planId?: string): RevertPlanResu
       planId: plan.planId,
       hashBefore,
       hashAfter: hashBefore,
+      code: 'pom-drift',
       reason: `pom 已被手工改动（当前 ${hashBefore}，最后一次落盘 ${lastApplied}）；请先确认改动再回滚`
     };
   }
@@ -908,7 +1083,8 @@ export function revertUpgradePlan(root: string, planId?: string): RevertPlanResu
     planId: plan.planId,
     revertedAt: new Date().toISOString(),
     from: hashBefore,
-    to: hashText(restored)
+    to: hashText(restored),
+    steps
   });
   fs.rmSync(path.join(dir, 'applied.json'), { force: true });
   writeJson(stepFile(root, plan.planId), []);
