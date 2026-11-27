@@ -113,7 +113,23 @@ const checks = {
     h.includes("type: 'selectProject'") && !h.includes('全部项目'),
   projectHidesSingle: h.includes('projects.length <= 1') && h.includes("bar.style.display = 'none'"),
   projectOnlyActive: h.includes('只扫描和操作当前项目') && h.includes('projectmeta'),
-  finalReport: h.includes('最终验收')
+  finalReport: h.includes('最终验收'),
+  finalResultCard: h.includes('本次修复结果') && h.includes('wz-result') &&
+    h.includes('state.final') && h.includes('bySource'),
+  finalResultExplainsLimits: h.includes('待授权 · ') && h.includes('跨大版本 · ') &&
+    h.includes('只报告 · ') && h.includes('超出可逆小改'),
+  finalResultDecisionActions: h.includes("data-wz=\"openPolicy\"") &&
+    h.includes("data-wz=\"openHandoff\"") && h.includes("data-wz=\"copyRemaining\"") &&
+    h.includes("data-wz=\"openFinalReport\"") && h.includes("data-wz=\"focusIssues\""),
+  finalResultProviderWiring: provider.includes("case 'openFinalReport'") &&
+    provider.includes("case 'copyRemaining'") && provider.includes('copyRemainingPrompt') &&
+    provider.includes('openFinalReport()'),
+  finalResultManualGuidance: h.includes('手动：打开升级预览逐项勾选') &&
+    h.includes('手动：按来源筛选问题') && h.includes('手动：在交接文件确认兼容性'),
+  finalResultEntry: h.includes("focus('查看结果', 'wizard')") &&
+    h.includes('项未自动处理'),
+  finalResultNotDuplicated: !h.includes('本次 AI 修复已生成最终验收（') &&
+    h.includes('最终验收的明细由下方结果卡展示')
 };
 console.log(checks);
 if (Object.values(checks).some((value) => !value)) {

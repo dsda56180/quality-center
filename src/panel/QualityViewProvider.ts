@@ -277,7 +277,13 @@ function readFinalSummary(
       planTotal: plan.total !== undefined ? Number(plan.total) : undefined,
       buildOk: build.ok === undefined ? undefined : build.ok === true,
       tests: typeof tests === 'string' ? tests : tests?.state,
-      reportFile: raw.reportFile ? String(raw.reportFile) : '.quality-center/final-report.json'
+      reportFile: raw.reportFile ? String(raw.reportFile) : '.quality-center/final-report.json',
+      bySource:
+        delta.bySource && typeof delta.bySource === 'object'
+          ? (delta.bySource as Record<string, { before: number; after: number; change: number }>)
+          : undefined,
+      newlyVisible: Array.isArray(delta.newlyVisible) ? delta.newlyVisible.map((item: unknown) => String(item)) : [],
+      blocked: Array.isArray(raw.blocked) ? raw.blocked.map((item: unknown) => String(item)) : []
     };
   } catch {
     return undefined;
@@ -812,6 +818,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case 'openReport':
         await this.openScanReport();
+        break;
+      case 'openFinalReport':
+        await this.openFinalReport();
+        break;
+      case 'copyRemaining':
+        await this.copyRemainingPrompt();
         break;
       case 'open':
         if (message.file) {
@@ -3610,7 +3622,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       }
     }
     const run = root ? runSnapshot(root) : undefined;
-    const final = root ? readFinalSummary(root, run) : undefined;
+    const finalRaw = root ? readFinalSummary(root, run) : undefined;
+    // 收尾后又生成了新计划：旧验收不再代表当前计划，避免结果卡和下一步混用两套数字
+    const final =
+      finalRaw && next?.plan?.planId && finalRaw.planId && finalRaw.planId !== next.plan.planId
+        ? undefined
+        : finalRaw;
     const activeProject = this.projects.find((project) => project.id === this.activeProjectId);
     const projectSummaries = this.projects.map((project) => {
       const summary = this.readProjectSummary(project);
@@ -3766,6 +3783,116 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   /** 在编辑器页签打开本次扫描报告；面板按钮与扫描完成共用 */
+  async openFinalReport(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      void vscode.window.showInformationMessage('还没有打开的项目。');
+      return;
+    }
+    const reportPath = path.join(root, '.quality-center', 'final-report.md');
+    if (!fs.existsSync(reportPath)) {
+      void vscode.window.showInformationMessage('还没有最终验收报告；先让 AI 调用 quality_finalize。');
+      return;
+    }
+    try {
+      await vscode.commands.executeCommand('markdown.showPreview', vscode.Uri.file(reportPath));
+      try {
+        await vscode.commands.executeCommand('markdown.preview.refresh');
+      } catch {
+        // 旧版编辑器没有 refresh 命令时忽略
+      }
+      return;
+    } catch {
+      // 没有 Markdown 预览扩展时退回纯文本页签
+    }
+    try {
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(reportPath));
+      await vscode.window.showTextDocument(document, { preview: true, preserveFocus: true });
+    } catch (err) {
+      void vscode.window.showWarningMessage(`无法打开最终验收报告：${(err as Error).message}`);
+    }
+  }
+
+  /** 把“为什么没修、下一步是谁来做”写成一段可粘贴给 AI 的收尾续跑指令 */
+  private async copyRemainingPrompt(): Promise<void> {
+    const root = this.runner.root();
+    if (!root) {
+      void vscode.window.showInformationMessage('还没有打开的项目。');
+      return;
+    }
+    const next = buildNextAction(root, { writeHandoff: false });
+    const issues = this.runner.result?.issues ?? [];
+    const counts = {
+      trivy: issues.filter((issue) => issue.source === 'trivy').length,
+      spotbugs: issues.filter((issue) => issue.source === 'spotbugs').length,
+      astgrep: issues.filter((issue) => issue.source === 'astgrep').length,
+      qcsec: issues.filter((issue) => issue.source === 'qcsec').length,
+      gitleaks: issues.filter((issue) => issue.source === 'gitleaks').length,
+      checkstyle: issues.filter((issue) => issue.source === 'checkstyle').length
+    };
+    const plan = next.plan;
+    const policy = (plan?.skipped ?? []).filter(
+      (item) => item.decision === 'policy-denied' || /dependencyManagement|策略未授权/.test(item.reason || '')
+    );
+    const crossLine =
+      plan?.nextGroup === 'cross-line' && (plan.groups.find((group) => group.name === 'cross-line')?.applied ?? 0) === 0
+        ? (plan.candidates ?? []).filter((item) => item.group === 'cross-line')
+        : [];
+    let finalText = '';
+    try {
+      const raw = JSON.parse(
+        fs.readFileSync(path.join(root, '.quality-center', 'final-report.json'), 'utf8')
+      ) as Record<string, any>;
+      const baseline = raw.baseline as { total?: number } | undefined;
+      const current = raw.current as { total?: number } | undefined;
+      const delta = raw.delta as { added?: number; removed?: number; totalChange?: number } | undefined;
+      const build = raw.build as { ok?: boolean; tests?: { state?: string } } | undefined;
+      if (baseline && current) {
+        finalText =
+          `- 收尾口径：${baseline.total ?? 0} → ${current.total ?? 0} 项（` +
+          `${(delta?.totalChange ?? 0) >= 0 ? '+' : ''}${delta?.totalChange ?? 0}；` +
+          `消失 ${delta?.removed ?? 0} / 新增 ${delta?.added ?? 0}）\n` +
+          `- 构建：${build?.ok === true ? '通过' : '未通过或未记录'}；测试：${build?.tests?.state ?? 'unknown'}\n`;
+      }
+    } catch {
+      finalText = '- 收尾报告尚未生成；先调用 quality_finalize，不要自己数。\n';
+    }
+
+    const lines = [
+      '质量中心本轮 AI 收尾结果如下，请继续处理剩余项；不要重新全量扫描，不要手改 pom，不要跳过测试。',
+      finalText.trimEnd(),
+      `- 唯一状态机：${next.title}（action=${next.action}）`,
+      next.command ? `- 当前唯一命令：${next.command}` : '- 当前无需自动写入；剩余项按下面分类处理。',
+      '',
+      '剩余项与边界：',
+      `- 待授权间接依赖 ${policy.length} 项：这些包由其他依赖带入，当前策略未授权写 dependencyManagement。不要手改 pom；先在面板「处理待决定」按项授权，或升级引入它们的直接依赖。`,
+      ...policy.slice(0, 8).map(
+        (item) =>
+          `  · ${item.packageName} ${item.installedVersion ?? '?'} → ${item.fixedVersion ?? '?'}` +
+          `${item.cveCount ? `（${item.cveCount} CVE）` : ''}：${item.reason}`
+      ),
+      crossLine.length
+        ? `- 跨大版本 ${crossLine.length} 项：默认不写；只有用户明确确认兼容性后才允许 --allow-cross-line。`
+        : '',
+      ...crossLine.slice(0, 6).map(
+        (item) => `  · ${item.packageName} ${item.from} → ${item.to}${item.cveCount ? `（${item.cveCount} CVE）` : ''}`
+      ),
+      `- 只报告、需人工判断：依赖漏洞 ${counts.trivy}、SpotBugs ${counts.spotbugs}、AST ${counts.astgrep}、配置安全 ${counts.qcsec}、密钥 ${counts.gitleaks}、代码质量 ${counts.checkstyle}。`,
+      '- 静态/安全项里涉及防御性拷贝、构造器注入、权限模型、输入校验、架构调整的，不要为了减少数量强行改；按 quality_center 的 scope 做局部可逆修复，超出边界就列为人工项。',
+      '- 密钥：不读、不打印、不提交原值；只报位置和轮换建议，轮换与历史清理由人完成。',
+      '',
+      '执行要求：',
+      '1. 先调用 quality_next 读取最新 state / action / blockers；以它为准，不要沿用上一轮判断。',
+      '2. 允许写入的组：quality_upgrade_apply，每组之后 quality_build；失败先 quality_explain，同一组两次失败 quality_upgrade_revert 并停。',
+      '3. 静态修复：quality_phase(static_fix) 或 quality_fix，只做可逆小改；每 20 条或 10 分钟 quality_build 一次。',
+      '4. 最后 quality_scan 全量复扫 → quality_finalize；汇报修复前/后、剩余与阻塞、改动文件、仍需人工的条目。',
+      '5. 遇到 needs-confirm / blocked / 跨大版本 / 密钥轮换，停下来问用户，不要绕过。'
+    ].filter((line) => line !== '');
+
+    await vscode.env.clipboard.writeText(`${lines.join('\n')}\n`);
+    void vscode.window.showInformationMessage('已复制剩余项与边界，可直接粘贴给 AI 继续修复。');
+  }
+
   async openScanReport(): Promise<void> {
     const root = this.runner.root();
     const text = this.markdown();

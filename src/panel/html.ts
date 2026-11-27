@@ -132,6 +132,10 @@ export interface Snapshot {
     buildOk?: boolean;
     tests?: string;
     reportFile?: string;
+    /** 按来源的修复前/后，用于在结果卡里直接看“哪一类降了多少” */
+    bySource?: Record<string, { before: number; after: number; change: number }>;
+    newlyVisible?: string[];
+    blocked?: string[];
   };
   /** 唯一状态机：现在到哪、下一步只做什么 */
   next?: SnapshotNext;
@@ -211,6 +215,7 @@ export function getHtml(nonce: string): string {
   }
   .head { flex: 0 0 auto; }
   #list { overflow: visible; }
+  #list.flash { outline: 2px solid var(--vscode-focusBorder, #3794ff); outline-offset: 3px; border-radius: 3px; }
   .projectbar {
     display: none; align-items: center; gap: 6px; margin: 0 0 7px;
     min-width: 0; font-size: 11px; color: var(--vscode-descriptionForeground);
@@ -518,6 +523,40 @@ export function getHtml(nonce: string): string {
   .wz-title { font-weight: 600; line-height: 1.45; }
   .wz-meta { margin-top: 3px; font-size: 11px; color: var(--vscode-descriptionForeground); }
   .wz-purpose { margin-top: 4px; font-size: 11px; line-height: 1.5; color: var(--vscode-foreground); opacity: .9; }
+  .wz-result {
+    margin-top: 8px; padding: 7px 8px; border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px; background: var(--vscode-sideBar-background, rgba(128,128,128,.04));
+    font-size: 10px; line-height: 1.5; overflow-wrap: anywhere;
+  }
+  .wz-result-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+  .wz-result-head strong { font-size: 11px; }
+  .wz-result-head .wz-result-sum { flex: none; font-weight: 600; color: var(--vscode-foreground); }
+  .wz-result-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 6px; }
+  .wz-result-cell {
+    min-width: 0; padding: 4px 5px; border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px; background: var(--vscode-editor-background, transparent);
+  }
+  .wz-result-cell .label { display: block; font-size: 9px; color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wz-result-cell .value { display: block; margin-top: 1px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .wz-result-cell .delta { font-weight: 400; font-size: 9px; color: var(--vscode-descriptionForeground); }
+  .wz-result-row { margin-top: 6px; padding-top: 5px; border-top: 1px dashed var(--vscode-panel-border); }
+  .wz-result-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; }
+  .wz-result-row-head strong { font-size: 10px; }
+  .wz-result-tag { padding: 0 4px; border-radius: 3px; background: rgba(210,153,34,.14); color: var(--vscode-editorWarning-foreground, #d29922); font-size: 9px; }
+  .wz-result-tag.info { background: rgba(56,139,253,.14); color: var(--vscode-textLink-foreground, #3794ff); }
+  .wz-result-why { margin-top: 2px; color: var(--vscode-descriptionForeground); }
+  .wz-result-list { margin-top: 3px; }
+  .wz-result-item { display: flex; gap: 4px; min-width: 0; }
+  .wz-result-item .pkg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wz-result-item .ver { flex: none; color: var(--vscode-descriptionForeground); }
+  .wz-result-more { margin-top: 4px; color: var(--vscode-descriptionForeground); }
+  .wz-result-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .wz-result-btn {
+    padding: 2px 7px; min-height: 22px; border: 1px solid var(--vscode-panel-border);
+    border-radius: 3px; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,.12));
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); font: inherit; font-size: 10px; cursor: pointer;
+  }
+  .wz-result-btn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.2)); }
   .wz-overview {
     margin-top: 8px; padding: 7px 8px; border: 1px solid var(--vscode-panel-border);
     border-radius: 6px; background: var(--vscode-sideBar-background, rgba(128,128,128,.04));
@@ -1498,10 +1537,13 @@ export function getHtml(nonce: string): string {
 
     if (state.final) {
       var f = state.final;
+      var finalPending = state.next && state.next.plan ? Number(state.next.plan.skippedCount || 0) : 0;
       add('info', '🧾 最终验收：' + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
         (f.totalChange >= 0 ? '+' : '') + f.totalChange + '，新增 ' + f.added + ' / 消失 ' + f.removed + '）' +
         (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
-        (f.tests === 'skipped' ? ' · ⚠ 构建跳过测试' : ''));
+        (finalPending ? ' · ' + finalPending + ' 项未自动处理' : '') +
+        (f.tests === 'skipped' ? ' · ⚠ 构建跳过测试' : ''),
+        focus('查看结果', 'wizard'));
     }
     (state.errors || []).forEach(function (e) {
       add('warn', '⚠ ' + (SRC_LABEL[e.source] || e.source) + ' 扫描异常：' + esc(e.message));
@@ -1613,8 +1655,8 @@ export function getHtml(nonce: string): string {
     } else if (blankState === 'clean') {
       purpose = '最近一次扫描没有发现问题；改过 pom 或代码后再复扫确认。';
     } else if (state.final && (n.action === 'apply' || n.action === 'confirm')) {
-      purpose = '本次 AI 修复已生成最终验收（' + state.final.baselineTotal + ' → ' + state.final.currentTotal +
-        ' 项）；剩余组需你确认后才进入下一轮。';
+      // 最终验收的明细由下方结果卡展示，这里不再重复一遍数字
+      purpose = '';
     } else if (n.action === 'plan') {
       purpose = upgradeFlow
         ? '只显示依赖升级相关内容；先看提醒和待决定项，再生成计划。'
@@ -1679,6 +1721,120 @@ export function getHtml(nonce: string): string {
           ? n.plan.total + ' 个依赖 · ' + (n.plan.cveTotal || 0) + ' 漏洞 · ' + n.plan.appliedCount + '/' + n.plan.total
           : depCount + ' 条漏洞 · 未生成计划') + '</span></div>' + depBody + '</div>' +
         '</div></details>';
+    }
+    var crossLineGroup = n.plan && n.plan.groups
+      ? n.plan.groups.filter(function (group) { return group.name === 'cross-line'; })[0]
+      : null;
+    var crossLineItems = n.plan && n.plan.candidates
+      ? n.plan.candidates.filter(function (item) { return item.group === 'cross-line'; })
+      : [];
+    var finalBlock = '';
+    if (state.final) {
+      var f = state.final;
+      var bySource = f.bySource || {};
+      var sourceOrder = [
+        { key: 'trivy', label: '依赖漏洞' },
+        { key: 'checkstyle', label: '代码质量' },
+        { key: 'spotbugs', label: '静态缺陷' },
+        { key: 'qcsec', label: '配置安全' },
+        { key: 'astgrep', label: '语义规则' },
+        { key: 'gitleaks', label: '密钥泄露' }
+      ];
+      var resultCells = sourceOrder.map(function (source) {
+        var item = bySource[source.key];
+        var before = item ? Number(item.before || 0) : 0;
+        var after = item ? Number(item.after || 0) : 0;
+        var change = item ? Number(item.change || 0) : 0;
+        if (before === 0 && after === 0) return '';
+        return '<div class="wz-result-cell"><span class="label">' + esc(source.label) + '</span>' +
+          '<span class="value">' + after + '<span class="delta">' +
+          (change < 0 ? ' ↓' + Math.abs(change) : change > 0 ? ' ↑' + change : ' 不变') +
+          '</span></span></div>';
+      }).filter(Boolean).join('');
+      var planLine = f.planId
+        ? '计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0)
+        : '';
+      var buildLine = f.buildOk === true
+        ? '构建通过' + (f.tests === 'skipped' ? '（⚠ 跳过测试）' : f.tests === 'executed' ? '（测试已执行）' : '')
+        : f.buildOk === false ? '构建未通过' : '';
+      var reportOnly = staticCount + secretCount + astgrepCount + checkstyleCount;
+      var policyRows = policySkipped.slice(0, 4).map(function (item) {
+        return '<div class="wz-result-item"><span class="pkg">' + esc(item.packageName) + '</span>' +
+          '<span class="ver">' + esc(item.installedVersion || '?') + ' → ' + esc(item.fixedVersion || '?') + '</span></div>';
+      }).join('');
+      var crossRows = crossLineItems.slice(0, 4).map(function (item) {
+        return '<div class="wz-result-item"><span class="pkg">' + esc(item.packageName) + '</span>' +
+          '<span class="ver">' + esc(item.from || '?') + ' → ' + esc(item.to) + '</span></div>';
+      }).join('');
+      var reportRows = [];
+      if (spotbugsCount) reportRows.push('SpotBugs ' + spotbugsCount + '：防御性拷贝、构造器注入、业务语义判断，超出可逆小改');
+      if (qcsecCount) reportRows.push('配置安全 ' + qcsecCount + '：暴露面与凭证策略要按部署环境决定');
+      if (astgrepCount) reportRows.push('AST ' + astgrepCount + '：权限模型、输入校验、安全设计要业务判断');
+      if (secretCount) reportRows.push('密钥 ' + secretCount + '：AI 不读原值，先轮换再改配置引用');
+      if (checkstyleCount) reportRows.push('代码质量 ' + checkstyleCount + '：未命中确定性修复清单，需人工复核');
+      var nextText = '';
+      if (policySkipped.length && crossLineItems.length) {
+        nextText = '先按项授权间接依赖，再确认跨大版本；两步都不跳过。';
+      } else if (policySkipped.length) {
+        nextText = '先处理待授权间接依赖；授权后重新生成计划，不手改 pom。';
+      } else if (crossLineItems.length) {
+        nextText = '只剩跨大版本：确认兼容后显式允许写入，或把它留到下一轮。';
+      } else if (reportOnly) {
+        nextText = '剩余是需人工判断的静态/安全项：可复制给 AI 按范围修，或手动逐项处理。';
+      } else {
+        nextText = '已无自动写入项；复扫验收后即可收尾。';
+      }
+      var resultActions = '';
+      if (policySkipped.length) {
+        resultActions += '<button class="wz-result-btn" data-wz="openPolicy">处理待授权 ' + policySkipped.length + ' 项</button>';
+      }
+      if (crossLineItems.length) {
+        resultActions += '<button class="wz-result-btn" data-wz="openHandoff">查看跨大版本说明</button>';
+      }
+      resultActions += '<button class="wz-result-btn" data-wz="copyRemaining">复制剩余项给 AI</button>' +
+        '<button class="wz-result-btn" data-wz="openFinalReport">查看最终报告</button>' +
+        '<button class="wz-result-btn" data-wz="focusIssues">手动逐项处理</button>';
+      var resultRows = '';
+      if (policySkipped.length) {
+        resultRows += '<div class="wz-result-row"><div class="wz-result-row-head">' +
+          '<strong>待授权 · ' + policySkipped.length + ' 项间接依赖</strong><span class="wz-result-tag">不会自动改</span></div>' +
+          '<div class="wz-result-why">由其他依赖带入，当前策略未授权写 dependencyManagement；不授权就只能保留这些 CVE。授权只写版本锁定，不改业务代码。手动：打开升级预览逐项勾选，授权后重新生成计划。</div>' +
+          '<div class="wz-result-list">' + policyRows + '</div>' +
+          (policySkipped.length > 4 ? '<div class="wz-result-more">另有 ' + (policySkipped.length - 4) + ' 项在授权预览里逐项勾选。</div>' : '') +
+          '</div>';
+      }
+      if (crossLineItems.length) {
+        resultRows += '<div class="wz-result-row"><div class="wz-result-row-head">' +
+          '<strong>跨大版本 · ' + crossLineItems.length + ' 项</strong><span class="wz-result-tag">需你确认</span></div>' +
+          '<div class="wz-result-why">升级会改变 API、驱动协议或依赖基线；插件默认不写，避免一升就炸。先确认 JDK / 框架兼容性，再显式允许。手动：在交接文件确认兼容性后，单独执行这一组并显式允许跨版本。</div>' +
+          '<div class="wz-result-list">' + crossRows + '</div>' +
+          (crossLineItems.length > 4 ? '<div class="wz-result-more">另有 ' + (crossLineItems.length - 4) + ' 项，见升级计划明细。</div>' : '') +
+          '</div>';
+      }
+      if (reportOnly) {
+        resultRows += '<div class="wz-result-row"><div class="wz-result-row-head">' +
+          '<strong>只报告 · ' + reportOnly + ' 项需人工判断</strong><span class="wz-result-tag info">按边界保留</span></div>' +
+          '<div class="wz-result-why">这些不是“漏修”，是 AI 按可逆小改边界主动留下的；强行改会引入业务语义或安全风险。手动：按来源筛选问题，打开文件行修改；密钥先轮换再改引用。</div>' +
+          '<div class="wz-result-list">' + reportRows.map(function (line) {
+            return '<div class="wz-result-why">· ' + esc(line) + '</div>';
+          }).join('') + '</div></div>';
+      }
+      finalBlock = '<div class="wz-result">' +
+        '<div class="wz-result-head"><strong>本次修复结果</strong>' +
+        '<span class="wz-result-sum">' + f.baselineTotal + ' → ' + f.currentTotal + ' · ' +
+        (f.totalChange >= 0 ? '+' : '') + f.totalChange + '</span></div>' +
+        '<div class="wz-result-why">消失 ' + f.removed + ' / 新增 ' + f.added +
+        (planLine ? ' · ' + planLine : '') + (buildLine ? ' · ' + buildLine : '') + '</div>' +
+        (resultCells ? '<div class="wz-result-grid">' + resultCells + '</div>' : '') +
+        (f.newlyVisible && f.newlyVisible.length ? '<div class="wz-result-why">首次可见（不是回归）：' + esc(f.newlyVisible.join(', ')) + '</div>' : '') +
+        resultRows +
+        '<div class="wz-result-row"><div class="wz-result-row-head"><strong>下一步怎么做</strong></div>' +
+        '<div class="wz-result-why">' + esc(nextText) + '</div>' +
+        '<div class="wz-result-why">AI 继续修：点「复制剩余项给 AI」，提示里已带上可写范围、构建门禁和不可越过的阻塞。</div>' +
+        '<div class="wz-result-why">手动修复：点「手动逐项处理」按来源筛选，代码/配置问题直接打开文件和行；密钥先轮换再改引用。</div>' +
+        '</div>' +
+        '<div class="wz-result-actions">' + resultActions + '</div>' +
+        '</div>';
     }
     var overview = '';
     if (hasData) {
@@ -1855,8 +2011,24 @@ export function getHtml(nonce: string): string {
         break;
       case 'apply':
       case 'confirm':
-        primary = btn('upgradeNext', '继续升级：' + label + (nextCount ? ' ' + nextCount + ' 项' : ''), true);
-        primaryHint = '写 pom 后自动编译；失败只停在当前组，可回滚。';
+        if (state.final) {
+          if (decisionCount) {
+            primary = btn('openPolicy', '先处理待授权 ' + decisionCount + ' 项', true);
+            primaryHint = '这些间接依赖不会自动写；按项授权后才重新生成计划。跨大版本留到下一步确认。';
+          } else if (n.plan && n.plan.nextGroup === 'cross-line') {
+            primary = btn('openHandoff', '确认跨大版本方案', true);
+            primaryHint = '跨大版本默认不写；交接文件里有范围、版本与需要确认的兼容性问题。';
+          } else if (reportOnly) {
+            primary = btn('copyRemaining', '让 AI 继续修剩余项', true);
+            primaryHint = '复制已限定的续跑提示：只做可逆小改，构建门禁和阻塞边界都在里面。';
+          } else {
+            primary = btn('upgradeNext', '继续升级：' + label + (nextCount ? ' ' + nextCount + ' 项' : ''), true);
+            primaryHint = '写 pom 后自动编译；失败只停在当前组，可回滚。';
+          }
+        } else {
+          primary = btn('upgradeNext', '继续升级：' + label + (nextCount ? ' ' + nextCount + ' 项' : ''), true);
+          primaryHint = '写 pom 后自动编译；失败只停在当前组，可回滚。';
+        }
         addRevert();
         break;
       case 'build':
@@ -1887,6 +2059,9 @@ export function getHtml(nonce: string): string {
         if (decisionCount) {
           primary = btn('openPolicy', '处理待决定 ' + decisionCount + ' 项', true);
           primaryHint = '只打开预览供你勾选授权；授权后重新生成计划，不直接改 pom。';
+        } else if (state.final && reportOnly) {
+          primary = btn('copyRemaining', '让 AI 继续修剩余项', true);
+          primaryHint = '复制剩余项与边界；AI 只做可逆小改，超出范围的继续列人工。';
         } else {
           primary = btn('scan', '重新扫描验收', true);
           primaryHint = '升级与验证已完成；复扫确认剩余项，再人工评估。';
@@ -1975,6 +2150,7 @@ export function getHtml(nonce: string): string {
       + (meta ? '<div class="wz-meta">' + esc(meta) + '</div>' : '')
       + overview
       + (purpose ? '<div class="wz-purpose">' + esc(purpose) + '</div>' : '')
+      + finalBlock
       + routeHead + gate + emptyBody + lockNote
       + (hubMode ? choiceHub : primaryRow + secondaryRow)
       + (upgradeFlow ? fixPlan : '')
@@ -2063,6 +2239,17 @@ export function getHtml(nonce: string): string {
       vscode.postMessage({ type: 'revertPlan' });
     } else if (key === 'openHandoff') {
       vscode.postMessage({ type: 'openHandoff' });
+    } else if (key === 'copyRemaining') {
+      vscode.postMessage({ type: 'copyRemaining' });
+    } else if (key === 'openFinalReport') {
+      vscode.postMessage({ type: 'openFinalReport' });
+    } else if (key === 'focusIssues') {
+      var list = document.getElementById('list');
+      if (list) {
+        list.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        list.classList.add('flash');
+        setTimeout(function () { list.classList.remove('flash'); }, 900);
+      }
     } else if (key === 'copyDrive') {
       vscode.postMessage({ type: 'copyDrivePrompt' });
     } else if (key === 'install-mvn') {
