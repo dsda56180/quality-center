@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.28.2
+
+- 升级过程留档：`plan` / `apply` / `revert` / 构建门禁各记一条事件到 `.quality-center/upgrade/upgrade-events.jsonl`，带来源（panel / cli / mcp / build）、前后哈希、包名、失败原因码与耗时
+- 新增 `.quality-center/upgrade/index.json`：汇总每个计划的状态（pending / partial / applied / reverted）、进度、分组与最后动作，跨会话可直接读
+- 门禁结果落 `<planId>/gates.json`；面板复扫事件记录升级前后依赖漏洞数与消除数，`qc build` / `quality_build` 命中活动计划时同样记门禁事件
+- 回滚不再丢轨迹：回滚前的 `steps` 快照写进事件与 `reverted.json`，`steps.json` 仍按原语义清空
+- `apply` 失败细分原因码（pom-drift / unknown-state / not-in-plan / cross-line-denied / policy-blocked / locate-failed / plan-mismatch），便于统计策略拒绝与定位问题
+- 新增 `quality-center upgrade log [目录] [--plan id] [--limit N] [--json]`，直接读事件流与计划索引；`verify:upgrade` 增加 14 项事件日志断言
+
 ## 0.28.1
 
 - AI 交接 prompt 的版本边界、框架目标、buildGate、分组顺序改为从 `plan.json` / `upgrade-policy.json` / `pom.xml` 推导，不再写死 Java 8 / 2.7.18 / package
