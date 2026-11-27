@@ -148,10 +148,6 @@ function findEditorExecutable(editor, meta) {
   return undefined;
 }
 
-function psQuote(value) {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
@@ -159,27 +155,45 @@ function shellQuote(value) {
 /**
  * 隔离到独立进程里等待父进程退出后再关闭编辑器。
  * 否则从编辑器内置终端执行本脚本时，关闭编辑器会把脚本自己一起杀掉，无法再启动。
+ *
+ * Windows 用 cmd + taskkill，而不是 PowerShell 的 CloseMainWindow：
+ * Trae 是多进程应用，CloseMainWindow 对没有主窗口的子进程可能不生效，
+ * 脚本会停在中间，安装完却看起来“没有重启”。这里改成有限次数强杀 + 等待 + 启动，
+ * 并把每一步写进 restart.log，失败时能直接定位。
  */
 function scheduleWindowsRestart(editor) {
   const meta = restartMeta(editor);
   const exe = findEditorExecutable(editor, meta);
   const names = meta.names.length > 0 ? meta.names : [meta.app];
+  const image = exe ? path.basename(exe) : `${names[0]}.exe`;
   const launch = exe
-    ? `Start-Process -FilePath ${psQuote(exe)}`
-    : `Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', ${psQuote(`"${editor.cli}"`)} -WindowStyle Hidden`;
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'qc-restart-')), 'restart.ps1');
+    ? `start "" "${exe}"`
+    : `start "" "${editor.cli}"`;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qc-restart-'));
+  const file = path.join(dir, 'restart.cmd');
+  const logFile = path.join(dir, 'restart.log');
+  const log = (message) => `echo [%date% %time%] ${message}>> "${logFile}"`;
   const script = [
-    'Start-Sleep -Seconds 2',
-    `$names = @(${names.map(psQuote).join(', ')})`,
-    'Get-Process -Name $names -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() } | Out-Null',
-    'Start-Sleep -Seconds 8',
-    'Get-Process -Name $names -ErrorAction SilentlyContinue | Stop-Process -Force',
-    'Start-Sleep -Seconds 3',
+    '@echo off',
+    'setlocal',
+    log('restart scheduled'),
+    'ping -n 3 127.0.0.1 >nul',
+    log(`killing ${image}`),
+    // 有限次数强杀：给 Trae 留出保存窗口状态的时间，又不至于无限等待
+    `for /L %%i in (1,1,6) do (`,
+    `  taskkill /IM "${image}" /F /T >nul 2>&1`,
+    '  ping -n 2 127.0.0.1 >nul',
+    ')',
+    log('all editor processes stopped'),
+    'ping -n 2 127.0.0.1 >nul',
+    log(`launching ${exe || editor.cli}`),
     launch,
-    `Remove-Item -LiteralPath ${psQuote(file)} -Force -ErrorAction SilentlyContinue`
+    log('restart finished'),
+    'endlocal',
+    `del "%~f0" >nul 2>&1`
   ].join('\r\n');
   fs.writeFileSync(file, script, 'utf8');
-  spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', file], {
+  spawn('cmd.exe', ['/c', file], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true
