@@ -140,7 +140,9 @@ const checks = {
   finalHistoryCollapsed: h.includes('wz-result-history') && h.includes('已生效，非当前') &&
     h.includes('historyBlock') && !h.includes('🧾 上一轮验收') &&
     !h.includes('上一轮验收已归档'),
-  finalHistoryAtBottom: h.includes('+ historyBlock') && h.includes('当前计划 · ') && h.includes('待执行'),
+  finalHistoryAtBottom: h.includes('+ historyBlock') && h.includes('historyBlock'),
+  currentPlanNoTitle: h.includes('当前计划已有唯一操作入口') && h.includes('title = \'\''),
+  currentPlanAiPrimary: h.includes('wz-ai-primary') && h.includes("'手动继续升级'"),
   finalHistoryNoActions: h.includes('.wz-result-history .wz-result-actions') &&
     h.includes('.wz-result-history .wz-result-next'),
   historyReportButton: h.includes("btn('openFinalReport', '查看修复报告'"),

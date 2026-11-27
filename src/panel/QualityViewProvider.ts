@@ -2771,8 +2771,15 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const previousBlock = previousLines.length
       ? `\n上一轮扫描留给用户确认的问题（历史参考，不要自行扩大授权）：\n${previousLines.join('\n')}\n`
       : '';
+    const confirmBlock = [
+      '',
+      '需确认项的交互规则：',
+      '- 依赖收敛、跨大版本、静态人工项不要只报告或直接跳过；先给「文件/依赖 + 拟改方案或 diff + 风险 + 回滚」，逐条或分批向用户确认。',
+      '- 用户在同一会话确认后，立即继续调用 quality_* 执行，不要要求用户重新复制指令或重新选择范围。',
+      '- 只有可逆的编码/防御性规范项才执行；安全设计、权限模型、架构重构只报告。密钥只报位置，不读原值。'
+    ].join('\n');
     await vscode.env.clipboard.writeText(
-      buildAgentPrompt(root, { mode: 'autopilot', scopes, minSeverity }) + previousBlock
+      buildAgentPrompt(root, { mode: 'autopilot', scopes, minSeverity }) + previousBlock + confirmBlock
     );
     const labelText = scopes.map((scope) => label[scope]).join(' + ');
     const severityText = minSeverity === 'info' ? '全部严重度' : `${severityLabel[minSeverity]}及以上`;
@@ -3979,7 +3986,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       '2. 允许写入的组：quality_upgrade_apply，每组之后 quality_build；失败先 quality_explain，同一组两次失败 quality_upgrade_revert 并停。',
       '3. 静态修复：quality_phase(static_fix) 或 quality_fix，只做可逆小改；每 20 条或 10 分钟 quality_build 一次。',
       '4. 最后 quality_scan 全量复扫 → quality_finalize；汇报修复前/后、剩余与阻塞、改动文件、仍需人工的条目。',
-      '5. 遇到 needs-confirm / blocked / 跨大版本 / 密钥轮换，停下来问用户，不要绕过。'
+      '5. 遇到 needs-confirm / blocked / 跨大版本 / 密钥轮换，停下来问用户；用户确认后立即继续执行，不要要求重新复制指令；不要绕过。'
     ].filter((line) => line !== '');
 
     await vscode.env.clipboard.writeText(`${lines.join('\n')}\n`);

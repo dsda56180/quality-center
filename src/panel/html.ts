@@ -898,6 +898,11 @@ export function getHtml(nonce: string): string {
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
   }
   .wz-scope-run:disabled { opacity: .45; cursor: not-allowed; }
+  .wz-ai-primary .wz-scope-run {
+    padding: 5px 10px; font-size: 11px; font-weight: 600;
+    background: #0e639c; color: #ffffff; border-color: #0e639c;
+  }
+  .wz-ai-primary .wz-scope-run:hover { background: #1177bb; border-color: #1177bb; }
   .wz-scope-note { margin-top: 5px; font-size: 9px; line-height: 1.4; color: var(--vscode-descriptionForeground); }
   .wz-plan > summary, .wz-fixplan > summary {
     cursor: pointer; list-style: none; user-select: none;
@@ -1710,6 +1715,11 @@ export function getHtml(nonce: string): string {
           (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
     }
     if (hubMode) title = '';
+    // 当前计划已有唯一操作入口：扫描总览已经给出 0/60 与 663，不再重复标题行
+    if (!hubMode && (n.action === 'apply' || n.action === 'confirm') && n.plan) {
+      title = '';
+      meta = '';
+    }
     var purpose = '';
     if (blankState === 'scan') {
       purpose = state.scanning
@@ -2081,9 +2091,9 @@ export function getHtml(nonce: string): string {
         static: {
           count: staticCount,
           auto: staticAutoCount,
-          confirm: 0,
+          confirm: qcsecCount,
           ai: spotbugsCount,
-          report: qcsecCount,
+          report: 0,
           auth: 0
         }
       };
@@ -2098,7 +2108,7 @@ export function getHtml(nonce: string): string {
         { key: 'secrets', label: '密钥', detail: '只报告 ' + scopeStats.secrets.report + '（先轮换）' },
         { key: 'static', label: '静态缺陷', detail:
           (scopeStats.static.auto ? '可自动 ' + scopeStats.static.auto + ' · ' : '') +
-          'AI 可试 ' + scopeStats.static.ai + ' · 人工 ' + scopeStats.static.report }
+          'AI 可试 ' + scopeStats.static.ai + ' · 待确认 ' + scopeStats.static.confirm }
       ];
       var validPick = scopeOptions.filter(function (o) { return scopeStats[o.key].count > 0 && scopePick.indexOf(o.key) >= 0; });
       var availableCount = scopeOptions.filter(function (o) { return scopeStats[o.key].count > 0; }).length;
@@ -2142,7 +2152,8 @@ export function getHtml(nonce: string): string {
         severitySelect +
         '</div>' +
         '<div class="wz-scope-truth" id="scopeTruth">' +
-        scopeTruthText(validPick.map(function (o) { return o.key; })) + '</div></div>';
+        scopeTruthText(validPick.map(function (o) { return o.key; })) + '</div>' +
+        '<div class="wz-scope-note">需确认项不会直接写入：AI 先给方案或 diff，等你确认后继续执行；密钥只报告。</div></div>';
     }
     var primary = '';
     var primaryHint = '';
@@ -2277,18 +2288,34 @@ export function getHtml(nonce: string): string {
     if (crossLineCount && n.plan && n.plan.nextGroup !== 'cross-line' && primaryHint) {
       primaryHint += ' 另有 ' + crossLineCount + ' 项跨大版本待确认，执行到该组前会停。';
     }
+    // 当前计划把 AI 范围处理作为主入口；手动写入降为“其他操作”，不再抢蓝色主按钮
+    var manualHint = '';
+    if ((n.action === 'apply' || n.action === 'confirm') && n.plan) {
+      manualHint = primaryHint;
+      var manualKey = decisionCount ? 'openPolicy'
+        : (n.plan.nextGroup === 'cross-line' ? 'openHandoff' : 'upgradeNext');
+      var manualText = decisionCount ? '手动处理待授权 ' + decisionCount + ' 项'
+        : (n.plan.nextGroup === 'cross-line' ? '手动确认跨大版本方案'
+          : '手动继续升级' + (label ? '：' + label : '') + (nextCount ? ' ' + nextCount + ' 项' : ''));
+      secondary.unshift(btn(manualKey, manualText, false));
+      primary = '';
+      primaryHint = '';
+    }
     var primaryRow = primary
       ? '<div class="wz-primary-row">' + primary +
         (primaryHint ? '<div class="wz-primary-hint">' + esc(primaryHint) + '</div>' : '') + '</div>'
       : '';
     var hasWriteSecondary = appliedCount > 0;
+    var secondaryNote = [manualHint, hasWriteSecondary ? '修改类操作会先打开预览，确认后才写入；失败可回滚。' : '']
+      .filter(function (line) { return !!line; }).join(' ');
     var secondaryRow = secondary.length
       ? '<div class="wz-section-label">' + (upgradeFlow ? '当前计划的其他操作' : '其他操作') +
         '</div><div class="wz-secondary">' + secondary.join('') + '</div>' +
-        (hasWriteSecondary ? '<div class="wz-secondary-hint">修改类操作会先打开预览，确认后才写入；失败可回滚。</div>' : '')
+        (secondaryNote ? '<div class="wz-secondary-hint">' + esc(secondaryNote) + '</div>' : '')
       : '';
     var aiScopeBlock = !hubMode && hasData && scopeBar
-      ? '<div class="wz-section-label">AI 处理 · 先选范围</div>' + scopeBar
+      ? '<div class="wz-section-label">AI 处理 · 先选范围</div>' +
+        scopeBar.replace('<div class="wz-ai">', '<div class="wz-ai wz-ai-primary">')
       : '';
     var deep = state.deepScan;
     var deepHint = '';
