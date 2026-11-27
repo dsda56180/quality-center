@@ -579,11 +579,17 @@ export function getHtml(nonce: string): string {
   .wz-result-history > summary::before { content: '▸'; margin-right: 5px; color: var(--vscode-descriptionForeground); }
   .wz-result-history[open] > summary::before { content: '▾'; }
   .wz-result-history > summary .wz-history-note { flex: none; color: var(--vscode-descriptionForeground); }
+  .wz-history-report {
+    flex: none; margin-left: 6px; padding: 1px 6px; font: inherit; font-size: 9px; cursor: pointer;
+    border: 1px solid var(--vscode-panel-border); border-radius: 3px;
+    background: var(--vscode-button-secondaryBackground, transparent);
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  }
+  .wz-history-report:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.2)); }
   .wz-result-history .wz-result { margin: 0; border: 0; border-top: 1px solid var(--vscode-panel-border); border-radius: 0 0 6px 6px; }
   /* 历史只用于回看：不保留“下一步”和旧计划按钮，避免与当前计划争主操作 */
   .wz-result-history .wz-result-actions,
   .wz-result-history .wz-result-next { display: none; }
-  .wz-result-history-tools { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 8px 0; }
   .wz-result-list { margin-top: 3px; }
   .wz-result-item { display: flex; gap: 4px; min-width: 0; }
   .wz-result-item .pkg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -839,19 +845,19 @@ export function getHtml(nonce: string): string {
   .wz-fixrow .fix-title { flex: 1 1 auto; min-width: 0; font-size: 10px; color: var(--vscode-foreground); }
   .wz-fixrow .fix-impact { flex: none; font-size: 9px; color: var(--vscode-descriptionForeground); }
   .wz-fixnote { margin-top: 4px; font-size: 10px; line-height: 1.5; color: var(--vscode-descriptionForeground); }
-  .wz-scope-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; max-width: 100%; }
+  .wz-scope-row { display: flex; flex-wrap: nowrap; gap: 4px; align-items: center; max-width: 100%; }
   .wz-sev {
     display: flex; align-items: center; gap: 4px; flex: 0 0 auto;
     font-size: 10px; color: var(--vscode-descriptionForeground);
   }
   .wz-sev select {
-    max-width: 108px; padding: 2px 4px; font-size: 10px; line-height: 1.3;
+    max-width: 84px; padding: 2px 3px; font-size: 10px; line-height: 1.3;
     background: var(--vscode-dropdown-background, var(--vscode-sideBar-background, transparent));
     color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
     border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
     border-radius: 4px;
   }
-  .wz-mode select { max-width: 96px; }
+  .wz-mode select { max-width: 84px; }
   .wz-scope-picker {
     position: relative; flex: 1 1 110px; width: auto; max-width: none; min-width: 0;
   }
@@ -1964,11 +1970,8 @@ export function getHtml(nonce: string): string {
         historyBlock = '<details class="wz-result-history">' +
           '<summary><span>上一轮修复结果 · ' + f.baselineTotal + ' → ' + f.currentTotal +
           (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
-          '</span><span class="wz-history-note">已生效，非当前' +
-          (state.scanning ? ' · 重扫中' : '') + '</span></summary>' +
-          '<div class="wz-result-history-tools">' +
-          btn('openFinalReport', '查看修复报告', false, 'wz-result-btn') +
-          '</div>' +
+          (state.scanning ? ' · 重扫中' : '') + '</span>' +
+          '<button class="wz-history-report" data-wz="openFinalReport">查看报告</button></summary>' +
           finalBlock + '</details>';
         finalBlock = '';
       }
@@ -2147,9 +2150,9 @@ export function getHtml(nonce: string): string {
         }).join('') +
         '</select></label>';
       var modeOptions = [
-        { key: 'safe', label: '只做可逆' },
-        { key: 'consult', label: '语义改动确认' },
-        { key: 'deep', label: '含跨版本确认' }
+        { key: 'safe', label: '仅可逆' },
+        { key: 'consult', label: '语义确认' },
+        { key: 'deep', label: '跨版本' }
       ];
       var modeSelect = '<label class="wz-sev wz-mode" title="策略只决定 AI 能提出到什么程度；非可逆项仍然先确认，不会直接写盘">' +
         '<span>策略</span><select id="modePick">' +
@@ -2165,7 +2168,7 @@ export function getHtml(nonce: string): string {
             (initialTotals.ai ? '静态缺陷可逐条尝试，AI 先给 diff，确认后才写入；' : '') +
             initialTotals.confirm + ' 项需确认，' + initialTotals.report + ' 项只报告' +
             (initialTotals.auth ? '，另有 ' + initialTotals.auth + ' 项待授权' : '')
-          : '当前范围没有可自动写入项；密钥只能报告位置，需先人工轮换') + '">AI 处理已选范围</button>' +
+          : '当前范围没有可自动写入项；密钥只能报告位置，需先人工轮换') + '">AI 处理</button>' +
         '<details class="wz-scope-picker"><summary><span class="pick-label">范围</span>' +
         '<span id="scopePickSummary">' + pickText + '</span>' +
         '<span class="wz-scope-caret" aria-hidden="true"></span></summary>' +

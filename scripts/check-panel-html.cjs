@@ -57,7 +57,7 @@ const checks = {
     h.includes('buildGate(false)') === false,
   routeBack: h.includes("btn('showRoutes'") && h.includes('wz-route-head') &&
     h.includes('升级计划明细'),
-  aiFirstHub: h.includes('wz-ai-first') && h.includes('AI 处理已选范围') &&
+  aiFirstHub: h.includes('wz-ai-first') && h.includes('>AI 处理</button>') &&
     !h.includes('为什么 AI 优先') && !h.includes('建议先交给 AI') && !h.includes('AI 负责编排'),
   aiFirstGreen: h.includes('border: 2px solid #3fb950'),
   primaryButtonsBlue: h.includes('#scan,') &&
@@ -137,7 +137,7 @@ const checks = {
   finalScanNotice: h.includes('正在重新扫描') && h.includes('扫描完成后刷新') &&
     h.includes('重扫中') && extension.includes('agentRunActive') &&
     provider.includes('agentRunActive(): boolean'),
-  finalHistoryCollapsed: h.includes('wz-result-history') && h.includes('已生效，非当前') &&
+  finalHistoryCollapsed: h.includes('wz-result-history') && h.includes('wz-history-report') &&
     h.includes('historyBlock') && !h.includes('🧾 上一轮验收') &&
     !h.includes('上一轮验收已归档'),
   finalHistoryAtBottom: h.includes('+ historyBlock') && h.includes('historyBlock'),
@@ -145,9 +145,11 @@ const checks = {
   currentPlanAiPrimary: h.includes('wz-ai-primary') && h.includes("'手动继续升级'"),
   finalHistoryNoActions: h.includes('.wz-result-history .wz-result-actions') &&
     h.includes('.wz-result-history .wz-result-next'),
-  historyReportButton: h.includes("btn('openFinalReport', '查看修复报告'"),
-  currentPlanAiScope: h.includes('AI 处理已选范围') && h.includes('+ aiScopeBlock') &&
+  historyReportButton: h.includes('wz-history-report') &&
+    h.includes('data-wz="openFinalReport">查看报告'),
+  currentPlanAiScope: h.includes('id="scopeCopyBtn"') && h.includes('+ aiScopeBlock') &&
     h.includes('wz-scope-picker'),
+  modePicker: h.includes('id="modePick"') && h.includes('repairMode'),
   currentPlanCrossLineConfirm: h.includes('项跨大版本待确认'),
   planMetaDistinctUnits: h.includes('升级计划 ') && h.includes('当前问题 '),
   scanSecondaryWhenResult: h.includes('#scan.secondary') && h.includes('重新扫描：刷新问题结果'),
