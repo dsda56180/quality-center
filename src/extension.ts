@@ -17,10 +17,7 @@ async function copyAgentPrompt(
   failure?: string,
   mode: 'assist' | 'drive' = 'assist'
 ): Promise<void> {
-  const text =
-    mode === 'drive'
-      ? '使用 quality-center MCP：先调用 quality_agent_brief（mode=autopilot）；先做一次目标确认，确认后连续执行到收尾，不要每步停下等我再发起。只有 JDK 11/17/21、Spring Boot 3 等硬阻塞再询问。没有 MCP 时运行 node .quality-center/bin/qc.cjs prompt . --drive 后照它执行。'
-      : buildAgentPrompt(root, { failure });
+  const text = buildAgentPrompt(root, { failure, mode: mode === 'drive' ? 'drive' : 'assist' });
   await vscode.env.clipboard.writeText(text);
   void vscode.window.showInformationMessage(
     mode === 'drive'

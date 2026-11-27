@@ -311,13 +311,14 @@
     "release": "node scripts/release.mjs",
     "publish:ovsx": "ovsx publish",
     "verify:upgrade": "node scripts/verify-upgrade.mjs",
+    "verify:prompt": "node scripts/check-prompt-facts.mjs",
     "verify:panel": "node scripts/check-panel-html.cjs",
     "verify:duplicates": "node scripts/check-duplicates.cjs",
     "verify:scope": "node scripts/check-agent-scopes.cjs",
     "verify:runstate": "node scripts/check-runstate.cjs",
     "verify:report": "node scripts/check-report.cjs",
     "verify:projects": "node scripts/check-projects.cjs",
-    "verify:all": "npm run compile && npm run verify:panel && npm run verify:duplicates && npm run verify:scope && npm run verify:runstate && npm run verify:report && npm run verify:projects && npm run verify:upgrade",
+    "verify:all": "npm run compile && npm run verify:panel && npm run verify:duplicates && npm run verify:scope && npm run verify:runstate && npm run verify:report && npm run verify:projects && npm run verify:upgrade && npm run verify:prompt",
     "pack": "node scripts/pack.mjs"
   },
   "devDependencies": {

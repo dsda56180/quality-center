@@ -32,7 +32,7 @@ import {
 import { digestScan } from './scanDigest';
 import { projectStatus } from './status';
 import { buildNextAction } from './nextAction';
-import { buildAgentPrompt, type AgentScope } from './agentPrompt';
+import { buildAgentFacts, buildAgentPrompt, type AgentScope } from './agentPrompt';
 import { explainBuildFailure } from './explain';
 import { finalizeRun } from './finalize';
 import {
@@ -214,7 +214,7 @@ const TOOLS: ToolDef[] = [
         mode: {
           type: 'string',
           enum: ['drive', 'autopilot'],
-          description: 'drive=先做 4 项启动前确认；autopilot=用户已一次性授权，默认 JDK8/package 门禁，不逐项提问，最后必须复扫'
+          description: 'drive=先做 4 项启动前确认；autopilot=用户已一次性授权，版本边界与门禁以 plan.json / upgrade-policy.json 为准，不逐项提问，最后必须复扫'
         },
         scope: {
           type: 'string',
@@ -462,6 +462,8 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       });
       return asText({
         scopes,
+        // 结构化事实：面板 / 其他 Agent 想直接读字段时不用解析 prompt 文本
+        facts: buildAgentFacts(root, { mode, scopes }),
         prompt: buildAgentPrompt(root, { mode, scopes }),
         next: next ?? null
       });

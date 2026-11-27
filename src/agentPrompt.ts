@@ -92,6 +92,11 @@ function higherJavaLines(source?: string): string {
   return lines.length ? lines.join('/') : '更高版本';
 }
 
+/** 下一步可能需要的 Java 大版本：已授权迁移时按目标级别算，避免又说“升到 11” */
+function nextJavaLine(facts: PromptFacts): string {
+  return higherJavaLines(facts.javaTarget ?? facts.javaSource);
+}
+
 function readPromptFacts(root: string, options: AgentPromptOptions): PromptFacts {
   let plan: UpgradePlanFile | undefined;
   try {
@@ -186,6 +191,67 @@ function gateLabel(facts: PromptFacts): string {
   return facts.runTests
     ? `buildGate=${facts.buildGate}（runTests=true，会真的跑测试）`
     : `buildGate=${facts.buildGate}（runTests=false，构建不跑测试，汇报必须注明测试未验证）`;
+}
+
+function propertyPhrase(facts: PromptFacts): string {
+  return facts.properties.length
+    ? `计划涉及的属性（${facts.properties.slice(0, 4).join('、')}）`
+    : '计划里的项目属性（以 plan.json 的 property 字段为准）';
+}
+
+/**
+ * 启动前确认项：prompt 与 brief(JSON) 共用这一份文案。
+ * 分成函数而不是各写一遍，面板、CLI、MCP 才不会出现两套边界。
+ */
+function confirmQuestions(facts: PromptFacts, mode: 'autopilot' | 'drive'): string[] {
+  if (mode === 'drive') {
+    return [
+      `1. JDK：计划按 ${boundaryLine(facts)}。生产/目标运行环境是否也是这个 JDK？若不是，按第 4 条冲突处理，不要直接停：先区分“只换运行 JDK”与“源码也升 JDK”。`,
+      `2. 门禁：是否接受策略里的 ${gateLabel(facts)}？是否允许跳过测试？默认不允许。`,
+      '3. 跨大版本：计划里的 cross-line 项是否本次处理？默认先不动，推进到该组再人工确认。',
+      `4. 属性与代码修复：${propertyPhrase(facts)}是否允许随框架 BOM 对齐？是否允许按 explain 做最小编译修复（例如删除无用 import）？`
+    ];
+  }
+  return [
+    '1. 目标范围：本次是否处理“静态代码 + 确定性修复 + 依赖/CVE 升级 + 依赖收敛”的全部可修复项（默认是），还是只修高危/CVE？',
+    `2. 版本边界：当前项目事实是 ${boundaryLine(facts)}；遇到必须升 JDK ${nextJavaLine(facts)} 或 Spring Boot 3.x 的项，是本次处理、跳过，还是先停下问用户（默认停下询问）？`,
+    `3. 门禁与权限：${gateLabel(facts)}、不改测试；允许项目属性覆盖和“删无用 import / 调整修饰符顺序 / 简化布尔比较”等最小代码修复；安全设计、密钥轮换、架构重构只报告不擅自改。是否接受？`
+  ];
+}
+
+export interface AgentFactsPayload {
+  /** 一句话边界：Java 级别 / 框架当前 → 目标 */
+  boundary: string;
+  javaSource?: string;
+  javaTarget?: string;
+  frameworkFrom?: string;
+  frameworkTarget?: string;
+  buildGate: string;
+  runTests: boolean;
+  groups: { name: string; label: string; count: number }[];
+  properties: string[];
+  planId?: string;
+  /** 启动前确认项，与 prompt 完全同源；assist 模式为空 */
+  confirmQuestions: string[];
+}
+
+/** 给面板 / CLI --json / MCP 的结构化事实；文案仍以 prompt 为准 */
+export function buildAgentFacts(root: string, options: AgentPromptOptions = {}): AgentFactsPayload {
+  const facts = readPromptFacts(root, options);
+  const mode = options.mode ?? 'assist';
+  return {
+    boundary: boundaryLine(facts),
+    javaSource: facts.javaSource,
+    javaTarget: facts.javaTarget,
+    frameworkFrom: facts.frameworkFrom,
+    frameworkTarget: facts.frameworkTarget,
+    buildGate: facts.buildGate,
+    runTests: facts.runTests,
+    groups: facts.groups,
+    properties: facts.properties,
+    planId: facts.plan?.planId,
+    confirmQuestions: mode === 'assist' ? [] : confirmQuestions(facts, mode)
+  };
 }
 
 function normalizeScopes(options: AgentPromptOptions): AgentScope[] {
@@ -352,9 +418,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
   if (autopilot) {
     lines.push(
       '启动前只做一次「目标确认」，一次问清下面 3 项，不要拆成多轮、不要逐项追问：',
-      '1. 目标范围：本次是否处理“静态代码 + 确定性修复 + 依赖/CVE 升级 + 依赖收敛”的全部可修复项（默认是），还是只修高危/CVE？',
-      `2. 版本边界：当前项目事实是 ${boundaryLine(facts)}；遇到必须升 JDK ${higherJavaLines(facts.javaSource)} 或 Spring Boot 3.x 的项，是本次处理、跳过，还是先停下问用户（默认停下询问）？`,
-      `3. 门禁与权限：${gateLabel(facts)}、不改测试；允许项目属性覆盖和“删无用 import / 调整修饰符顺序 / 简化布尔比较”等最小代码修复；安全设计、密钥轮换、架构重构只报告不擅自改。是否接受？`,
+      ...confirmQuestions(facts, 'autopilot'),
       '用户确认后：按下面默认参数连续执行到收尾，不再每一步征求同意，也不要在完成一个组后停下等用户再发起。',
       '只有出现硬阻塞时才再次询问；用户回答后继续剩余项，不要从头重来。',
       '',
@@ -376,23 +440,13 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
     lines.push(
       '启动前确认（第 0 步，必须先问用户并等待回答；未回答不得执行 apply）：',
       '先发一条简短的「开始前确认」，一次问清下面 4 项，不要逐项反复追问：',
-      `1. JDK：计划按 ${boundaryLine(facts)}。生产/目标运行环境是否也是这个 JDK？若不是，按第 4 条冲突处理，不要直接停：先区分“只换运行 JDK”与“源码也升 JDK”。`,
-      `2. 门禁：是否接受策略里的 ${gateLabel(facts)}？是否允许跳过测试？默认不允许。`,
-      '3. 跨大版本：计划里的 cross-line 项是否本次处理？默认先不动，推进到该组再人工确认。',
-      `4. 属性与代码修复：${
-        facts.properties.length
-          ? `计划涉及的属性（${facts.properties.slice(0, 4).join('、')}）`
-          : '计划里的项目属性（以 plan.json 的 property 字段为准）'
-      }是否允许随框架 BOM 对齐？是否允许按 explain 做最小编译修复（例如删除无用 import）？`,
+      ...confirmQuestions(facts, 'drive'),
       '若用户没有回答：停在 plan，不落盘，等用户补充。',
       '若用户回答与当前计划冲突：不要执行旧计划，也不要只回一句“冲突”；按下面的方式调整并给出新计划：',
-      `   - JDK：先区分“运行环境换 JDK，但源码仍按 ${facts.javaSource ? `Java ${facts.javaSource}` : '当前级别'} 编”与“源码也升到新 JDK/Boot 3.x”。前者确认 ${facts.frameworkTarget ?? '当前框架目标'} 可在该 JDK 运行即可，计划不变；后者必须改策略并重新生成计划。`,
-      '   - 源码升 JDK：在 `.quality-center/upgrade-policy.json` 写 `targetJavaVersion`（如 "17"），并在 `frameworkTargets` 里给同一 key 设目标框架（如 "17": "3.2.12"）；明确要 Boot 3.x 时同时设 `allowNextFrameworkLine=true`。',
-      '   - 门禁：按用户回答改 `buildGate`（compile / package / test），不要用命令行临时绕过。',
-      '   - 框架目标：按用户目标改 `frameworkTargets`；只有明确要跨到 Boot 3.x 时才设 `allowNextFrameworkLine=true`。',
-      '   - 跨大版本：把用户“本次做/不做”的结论记下来；不做就保留在计划里但停在 needs-confirm，不得自行加 `--allow-cross-line`。',
-      '   - 改完策略后运行 `qc upgrade plan .` 生成新计划（不要 `--reuse`），对比旧/新计划的目标版本、分组与 pom.diff，把差异告诉用户；旧计划保留，不删除。',
-      '   - 新计划生成后仍不要直接 apply：先让用户确认关键变化，再按 `qc next` 执行。',
+      `   - JDK：只换运行 JDK 时，确认 ${facts.frameworkTarget ?? '当前框架目标'} 可在该 JDK 运行，计划不变；源码也升时必须改策略并重新 plan。`,
+      '   - 源码升 JDK：在 `upgrade-policy.json` 写 `targetJavaVersion`，并在 `frameworkTargets` 里给同一 key 设框架目标；跨 Boot 3.x 才设 `allowNextFrameworkLine=true`。改完运行 `qc upgrade plan .`（不要 `--reuse`），对比新旧 diff。',
+      '   - 门禁：按用户回答改 `buildGate`（compile/package/test），不要命令行绕过。',
+      '   - 跨大版本：不做就停在 needs-confirm，不得自行加 `--allow-cross-line`。',
       ''
     );
   }
@@ -406,13 +460,9 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
 
   lines.push(
     '',
-    '事实源（按需读，不要重复搬运）：',
-    '- .quality-center/handoff.md（一页交接：做到哪、下一步、阻塞与规则）',
-    '- .quality-center/issues.json / report.md（或 MCP: quality_report format=json）',
-    '- .quality-center/upgrade-policy.json（框架上限、禁用依赖、构建门禁）',
-    '- .quality-center/skills/quality-center-java-upgrade/SKILL.md（判断类知识）',
+    '事实源（按需读，不要重复搬运）：handoff.md（状态、执行流程与规则）｜issues.json / report.md（问题）｜upgrade-policy.json（边界）｜skills/quality-center-java-upgrade/SKILL.md（判断）',
     `- 本次边界（来源：plan.json 与 upgrade-policy.json）：${boundaryLine(facts)}；${gateLabel(facts)}`,
-    '- 上面这行边界若与 `qc next` / handoff.md 冲突，一律以 next 为准：状态机是唯一事实，不要用本段覆盖它。'
+    '- 若上面这行与 `qc next` / handoff.md 冲突，一律以 next 为准：状态机是唯一事实。'
   );
 
   let planLine = '';
@@ -438,13 +488,11 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
   lines.push(
     '',
     '硬性规则：',
-    '1. 只通过 `node .quality-center/bin/qc.cjs upgrade apply`（或 MCP quality_upgrade_apply）写 pom；禁止手改、禁止 sed/批量替换版本号。',
+    '1. 只通过 `node .quality-center/bin/qc.cjs upgrade apply`（或 MCP）写 pom；禁止手改、禁止 sed/批量替换版本号。',
     `2. 一次只推进一组：${groupSequence(facts)}；这组构建没过，不开下一组。`,
-    '3. 每组之后：`node .quality-center/bin/qc.cjs build`（按策略 buildGate，失败先跑 `qc explain`）→ `qc upgrade check`；组后应为 partial 且 appliedCount 增加，全部组完成才是 applied。',
-    '4. 构建失败先 `node .quality-center/bin/qc.cjs explain .`（MCP quality_explain）：按原因/影响/建议处理；不要在失败上继续 apply 或换版本碰运气。',
-    '5. 跨大版本默认不写；要用户确认后才加 `--allow-cross-line`。',
-    '6. 同一组连续两次失败就停手：`qc upgrade revert` 回到计划前（注意不是单组回退），再说明两次失败的差异。',
-    '7. `upgrade check` 出现 drift 说明 pom 被手工改过：立刻停手，重新 `qc upgrade plan`。'
+    '3. 每组之后 build → upgrade check；失败先 explain，同组两次失败 revert（回到计划前）；细节见 handoff.md「规则」。',
+    '4. 跨大版本默认不写；要用户确认后才加 `--allow-cross-line`。',
+    '5. `upgrade check` 出现 drift：立刻停手，重新 plan。'
   );
 
   if (drive) {
@@ -479,31 +527,20 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
   if (autopilot) {
     lines.push(
       '',
-      '一次性执行流程（优先 MCP，工具不存在才用 CLI；不要每步问用户）：',
-      '阶段 1 基线：先 `quality_build` 建立 target（失败也记录，用 quality_explain 判断）→ `quality_scan`（全量）→ `quality_report format=summary` 记录修复前的总数、按来源/严重度计数。没有 target 时 trivy 只按源码解析、SpotBugs 为 0，基线与最终不可比。',
-      '阶段 2 确定性修复：`quality_fix write=true`；然后 `quality_build` 确认没有引入编译失败。',
-      `阶段 3 依赖升级：\`quality_upgrade_plan\`（必须先有当前 pom 的成功构建记录）→ 按 ${groupSequence(facts, { excludeCrossLine: true })} 逐组 \`quality_upgrade_apply write=true\` → 每组 \`quality_build\` → 失败先 \`quality_explain\`，同组两次失败 \`quality_upgrade_revert\` 并把该组列为阻塞。`,
-      '只允许一个升级计划：阶段 3 生成的计划必须一直用到收尾；阶段 5/6 不得再执行 `quality_upgrade_plan` 生成第二个计划。剩余 CVE 若需要新增 `<dependencyManagement>`，先看策略 `dependencyManagementAllowlist` 是否包含该 artifact；不在白名单就列为阻塞，提示用户在面板「查看未处理项」里按项授权，不要建议打开全局 `allowDependencyManagement`，不要手改 pom。',
-      'apply 一组后若 `quality_upgrade_check` 显示该组只落盘了一部分候选，视为不完整：立即 `quality_upgrade_revert` 该组并列为阻塞，不能把半组状态当作完成。',
-      '阶段 3.5 依赖收敛：读 `issues.json` 的 suggestions，只取 category=duplicate；先列每个能力类别的重复库、引用文件和迁移顺序，再按“先改代码、编译通过、最后删依赖”的顺序小步处理。不要自动删依赖，不要为了统一 JSON 重写业务序列化协议；BOM 项删除显式 version 后必须提示用 mvn dependency:tree 复核。每一类完成后 quality_build + quality_scan。',
-      '阶段 4 静态代码：先 `quality_phase phase=static_fix`（让面板知道已进入静态修复），再 `quality_report format=json` 取剩余问题；按 `.quality-center/skills/quality-center-java-upgrade/SKILL.md` 的判定，优先修有明确文件/行号、改动局部、可编译验证的 Checkstyle/SpotBugs/astgrep 问题；安全设计类、需要改架构或密钥轮换的只记录不擅自改。每修 20 条或每 10 分钟做一次 `quality_build`。',
-      '阶段 5 单问题复核：修完后 `quality_scan`（全量）→ `quality_report` 对比修复前/后；不要用旧 issues.json 冒充复验。',
-      '阶段 6 收尾：`quality_build` 一次最终构建；若升级计划仍有组未完成，`quality_upgrade_check` 确认没有 drift；最后调用 `quality_finalize` 生成插件口径的修复前/后、按来源变化、plan 进度、构建/测试状态与阻塞项，AI 只转述结果，不要自己数。',
-      '对比计数必须按来源（checkstyle / spotbugs / trivy / astgrep / qcsec / gitleaks）分别说明；基线没跑 SpotBugs、或最终才构建出 target 时，不能用总数直接比较，必须注明“新增可见项”而不是回归。',
-      '构建结果必须看 `tests`：`skipped` 时不能说“测试通过”；`drift=true` 时不能说“构建成功可验收”。',
+      '一次性执行流程（阶段流程；详细命令与判定见 handoff.md「执行流程」；以 `qc next` 的 action 为准）：quality_build 建基线 → quality_scan → quality_fix → quality_upgrade_plan/apply（逐组 build/check）→ 阶段 3.5 依赖收敛 → quality_phase(static_fix) → quality_scan 复核 → quality_finalize 收尾。',
+      '关键约束：只允许一个升级计划；需要新增 `<dependencyManagement>` 时先看策略白名单，不在白名单就列为阻塞；计数按来源分别说明；`tests=skipped` 不能说“测试通过”，`drift=true` 不能说“可验收”。',
       '',
       '硬阻塞（命中就停这一类，不要停整个流程）：',
-      `- 需要把源码 ${facts.javaSource ? `Java ${facts.javaSource}` : 'Java 级别'} 升到 ${higherJavaLines(facts.javaSource)}，或需要 Spring Boot 3.x / javax→jakarta；`,
+      `- 需要把源码 ${facts.javaSource ? `Java ${facts.javaSource}` : 'Java 级别'} 升到 ${nextJavaLine(facts)}，或需要 Spring Boot 3.x / javax→jakarta；`,
       `- 某 CVE 在当前 ${facts.javaSource ? `Java ${facts.javaSource}` : 'Java'} 下无兼容修复版本，或 cross-line 依赖只能靠大版本解决；`,
       '- 构建失败无法用 quality_explain 归因，或测试失败是代码语义变化导致；',
       '- 密钥/凭证泄露需要轮换、权限模型需要产品决策、需要大范围重构。',
       '命中硬阻塞时：先问用户“这一项本次处理 / 跳过 / 先记录”，不要强行改 source/target、不要跳测试、不要 --allow-cross-line；用户回答后继续其他可修项，最后统一汇总。用户不回答则跳过该项并在最终汇总里列出。',
       '',
       '用户沟通规则：',
-      '- 除了启动目标确认和硬阻塞，过程不提问；每完成一个阶段只输出一行进度（阶段、已修数、构建结果）。',
-      '- 确认后一次执行到底，不要每完成一组就停下来等用户再次发起。',
-      '- 只有上述硬阻塞出现时才明确说“这一项需要升级 JDK/框架或人工决策”，其余情况继续执行。',
-      '- 最终必须给出一份汇总：修复前 → 修复后、按来源变化、剩余与阻塞、改动文件、复验命令；不要只说“已完成”。'
+      '- 除目标确认与硬阻塞外不提问；每个阶段只报一行：阶段、已修数、构建结果。',
+      '- 不要每完成一组就停下来等用户再次发起；确认后一次执行到底。',
+      '- 最终汇总：修复前 → 修复后（按来源）、剩余与阻塞、改动文件、复验命令；不要只说“已完成”。'
     );
   }
 

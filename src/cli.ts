@@ -32,7 +32,7 @@ import { projectStatus } from './status';
 import { buildNextAction } from './nextAction';
 import { explainBuildFailure } from './explain';
 import { integrate } from './integrate';
-import { buildAgentPrompt, type AgentScope } from './agentPrompt';
+import { buildAgentFacts, buildAgentPrompt, type AgentScope } from './agentPrompt';
 import { beginRun, beginTool, endTool, finishRun, readRunState, setRunActor } from './runState';
 
 const HELP = `质量中心（quality-center）命令行 —— 给 AI agent 与 CI 用的无界面接口
@@ -682,7 +682,7 @@ async function promptCommand(args: Args): Promise<number> {
   }
   const prompt = buildAgentPrompt(root, { mode, planId, failure, scopes: effectiveScopes });
   if (args.flags['--json'] === true) {
-    process.stdout.write(`${JSON.stringify({ mode, scopes: effectiveScopes, planId: planId ?? null, root, prompt }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ mode, scopes: effectiveScopes, planId: planId ?? null, root, facts: buildAgentFacts(root, { mode, planId, scopes: effectiveScopes }), prompt }, null, 2)}\n`);
   } else {
     process.stdout.write(`${prompt}\n`);
   }

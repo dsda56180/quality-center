@@ -664,13 +664,32 @@ export function handoffMarkdown(root: string, next: NextActionPayload): string {
   }
 
   lines.push(
+    '## 执行流程（用户一次性授权时按此执行）',
+    '',
+    '> 以下 `qc` 指 `node .quality-center/bin/qc.cjs`；状态机仍是 `qc next`，两者冲突时以 next 为准。',
+    '',
+    '1. 基线：`qc build` 建立 target（失败也记录，用 `qc explain` 判断）→ `qc scan --json` → `qc report --format summary`，记录修复前按来源计数。没有 target 时 trivy 只按源码解析、SpotBugs 为 0，基线与最终不可比。',
+    '2. 确定性修复：`qc fix --write` → `qc build` 确认没有引入编译失败。',
+    '3. 依赖升级：`qc upgrade plan --reuse`（必须先有当前 pom 的成功构建记录）→ 按分组 `upgrade apply --write` → `qc build` → `qc upgrade check`；失败先 explain，同组两次失败 revert 并列为阻塞。',
+    '4. 依赖收敛：读 issues.json 的 category=duplicate 建议；先改代码、编译通过、最后删依赖；不自动删依赖，不为统一 JSON 重写业务序列化协议；BOM 项删除显式 version 后提示用 mvn dependency:tree 复核。',
+    '5. 静态代码：`qc phase static_fix` → `qc report --format json` → 局部修复；每 20 条或 10 分钟 `qc build`。',
+    '6. 复核收尾：全量 `qc scan` → `qc report` 对比（不要用旧 issues.json 冒充复验）→ 最终 `qc build` → `qc upgrade check` → `qc finalize`。',
+    '',
+    '- 只允许一个升级计划；需要新增 `<dependencyManagement>` 时先看策略白名单，不在白名单就列为阻塞。',
+    '- 计数按来源（checkstyle / spotbugs / trivy / astgrep / qcsec / gitleaks）分别说明；`tests=skipped` 不能说“测试通过”，`drift=true` 不能说“可验收”。',
+    ''
+  );
+
+  lines.push(
     '## 规则（硬性）',
     '',
     '1. 只通过 `qc upgrade apply` 写 pom；禁止手改、禁止批量替换版本号。',
     '2. 一次只推进一组；这组构建没过，不许开下一组。',
-    '3. 构建失败先 `qc explain`，再决定修代码还是整体回滚；不要在失败上继续叠改动。',
-    '4. 跨大版本默认不写，必须人工确认后才加 `--allow-cross-line`。',
-    '5. `upgrade check` 出现 drift 说明 pom 被手工改过：停手，重新 plan。',
+    '3. 每组之后：`qc build`（按策略 buildGate）→ `qc upgrade check`；组后应为 partial 且 appliedCount 增加，全部组完成才是 applied。',
+    '4. 构建失败先 `qc explain`，再决定修代码还是整体回滚；不要在失败上继续叠改动。',
+    '5. 同一组连续两次失败：`qc upgrade revert` 回到计划前（不是单组回退），再说明两次失败差异。',
+    '6. 跨大版本默认不写，必须人工确认后才加 `--allow-cross-line`。',
+    '7. `upgrade check` 出现 drift 说明 pom 被手工改过：停手，重新 plan。',
     '',
     '## 文件',
     '',

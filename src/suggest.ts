@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Issue, ScanResult, Suggestion } from './model';
 import { buildConsolidationSuggestions } from './duplicates';
+import { loadPolicy } from './upgradePolicy';
 
 /** 框架层组件前缀：这些包大多由 Spring Boot BOM 统一管理，单独升级无效 */
 const FRAMEWORK_PREFIXES = [
@@ -134,14 +135,16 @@ export function buildSuggestions(root: string, result: ScanResult): Suggestion[]
 
     if (bootVersion) {
       const [major, minor] = majorMinor(bootVersion);
+      const loaded = loadPolicy(root);
+      const frameworkTarget = loaded.frameworkTarget ?? '当前策略允许的框架上限';
       if (major === 2 && minor < 7) {
         suggestions.push({
           category: 'framework',
-          title: `Spring Boot ${bootVersion} → 2.7.18`,
+          title: `Spring Boot ${bootVersion} → ${frameworkTarget}`,
           detail:
             `当前 Spring Boot 版本已停止维护，内置的 Spring Framework / Tomcat / Jackson / Logback 均存在已知漏洞，` +
             `仅框架层就命中 ${frameworkCves.length} 条，单独升级子依赖无效（版本被 BOM 锁定）。` +
-            `2.7.18 是最后一个支持 Java 8 的版本，升级后大部分框架层漏洞可一次消除。` +
+            `${frameworkTarget} 是 Java ${loaded.javaVersion ?? '当前'} 版本线下的框架上限，升级后大部分框架层漏洞可一次消除。` +
             `升级前需跑通单元测试，并检查是否引入 springfox 等已停更组件。`,
           impact: frameworkCves.length || cves.length
         });

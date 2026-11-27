@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { FRAMEWORK_TARGET_TABLE } from './upgradePolicy';
 
 export interface ProjectProfile {
   javaVersion?: number;
@@ -88,8 +89,9 @@ export function recipeAdvice(profile: ProjectProfile): string[] {
   }
   const [major, minor] = (profile.springBootVersion ?? '').split('.').map((part) => Number(part));
   if (major === 2 && minor < 7) {
+    const target = FRAMEWORK_TARGET_TABLE[String(profile.javaVersion ?? '')] ?? '策略允许的框架上限';
     advice.push(
-      `检测到 Spring Boot ${profile.springBootVersion}（已停止维护）：可在「升级依赖」中一次升级到 2.7.18，再执行代码级迁移`
+      `检测到 Spring Boot ${profile.springBootVersion}（已停止维护）：可在「升级依赖」中一次升级到 ${target}，再执行代码级迁移`
     );
   } else if (major === 3) {
     advice.push('Spring Boot 3.x：可在设置里手动启用代码迁移配方（高风险，默认不勾选）');
