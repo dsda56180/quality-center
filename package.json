@@ -319,7 +319,8 @@
     "verify:report": "node scripts/check-report.cjs",
     "verify:projects": "node scripts/check-projects.cjs",
     "verify:all": "npm run compile && npm run verify:panel && npm run verify:duplicates && npm run verify:scope && npm run verify:runstate && npm run verify:report && npm run verify:projects && npm run verify:upgrade && npm run verify:prompt",
-    "pack": "node scripts/pack.mjs"
+    "pack": "node scripts/pack.mjs",
+    "deploy": "node scripts/deploy.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

@@ -7,10 +7,11 @@
  *   node scripts/install.mjs --cli trae-cn   # 指定 CLI（名称或绝对路径）
  *   node scripts/install.mjs --vsix <path>   # 指定已打好的 vsix
  *   node scripts/install.mjs --build         # 先编译再打包，然后安装
+ *   node scripts/install.mjs --restart       # 安装后自动关闭并重启编辑器
  *   node scripts/install.mjs --list          # 只列出检测到的编辑器
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -108,6 +109,123 @@ const EDITORS = [
   }
 ];
 
+/** 重启时用到的平台信息：进程名、可执行文件、macOS 应用名 */
+const EDITOR_RESTART = {
+  'trae-cn': { names: ['Trae CN'], exe: 'Trae CN.exe', app: 'Trae CN' },
+  trae: { names: ['Trae'], exe: 'Trae.exe', app: 'Trae' },
+  cursor: { names: ['Cursor'], exe: 'Cursor.exe', app: 'Cursor' },
+  code: { names: ['Code'], exe: 'Code.exe', app: 'Visual Studio Code' },
+  codium: { names: ['VSCodium'], exe: 'VSCodium.exe', app: 'VSCodium' }
+};
+
+function normalizeEditorId(editor) {
+  const raw = `${editor.id} ${editor.label} ${editor.cli}`.toLowerCase();
+  if (raw.includes('trae cn') || raw.includes('trae-cn')) return 'trae-cn';
+  if (raw.includes('trae')) return 'trae';
+  if (raw.includes('cursor')) return 'cursor';
+  if (raw.includes('codium')) return 'codium';
+  if (raw.includes('visual studio code') || /[\\/]code(\.(cmd|exe))?$/.test(raw)) return 'code';
+  return undefined;
+}
+
+function restartMeta(editor) {
+  return EDITOR_RESTART[normalizeEditorId(editor) || editor.id] || {
+    names: [],
+    exe: undefined,
+    app: editor.label
+  };
+}
+
+/** 从 CLI 所在目录向上找编辑器主程序，例如 bin/code.cmd → Code.exe */
+function findEditorExecutable(editor, meta) {
+  if (!isWin || !meta.exe) return undefined;
+  const cliDir = path.dirname(editor.cli);
+  for (let depth = 0; depth <= 3; depth += 1) {
+    const dir = path.resolve(cliDir, ...Array(depth).fill('..'));
+    const candidate = path.join(dir, meta.exe);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function psQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * 隔离到独立进程里等待父进程退出后再关闭编辑器。
+ * 否则从编辑器内置终端执行本脚本时，关闭编辑器会把脚本自己一起杀掉，无法再启动。
+ */
+function scheduleWindowsRestart(editor) {
+  const meta = restartMeta(editor);
+  const exe = findEditorExecutable(editor, meta);
+  const names = meta.names.length > 0 ? meta.names : [meta.app];
+  const launch = exe
+    ? `Start-Process -FilePath ${psQuote(exe)}`
+    : `Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', ${psQuote(`"${editor.cli}"`)} -WindowStyle Hidden`;
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'qc-restart-')), 'restart.ps1');
+  const script = [
+    'Start-Sleep -Seconds 2',
+    `$names = @(${names.map(psQuote).join(', ')})`,
+    'Get-Process -Name $names -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() } | Out-Null',
+    'Start-Sleep -Seconds 8',
+    'Get-Process -Name $names -ErrorAction SilentlyContinue | Stop-Process -Force',
+    'Start-Sleep -Seconds 3',
+    launch,
+    `Remove-Item -LiteralPath ${psQuote(file)} -Force -ErrorAction SilentlyContinue`
+  ].join('\r\n');
+  fs.writeFileSync(file, script, 'utf8');
+  spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', file], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true
+  }).unref();
+  return exe || editor.cli;
+}
+
+function scheduleMacRestart(editor) {
+  const meta = restartMeta(editor);
+  const app = meta.app;
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'qc-restart-')), 'restart.sh');
+  const script = [
+    'sleep 2',
+    `osascript -e 'tell application "${app}" to quit' >/dev/null 2>&1 || true`,
+    'sleep 3',
+    `open -a "${app}"`,
+    `rm -f ${shellQuote(file)}`
+  ].join('\n');
+  fs.writeFileSync(file, script, 'utf8');
+  spawn('/bin/sh', [file], { detached: true, stdio: 'ignore' }).unref();
+  return app;
+}
+
+function scheduleLinuxRestart(editor) {
+  const meta = restartMeta(editor);
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'qc-restart-')), 'restart.sh');
+  const names = meta.names[0] || path.basename(editor.cli, path.extname(editor.cli));
+  const script = [
+    'sleep 2',
+    `pkill -x ${shellQuote(names)} >/dev/null 2>&1 || true`,
+    'sleep 3',
+    `nohup ${shellQuote(editor.cli)} >/dev/null 2>&1 &`,
+    `rm -f ${shellQuote(file)}`
+  ].join('\n');
+  fs.writeFileSync(file, script, 'utf8');
+  spawn('/bin/sh', [file], { detached: true, stdio: 'ignore' }).unref();
+  return names;
+}
+
+function scheduleRestart(editor) {
+  const target = isWin ? scheduleWindowsRestart(editor) : isMac ? scheduleMacRestart(editor) : scheduleLinuxRestart(editor);
+  log(`已安排重启 ${editor.label}：2 秒后关闭，随后自动启动`);
+  log(`重启目标：${target}`);
+  log('如果当前窗口没有自动回来，稍等几秒或手动点一下 Dock / 任务栏图标。');
+}
+
 function resolveEditor(only) {
   if (only) {
     if (fs.existsSync(only)) {
@@ -171,7 +289,7 @@ function build() {
   log('编译 TypeScript…');
   execFileSync(npm, ['run', 'compile'], { cwd: repoRoot, stdio: 'inherit', shell: isWin });
   log('打包 vsix…');
-  execFileSync(npm, ['run', 'package'], { cwd: repoRoot, stdio: 'inherit', shell: isWin });
+  execFileSync(npm, ['run', 'pack'], { cwd: repoRoot, stdio: 'inherit', shell: isWin });
 }
 
 /** 调用编辑器 CLI：Windows 上路径常含空格（如 "Trae CN"），必须自己加引号再走 shell */
@@ -196,6 +314,7 @@ function installedIds(cli) {
 
 function main() {
   const editor = resolveEditor(option('--cli'));
+  const restart = flag('--restart');
 
   if (flag('--list') || !editor) {
     log(`平台：${process.platform} (${os.arch()})`);
@@ -229,7 +348,11 @@ function main() {
   const list = installedIds(editor.cli);
   const ok = list.includes('dsda56180.quality-center');
   log(ok ? '安装完成：dsda56180.quality-center 已在扩展列表中' : '命令已执行，但未在扩展列表中确认到 quality-center');
-  log(`重启 ${editor.label} 后生效（或执行命令面板的「Developer: Reload Window」）`);
+  if (restart && ok) {
+    scheduleRestart(editor);
+  } else {
+    log(`重启 ${editor.label} 后生效（或执行命令面板的「Developer: Reload Window」）`);
+  }
 }
 
 try {

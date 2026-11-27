@@ -88,15 +88,17 @@ npm run pack                      # 可复现打包；也可加 --version 0.27.8
 AST 引擎。不要用 `vsce package --no-dependencies` 出开发包：它会把 `node_modules` 整体排除，装上后
 「语义规则」整类跳过，面板提示 `AST 引擎不可用（Cannot find module '@ast-grep/napi'）`。
 
-然后安装生成的 `.vsix`（文件名里的版本号以当前 `package.json` 为准）：
+也可以一条命令完成「编译 → 打包 → 安装 → 自动重启」：
 
 ```bash
-code --install-extension quality-center-<version>.vsix
-# Trae:
-trae-cn --install-extension quality-center-<version>.vsix
+npm run deploy
+npm run deploy -- --editor trae-cn   # 指定 CLI 名称或绝对路径
+npm run deploy -- --no-restart       # 只安装、不重启
+npm run deploy -- --skip-compile     # 复用已有 out/，只打包和安装
+npm run deploy -- --skip-platforms   # 只打当前平台 AST 二进制，本地快速验证
 ```
 
-也可以直接 `node scripts/install.mjs --build`，自动完成「编译 → 打包 → 装进本机编辑器 → 回读校验」。
+`npm run deploy` 默认安装到 Trae CN，并通过独立的 PowerShell 辅助进程关闭、等待保存后重新启动，避免从编辑器内置终端执行时把自己一起杀掉。单独安装时仍可用 `node scripts/install.mjs --build`（编译 → 打包 → 安装 → 回读校验），加 `--restart` 可自动重启。
 
 ### 从 Open VSX 安装
 
