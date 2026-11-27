@@ -492,7 +492,8 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
     `2. 一次只推进一组：${groupSequence(facts)}；这组构建没过，不开下一组。`,
     '3. 每组之后 build → upgrade check；失败先 explain，同组两次失败 revert（回到计划前）；细节见 handoff.md「规则」。',
     '4. 跨大版本默认不写；要用户确认后才加 `--allow-cross-line`。',
-    '5. `upgrade check` 出现 drift：立刻停手，重新 plan。'
+    '5. `upgrade check` 出现 drift：立刻停手，重新 plan。',
+    '6. 执行前先审计划，不把「有修复版本」等同于「应该升级」：每个要写的候选必须先写清「引入路径 + 代码是否仍使用 + 动作（升级/锁定/排除/移除/迁移）+ 兼容性 + 回滚」。代码已迁走但依赖仍由内部组件/传递依赖带入时，只能提出排除或迁移，不得默认升级；结论交用户确认，不手改 pom。'
   );
 
   if (drive) {

@@ -31,6 +31,7 @@ import {
 } from './upgradePlanFile';
 import { digestScan } from './scanDigest';
 import { projectStatus } from './status';
+import { defaultPolicyDocument } from './upgradePolicy';
 import { buildNextAction } from './nextAction';
 import { buildAgentFacts, buildAgentPrompt, type AgentScope } from './agentPrompt';
 import { explainBuildFailure } from './explain';
@@ -336,6 +337,27 @@ const TOOLS: ToolDef[] = [
             '允许在缺少当前 pom 成功构建记录时生成计划。autopilot 不应使用：没有构建会让 trivy/SpotBugs 口径不完整，计划会漏掉传递依赖。'
         }
       }
+    }
+  },
+  {
+    name: 'quality_upgrade_authorize',
+    description:
+      '用户明确确认后，按包授权写 dependencyManagement 版本锁定：只把 packages 追加到 .quality-center/upgrade-policy.json 的 dependencyManagementAllowlist，并重新生成计划；不会直接改 pom。只能用于当前计划里 policy-denied 的间接依赖；调用前必须已向用户逐条说明「引入路径 + 升级/锁定/排除/迁移」并得到确认。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: PATH_PROP,
+        packages: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '要授权的 packageName，必须在当前计划 skipped 中且 decision=policy-denied'
+        },
+        planId: {
+          type: 'string',
+          description: '当前计划 ID，缺省取最新计划；只用于校验待授权项，不修改旧计划'
+        }
+      },
+      required: ['packages']
     }
   },
   {
@@ -756,6 +778,101 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
             : result.patch
           : undefined,
         nextStep: `这是 ${String(shownGroup)} 组：审阅后可 apply(group=${String(shownGroup)})；要其他组传 group=，要全量传 detail=full；不要手工改 pom`
+      });
+    }
+    case 'quality_upgrade_authorize': {
+      const packages =
+        Array.isArray(params.packages)
+          ? Array.from(new Set((params.packages as unknown[]).map((item) => String(item)).filter(Boolean)))
+          : [];
+      if (!packages.length) {
+        return asText({ error: 'packages 必填：只传用户明确确认的间接依赖包名' }, true);
+      }
+      let targetPlanId = typeof params.planId === 'string' ? params.planId.trim() : '';
+      try {
+        const active = checkUpgradePlan(root, targetPlanId || undefined);
+        targetPlanId = active.planId;
+      } catch (error) {
+        return asText(
+          { error: `没有可授权的升级计划：${error instanceof Error ? error.message : String(error)}` },
+          true
+        );
+      }
+      const planFile = path.join(root, '.quality-center', 'upgrade', targetPlanId, 'plan.json');
+      let skipped: Array<{ packageName?: string; decision?: string; reason?: string }> = [];
+      try {
+        const raw = JSON.parse(fs.readFileSync(planFile, 'utf8')) as {
+          skipped?: Array<{ packageName?: string; decision?: string; reason?: string }>;
+        };
+        skipped = raw.skipped ?? [];
+      } catch (error) {
+        return asText(
+          { error: `读取计划 ${targetPlanId} 失败：${error instanceof Error ? error.message : String(error)}` },
+          true
+        );
+      }
+      const denied = skipped.filter(
+        (item) =>
+          item.packageName &&
+          (item.decision === 'policy-denied' || /dependencyManagement|策略未授权/.test(item.reason ?? ''))
+      );
+      const allowed = new Set(denied.map((item) => String(item.packageName)));
+      const rejected = packages.filter((name) => !allowed.has(name));
+      if (rejected.length) {
+        return asText(
+          {
+            error: `这些包不在当前计划 ${targetPlanId} 的待授权列表里，未写策略：${rejected.join(', ')}`,
+            allowed: Array.from(allowed)
+          },
+          true
+        );
+      }
+
+      const policyFile = path.join(root, '.quality-center', 'upgrade-policy.json');
+      let document: Record<string, unknown>;
+      if (fs.existsSync(policyFile)) {
+        try {
+          document = JSON.parse(fs.readFileSync(policyFile, 'utf8')) as Record<string, unknown>;
+        } catch (error) {
+          return asText(
+            { error: `upgrade-policy.json 不是合法 JSON：${error instanceof Error ? error.message : String(error)}` },
+            true
+          );
+        }
+      } else {
+        document = defaultPolicyDocument(root) as unknown as Record<string, unknown>;
+      }
+      const existing = Array.isArray(document.dependencyManagementAllowlist)
+        ? document.dependencyManagementAllowlist.filter((item): item is string => typeof item === 'string')
+        : [];
+      document.dependencyManagementAllowlist = Array.from(new Set([...existing, ...packages])).sort();
+      fs.mkdirSync(path.dirname(policyFile), { recursive: true });
+      fs.writeFileSync(policyFile, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
+
+      let created: ReturnType<typeof createUpgradePlan> | undefined;
+      try {
+        created = createUpgradePlan(root, readIssues(root), {
+          source: 'mcp',
+          reuse: false
+        });
+      } catch (error) {
+        return asText(
+          {
+            authorized: packages,
+            previousPlanId: targetPlanId,
+            error: `策略已写入，但重新生成计划失败：${error instanceof Error ? error.message : String(error)}`
+          },
+          true
+        );
+      }
+      return asText({
+        authorized: packages,
+        previousPlanId: targetPlanId,
+        planId: created.plan.planId,
+        candidateCount: created.plan.candidates.length,
+        skippedCount: created.plan.skipped.length,
+        planFile: path.relative(root, created.planPath),
+        nextStep: '授权只写版本锁定，不改业务代码；下一步按组预览/apply，并在每组后执行 quality_build。'
       });
     }
     case 'quality_upgrade_apply': {

@@ -596,6 +596,11 @@ export function getHtml(nonce: string): string {
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); font: inherit; font-size: 10px; cursor: pointer;
   }
   .wz-result-btn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,.2)); }
+  .wz-result-btn.wz-result-primary {
+    background: #0e639c; color: #ffffff; border-color: #0e639c; font-weight: 600;
+  }
+  .wz-result-btn.wz-result-primary:hover { background: #1177bb; border-color: #1177bb; }
+  .wz-result-btn.wz-result-inline { margin-left: 4px; padding: 1px 5px; font-size: 9px; }
   .wz-overview {
     margin-top: 8px; padding: 7px 8px; border: 1px solid var(--vscode-panel-border);
     border-radius: 6px; background: var(--vscode-sideBar-background, rgba(128,128,128,.04));
@@ -1884,23 +1889,18 @@ export function getHtml(nonce: string): string {
         nextText = '这是上一轮结果；当前已有新计划，请按下方工作台继续。上一轮剩余项仍可复制给 AI 或手动处理。';
       }
       var resultActions = '';
-      if (finalPolicy.length && !f.stale) {
-        resultActions += '<button class="wz-result-btn" data-wz="openPolicy">授权覆盖 ' + finalPolicy.length + ' 项</button>';
+      // 结果卡只保留一个主操作：AI 修复剩余项；授权/跨版本说明降为对应行内的小入口。
+      if (!f.stale && (finalPolicy.length || finalCross.length || attemptCount)) {
+        resultActions += '<button class="wz-result-btn wz-result-primary" data-wz="copyRemaining">AI 修复剩余项</button>';
       }
-      if (finalCross.length && !f.stale) {
-        resultActions += '<button class="wz-result-btn" data-wz="openHandoff">查看跨大版本说明</button>';
-      }
-      if (attemptCount && !f.stale) {
-        resultActions += '<button class="wz-result-btn" data-wz="copyReportOnly">尝试修复只报告项</button>';
-      }
-      resultActions += '<button class="wz-result-btn" data-wz="copyRemaining">复制剩余项给 AI</button>' +
-        '<button class="wz-result-btn" data-wz="openFinalReport">查看最终报告</button>' +
+      resultActions += '<button class="wz-result-btn" data-wz="openFinalReport">查看最终报告</button>' +
         '<button class="wz-result-btn" data-wz="focusIssues">手动逐项处理</button>';
       var resultRows = '';
       if (finalPolicy.length) {
         resultRows += '<div class="wz-result-row"><div class="wz-result-row-head">' +
           '<strong>待授权 · ' + finalPolicy.length + ' 项间接依赖</strong><span class="wz-result-tag">不会自动改</span></div>' +
-          '<div class="wz-result-why">由其他依赖带入，当前策略未授权写 dependencyManagement；不授权就只能保留这些 CVE。授权只写版本锁定，不改业务代码。手动：打开升级预览逐项勾选，授权后重新生成计划。</div>' +
+          '<div class="wz-result-why">由其他依赖带入，当前策略未授权写 dependencyManagement；不授权就只能保留这些 CVE。授权只写版本锁定，不改业务代码。' +
+          '<button class="wz-result-btn wz-result-inline" data-wz="openPolicy">逐项授权</button></div>' +
           '<div class="wz-result-list">' + policyRows + '</div>' +
           (finalPolicy.length > 4 ? '<div class="wz-result-more">另有 ' + (finalPolicy.length - 4) + ' 项在授权预览里逐项勾选。</div>' : '') +
           '</div>';
@@ -1908,7 +1908,8 @@ export function getHtml(nonce: string): string {
       if (finalCross.length) {
         resultRows += '<div class="wz-result-row"><div class="wz-result-row-head">' +
           '<strong>跨大版本 · ' + finalCross.length + ' 项</strong><span class="wz-result-tag">需你确认</span></div>' +
-          '<div class="wz-result-why">升级会改变 API、驱动协议或依赖基线；插件默认不写，避免一升就炸。先确认 JDK / 框架兼容性，再显式允许。手动：在交接文件确认兼容性后，单独执行这一组并显式允许跨版本。</div>' +
+          '<div class="wz-result-why">升级会改变 API、驱动协议或依赖基线；插件默认不写，避免一升就炸。先确认 JDK / 框架兼容性，再显式允许。' +
+          '<button class="wz-result-btn wz-result-inline" data-wz="openHandoff">查看说明</button></div>' +
           '<div class="wz-result-list">' + crossRows + '</div>' +
           (finalCross.length > 4 ? '<div class="wz-result-more">另有 ' + (finalCross.length - 4) + ' 项，见升级计划明细。</div>' : '') +
           '</div>';
@@ -1917,7 +1918,8 @@ export function getHtml(nonce: string): string {
         resultRows += '<div class="wz-result-row"><div class="wz-result-row-head">' +
           '<strong>剩余 · ' + reportOnly + ' 项（' + spotbugsCount + ' 可 AI 尝试，' +
           Math.max(0, reportOnly - spotbugsCount) + ' 需人工）</strong><span class="wz-result-tag info">按边界保留</span></div>' +
-          '<div class="wz-result-why">这些不是“漏修”，是 AI 按可逆小改边界主动留下的；SpotBugs 多数是编码/防御性规范，不是业务语义，可让 AI 逐条给 diff。配置安全、AST 与密钥仍需人工判断。手动：按来源筛选问题，打开文件行修改；密钥先轮换再改引用。</div>' +
+          '<div class="wz-result-why">这些不是“漏修”，是 AI 按可逆小改边界主动留下的；SpotBugs 多数是编码/防御性规范，不是业务语义，可让 AI 逐条给 diff。配置安全、AST 与密钥仍需人工判断。手动：按来源筛选问题，打开文件行修改；密钥先轮换再改引用。' +
+          '<button class="wz-result-btn wz-result-inline" data-wz="copyReportOnly">尝试修复只报告项</button></div>' +
           '<div class="wz-result-list">' + reportRows.map(function (line) {
             return '<div class="wz-result-why">· ' + esc(line) + '</div>';
           }).join('') + '</div></div>';
@@ -2230,8 +2232,8 @@ export function getHtml(nonce: string): string {
         break;
       case 'none':
         if (decisionCount) {
-          primary = btn('openPolicy', '处理待决定 ' + decisionCount + ' 项', true);
-          primaryHint = '只打开预览供你勾选授权；授权后重新生成计划，不直接改 pom。';
+          primary = btn('copyRemaining', 'AI 处理待确认 ' + decisionCount + ' 项', true);
+          primaryHint = '先让 AI 查引入路径并给升级/排除/迁移方案，用户确认后才写入；不再先跳授权页。';
         } else if (state.final && reportOnly) {
           primary = btn('copyRemaining', '让 AI 继续修剩余项', true);
           primaryHint = '复制剩余项与边界；AI 只做可逆小改，超出范围的继续列人工。';

@@ -365,6 +365,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   private scanReportFile?: string;
   private deepFixState: { stage: string; startedAt: number; total: number; done: number } | null = null;
   private previewPanel?: vscode.WebviewPanel;
+  /** 同一个 final-report 只自动打开一次，避免每轮 push 抢焦点 */
+  private lastFinalReportOpenedAt = 0;
   /** 上一次 dry-run 的结果，工作区未变化时直接复用，避免重复预演 */
   private fixCache?: { key: string; patchFile?: string; files: string[] };
   /** 普通扫描后额外的深度预演结果：只记录可改文件，不自动打开预览 */
@@ -2475,12 +2477,17 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       void vscode.window.showInformationMessage('已有预览窗口打开，请先处理完再继续。');
       return;
     }
-    let planFile: ReturnType<typeof createUpgradePlan>['plan'];
+    let planFile: ReturnType<typeof readUpgradePlan>;
+    let planId = '';
     try {
-      planFile = createUpgradePlan(root, readIssues(root), { reuse: true, source: 'panel' }).plan;
+      // 只读当前活动计划，不再按最新 issues 重新生成：否则上一轮报告里的 1 项
+      // 会在预览里突然变成 2 项（旧依赖快照复活），用户无法判断哪个才是当前事实。
+      const active = checkUpgradePlan(root);
+      planId = active.planId;
+      planFile = readUpgradePlan(root, planId);
     } catch (error) {
       void vscode.window.showErrorMessage(
-        `读取升级计划失败：${error instanceof Error ? error.message : String(error)}`
+        `读取升级计划失败：${error instanceof Error ? error.message : String(error)}。请先生成计划，再处理待授权项。`
       );
       return;
     }
@@ -2495,7 +2502,8 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       profile.javaVersion ? `Java ${profile.javaVersion}` : '',
       profile.springBootVersion
         ? `Spring Boot ${profile.springBootVersion} → ${planFile.project.frameworkTarget ?? '未声明'}`
-        : ''
+        : '',
+      planId ? `计划 ${planId}` : ''
     ].filter(Boolean);
     const decision = await this.showUpgradePreview([], skipped, projectParts.join(' · '));
     if (decision?.authorize?.length) {
@@ -2775,7 +2783,9 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       '',
       '需确认项的交互规则：',
       '- 依赖收敛、跨大版本、静态人工项不要只报告或直接跳过；先给「文件/依赖 + 拟改方案或 diff + 风险 + 回滚」，逐条或分批向用户确认。',
-      '- 用户在同一会话确认后，立即继续调用 quality_* 执行，不要要求用户重新复制指令或重新选择范围。',
+      '- 这些项必须分两阶段：第一阶段只输出确认清单，然后停下来等用户回答；不得在同一轮直接调用 quality_* 写盘。',
+      '- 用户明确回复「确认 / 继续」后，才立即继续调用 quality_* 执行；不要要求用户重新复制指令或重新选择范围。',
+      '- 依赖项确认清单必须多一列「引入路径 + 代码是否仍使用 + 动作」：动作只能是升级 / 锁定 / 排除 / 移除 / 迁移，不能默认全部升级。',
       '- 只有可逆的编码/防御性规范项才执行；安全设计、权限模型、架构重构只报告。密钥只报位置，不读原值。'
     ].join('\n');
     await vscode.env.clipboard.writeText(
@@ -3195,7 +3205,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       panel.onDidDispose(() => finish(null));
       panel.webview.onDidReceiveMessage(
         (message: { type?: string; packages?: string[]; versions?: Record<string, string> }) => {
-          if (message.type === 'cancel') {
+          if (message.type === 'cancel' || message.type === 'back') {
             finish(null);
             panel.dispose();
             return;
@@ -3839,6 +3849,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     if (reportIsCurrent) {
       this.runner.reloadLedger();
       this.push();
+      this.maybeOpenFinalReport(report);
       return;
     }
     if (this.runner.isRunning || this.deepFixState) {
@@ -3876,6 +3887,23 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   /** 启动时是否已经从上次结果（.quality-center/issues.json 或缓存）恢复出结果 */
   hasLoadedResult(): boolean {
     return !!this.runner.result;
+  }
+
+  /**
+   * AI 收尾完成后，把 final-report.md 自动打开在编辑器页签。
+   * 只在报告文件变化后触发一次，避免每次 push 都抢焦点；用户仍可手动关闭。
+   */
+  private maybeOpenFinalReport(reportPath: string): void {
+    try {
+      const mtime = fs.statSync(reportPath).mtimeMs;
+      if (!mtime || mtime <= this.lastFinalReportOpenedAt) {
+        return;
+      }
+      this.lastFinalReportOpenedAt = mtime;
+      void this.openFinalReport();
+    } catch {
+      // 没有报告文件时不弹错；按钮点击时会给出明确提示
+    }
   }
 
   /** 在编辑器页签打开本次扫描报告；面板按钮与扫描完成共用 */
@@ -3965,7 +3993,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       next.command ? `- 当前唯一命令：${next.command}` : '- 当前无需自动写入；剩余项按下面分类处理。',
       '',
       '剩余项与边界：',
-      `- 待授权间接依赖 ${policy.length} 项：这些包由其他依赖带入，当前策略未授权写 dependencyManagement。不要手改 pom；先在面板「处理待决定」按项授权，或升级引入它们的直接依赖。`,
+      `- 待授权间接依赖 ${policy.length} 项：这些包由其他依赖带入，当前策略未授权写 dependencyManagement。先逐条查 dependency:tree，写清「引入路径 + 代码是否仍使用 + 动作（升级/锁定/排除/移除/迁移）」；不要默认升级，也不要手改 pom。用户确认后，调用 quality_upgrade_authorize 写白名单并重新生成计划，再按组 apply。`,
       ...policy.slice(0, 8).map(
         (item) =>
           `  · ${item.packageName} ${item.installedVersion ?? '?'} → ${item.fixedVersion ?? '?'}` +
@@ -3986,7 +4014,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       '2. 允许写入的组：quality_upgrade_apply，每组之后 quality_build；失败先 quality_explain，同一组两次失败 quality_upgrade_revert 并停。',
       '3. 静态修复：quality_phase(static_fix) 或 quality_fix，只做可逆小改；每 20 条或 10 分钟 quality_build 一次。',
       '4. 最后 quality_scan 全量复扫 → quality_finalize；汇报修复前/后、剩余与阻塞、改动文件、仍需人工的条目。',
-      '5. 遇到 needs-confirm / blocked / 跨大版本 / 密钥轮换，停下来问用户；用户确认后立即继续执行，不要要求重新复制指令；不要绕过。'
+      '5. 遇到 needs-confirm / blocked / 跨大版本 / 密钥轮换，先停：只输出确认清单（范围、动作、风险、回滚），等用户明确确认；未确认前禁止写入。用户确认后立即继续执行，不要要求重新复制指令，也不要绕过。'
     ].filter((line) => line !== '');
 
     await vscode.env.clipboard.writeText(`${lines.join('\n')}\n`);

@@ -315,6 +315,7 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
 <footer>
   <span class="count" id="count"></span>
   <button id="toai" class="secondary">复制给 AI 继续</button>
+  <button id="back" class="secondary">返回</button>
   <button id="cancel" class="secondary">取消</button>
   <button id="apply">升级并校验编译</button>
 </footer>
@@ -385,6 +386,10 @@ export function buildUpgradePreviewHtml(nonce: string, info: UpgradePreviewInfo)
 
   document.getElementById('cancel').addEventListener('click', function () {
     vscode.postMessage({ type: 'cancel' });
+  });
+
+  document.getElementById('back').addEventListener('click', function () {
+    vscode.postMessage({ type: 'back' });
   });
 
   applyBtn.addEventListener('click', function () {

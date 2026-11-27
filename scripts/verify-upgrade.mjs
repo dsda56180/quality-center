@@ -399,6 +399,7 @@ async function main() {
   const names = (list.result?.tools ?? []).map((tool) => tool.name);
   check('tools/list 含 quality_upgrade_plan', names.includes('quality_upgrade_plan'));
   check('tools/list 含 quality_upgrade_apply', names.includes('quality_upgrade_apply'));
+  check('tools/list 含 quality_upgrade_authorize', names.includes('quality_upgrade_authorize'));
   check('tools/list 含 quality_upgrade_check', names.includes('quality_upgrade_check'));
   check('tools/list 含 quality_upgrade_revert', names.includes('quality_upgrade_revert'));
   check('tools/list 含 quality_next', names.includes('quality_next'));

@@ -127,8 +127,8 @@ const checks = {
   finalResultProviderWiring: provider.includes("case 'openFinalReport'") &&
     provider.includes("case 'copyRemaining'") && provider.includes('copyRemainingPrompt') &&
     provider.includes('openFinalReport()'),
-  finalResultManualGuidance: h.includes('手动：打开升级预览逐项勾选') &&
-    h.includes('手动：按来源筛选问题') && h.includes('手动：在交接文件确认兼容性'),
+  finalResultManualGuidance: h.includes('逐项授权') &&
+    h.includes('手动：按来源筛选问题') && h.includes('查看说明'),
   finalResultEntry: h.includes("focus('查看结果', 'wizard')") &&
     h.includes('项未自动处理'),
   finalResultStaleVisible: h.includes('上一轮修复结果') && h.includes('wz-result-stale') &&
