@@ -5,6 +5,7 @@ const h = getHtml({ cspSource: 'x', nonce: 'n' });
 const chooseBranch = h.slice(h.indexOf("key === 'chooseUpgrade'"), h.indexOf("} else if (key === 'showRoutes'"));
 const provider = fs.readFileSync(path.join(__dirname, '..', 'src', 'panel', 'QualityViewProvider.ts'), 'utf8');
 const finalize = fs.readFileSync(path.join(__dirname, '..', 'src', 'finalize.ts'), 'utf8');
+const extension = fs.readFileSync(path.join(__dirname, '..', 'src', 'extension.ts'), 'utf8');
 const checks = {
   aiBusy: h.includes('body.ai-busy'),
   aiStatus: h.includes('id="aistatus"'),
@@ -133,6 +134,9 @@ const checks = {
   finalResultStaleVisible: h.includes('上一轮修复结果') && h.includes('wz-result-stale') &&
     h.includes('currentPlanId') && provider.includes("staleReason: 'new-plan'") &&
     provider.includes("'newer-scan'"),
+  finalScanNotice: h.includes('正在重新扫描') && h.includes('扫描完成后刷新') &&
+    h.includes('重扫中') && extension.includes('agentRunActive') &&
+    provider.includes('agentRunActive(): boolean'),
   finalResultPlanScoped: h.includes('f.planSkipped') && h.includes('f.planCrossLine') &&
     provider.includes('planSkipped') && provider.includes('planCrossLine') &&
     provider.includes("'plan.json'"),

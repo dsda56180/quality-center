@@ -669,6 +669,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     return !!state && state.status === 'running' && Date.now() - Date.parse(state.updatedAt) < 30 * 60_000;
   }
 
+  /** 供保存触发等外部入口判断：AI 通过 MCP 正在推进时，不要叠加自动扫描 */
+  agentRunActive(): boolean {
+    return this.runLocked();
+  }
+
   private log(message: string): void {
     if (!this.output) {
       this.output = vscode.window.createOutputChannel('质量中心');

@@ -1569,11 +1569,14 @@ export function getHtml(nonce: string): string {
       if (f.stale && f.planSkipped) {
         finalPending = f.planSkipped.length;
       }
-      add('info', (f.stale ? '🧾 上一轮验收：' : '🧾 最终验收：') + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
+      add('info', (f.stale
+          ? (state.scanning ? '🧾 上一轮验收（正在重新扫描）：' : '🧾 上一轮验收：')
+          : (state.scanning ? '🧾 最终验收（正在重新扫描）：' : '🧾 最终验收：')) + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
         (f.totalChange >= 0 ? '+' : '') + f.totalChange + '，新增 ' + f.added + ' / 消失 ' + f.removed + '）' +
         (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
         (finalPending ? ' · ' + finalPending + ' 项未自动处理' : '') +
-        (f.tests === 'skipped' ? ' · ⚠ 构建跳过测试' : ''),
+        (f.tests === 'skipped' ? ' · ⚠ 构建跳过测试' : '') +
+        (state.scanning ? ' · 扫描完成后刷新' : ''),
         focus('查看结果', 'wizard'));
     }
     (state.errors || []).forEach(function (e) {
@@ -1877,10 +1880,16 @@ export function getHtml(nonce: string): string {
             ? '这是计划 ' + esc(f.planId || '—') + ' 的收尾结果；当前已生成新计划 ' + esc(f.currentPlanId || '—') + '，下面数字只代表上一轮。'
             : '这是上一轮收尾结果；之后又扫过一次，当前账本已更新，下面数字只代表上一轮。')
         : '';
+      var scanNote = state.scanning
+        ? '<div class="wz-result-stale">正在重新扫描：下面仍是上一轮结果，扫描完成后面板会自动刷新；现在不要把 ' +
+          f.currentTotal + ' 当作最新结论。</div>'
+        : '';
       finalBlock = '<div class="wz-result">' +
-        '<div class="wz-result-head"><strong>' + (f.stale ? '上一轮修复结果' : '本次修复结果') + '</strong>' +
+        '<div class="wz-result-head"><strong>' +
+        (f.stale ? (state.scanning ? '上一轮修复结果（重扫中）' : '上一轮修复结果') : '本次修复结果') + '</strong>' +
         '<span class="wz-result-sum">' + f.baselineTotal + ' → ' + f.currentTotal + ' · ' +
         (f.totalChange >= 0 ? '+' : '') + f.totalChange + '</span></div>' +
+        scanNote +
         (staleNote ? '<div class="wz-result-stale">' + staleNote + '</div>' : '') +
         '<div class="wz-result-why">消失 ' + f.removed + ' / 新增 ' + f.added +
         (planLine ? ' · ' + planLine : '') + (buildLine ? ' · ' + buildLine : '') + '</div>' +

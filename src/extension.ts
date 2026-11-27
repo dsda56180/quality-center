@@ -173,6 +173,11 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!provider.shouldScanFile(document.uri.fsPath)) {
         return;
       }
+      // AI 正在通过 MCP 改代码：每次写入都触发复扫会与 AI 自己的 quality_scan 叠加，
+      // 还会出现“已有结果却仍在扫描”的错觉；等 AI 当前阶段结束再让保存扫描生效。
+      if (provider.agentRunActive()) {
+        return;
+      }
       const relative = path.relative(root, document.uri.fsPath);
       if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
         return;
@@ -185,7 +190,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       const savedFile = document.uri.fsPath;
       timer = setTimeout(() => {
-        if (provider.shouldScanFile(savedFile)) {
+        if (provider.shouldScanFile(savedFile) && !provider.agentRunActive()) {
           void provider.scanAndPush();
         }
       }, 1500);
