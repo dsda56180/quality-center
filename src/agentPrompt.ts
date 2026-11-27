@@ -10,7 +10,8 @@
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { PLAN_GROUP_LABEL, readUpgradePlan } from './upgradePlanFile';
+import { PLAN_GROUP_LABEL, PLAN_GROUP_ORDER, readUpgradePlan, UpgradePlanFile } from './upgradePlanFile';
+import { inferFrameworkVersion, loadPolicy } from './upgradePolicy';
 import type { Severity } from './model';
 
 export type AgentScope = 'all' | 'upgrade' | 'consolidation' | 'code' | 'secrets' | 'static';
@@ -60,6 +61,131 @@ function severityBoundary(minSeverity?: Severity): string {
     return '';
   }
   return `严重度过滤：只处理 ${SEVERITY_LABEL[minSeverity]} 及以上；低于该等级的问题只报告，不改代码。`;
+}
+
+/**
+ * prompt 里出现的“项目事实”只允许来自 plan.json / upgrade-policy.json / pom。
+ * Java 级别、框架目标、buildGate、分组顺序都不写死在文案里：
+ * 同一段 prompt 里写出两个版本边界，AI 只会按先读到的那个执行。
+ */
+interface PromptFacts {
+  plan?: UpgradePlanFile;
+  javaSource?: string;
+  javaTarget?: string;
+  frameworkFrom?: string;
+  frameworkTarget?: string;
+  buildGate: string;
+  runTests: boolean;
+  groups: { name: string; label: string; count: number }[];
+  /** 计划候选里涉及的项目属性名（去重） */
+  properties: string[];
+}
+
+const HIGHER_JAVA_FALLBACK = '11/17/21';
+
+function higherJavaLines(source?: string): string {
+  const current = Number(source);
+  if (!Number.isFinite(current)) {
+    return HIGHER_JAVA_FALLBACK;
+  }
+  const lines = [11, 17, 21].filter((version) => version > current);
+  return lines.length ? lines.join('/') : '更高版本';
+}
+
+function readPromptFacts(root: string, options: AgentPromptOptions): PromptFacts {
+  let plan: UpgradePlanFile | undefined;
+  try {
+    plan = readUpgradePlan(root, options.planId);
+  } catch {
+    plan = undefined;
+  }
+  let loaded: ReturnType<typeof loadPolicy> | undefined;
+  try {
+    loaded = loadPolicy(root);
+  } catch {
+    loaded = undefined;
+  }
+
+  let frameworkFrom = plan?.project.frameworkVersion;
+  if (!frameworkFrom) {
+    try {
+      frameworkFrom = inferFrameworkVersion(fs.readFileSync(path.join(root, 'pom.xml'), 'utf8'));
+    } catch {
+      frameworkFrom = undefined;
+    }
+  }
+
+  const javaTarget = plan?.project.javaVersion ?? loaded?.targetJavaVersion ?? loaded?.javaVersion;
+  const javaSource =
+    plan?.project.sourceJavaVersion ?? plan?.project.javaVersion ?? loaded?.javaVersion ?? javaTarget;
+  const frameworkTarget = plan?.project.frameworkTarget ?? loaded?.frameworkTarget;
+  const buildGate = loaded?.policy.buildGate ?? 'package';
+  const runTests = loaded?.policy.runTests ?? true;
+  const groups = plan
+    ? plan.groups.map((group) => ({ name: group.name, label: group.label, count: group.candidates.length }))
+    : PLAN_GROUP_ORDER.map((name) => ({ name, label: PLAN_GROUP_LABEL[name], count: 0 }));
+  const properties = Array.from(
+    new Set(
+      (plan?.candidates ?? [])
+        .map((candidate) => candidate.property)
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+
+  return {
+    plan,
+    javaSource,
+    javaTarget,
+    frameworkFrom,
+    frameworkTarget,
+    buildGate,
+    runTests,
+    groups,
+    properties
+  };
+}
+
+function javaSourceLabel(facts: PromptFacts): string {
+  if (!facts.javaSource) {
+    return 'Java 版本以 pom 为准';
+  }
+  if (facts.javaTarget && facts.javaTarget !== facts.javaSource) {
+    return `Java ${facts.javaSource} → ${facts.javaTarget}（upgrade-policy.json 的 targetJavaVersion 已授权迁移）`;
+  }
+  return `Java ${facts.javaSource}`;
+}
+
+function frameworkLabel(facts: PromptFacts): string {
+  if (!facts.frameworkFrom && !facts.frameworkTarget) {
+    return '框架版本以 pom 为准';
+  }
+  if (!facts.frameworkTarget || facts.frameworkTarget === facts.frameworkFrom) {
+    return `框架 ${facts.frameworkFrom ?? '未知'}`;
+  }
+  return `框架 ${facts.frameworkFrom ?? '未知'} → ${facts.frameworkTarget}`;
+}
+
+/** 全篇唯一的边界描述：源码 Java 级别 / 框架当前 → 目标 */
+function boundaryLine(facts: PromptFacts): string {
+  return `${javaSourceLabel(facts)} / ${frameworkLabel(facts)}`;
+}
+
+/** 分组顺序取自计划本身，没计划时才退回通用顺序 */
+function groupSequence(facts: PromptFacts, pick?: { excludeCrossLine?: boolean }): string {
+  const groups = pick?.excludeCrossLine
+    ? facts.groups.filter((group) => group.name !== 'cross-line')
+    : facts.groups;
+  return groups
+    .map((group) =>
+      facts.plan ? `${group.name}(${group.label} ${group.count} 项)` : `${group.name}(${group.label})`
+    )
+    .join(' → ');
+}
+
+function gateLabel(facts: PromptFacts): string {
+  return facts.runTests
+    ? `buildGate=${facts.buildGate}（runTests=true，会真的跑测试）`
+    : `buildGate=${facts.buildGate}（runTests=false，构建不跑测试，汇报必须注明测试未验证）`;
 }
 
 function normalizeScopes(options: AgentPromptOptions): AgentScope[] {
@@ -132,18 +258,15 @@ function buildScopedAgentPrompt(root: string, scope: Exclude<AgentScope, 'all'>,
   ];
 
   if (scope === 'upgrade') {
-    let planContext = '';
-    try {
-      const plan = readUpgradePlan(root, options.planId);
-      planContext = `当前计划 ${plan.planId}：${plan.project.frameworkVersion ?? '未知'} → ${plan.project.frameworkTarget ?? '未声明'}，Java ${plan.project.javaVersion ?? '未知'}。`;
-    } catch {
-      planContext = '当前还没有升级计划。';
-    }
+    const facts = readPromptFacts(root, options);
+    const planContext = facts.plan
+      ? `当前计划 ${facts.plan.planId}：${boundaryLine(facts)}。`
+      : '当前还没有升级计划。';
     lines.push(
       planContext,
       '执行顺序：',
       '1. 没有计划：quality_upgrade_plan（或 `qc upgrade plan . --reuse`）生成；只生成计划，不改 pom。',
-      '2. 按 framework → family → independent 逐组 quality_upgrade_apply write=true；每组后 quality_build；失败先 quality_explain，同组两次失败 quality_upgrade_revert 并列为阻塞。',
+      `2. 按 ${groupSequence(facts, { excludeCrossLine: true })} 逐组 quality_upgrade_apply write=true；每组后 quality_build；失败先 quality_explain，同组两次失败 quality_upgrade_revert 并列为阻塞。`,
       '3. cross-line 默认不动；需要跨大版本时停下等用户确认，不得自行 --allow-cross-line。',
       '4. 每轮用 quality_next 重新取状态，不要沿用上一轮判断；最后 quality_scan + quality_finalize。',
       '边界：不得调用 quality_fix，不得改静态代码、密钥、依赖收敛项；不得手改 pom 或跳测试。'
@@ -224,27 +347,25 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
     lines.push(baseSevLine, '');
   }
 
-  let planContext = '';
-  try {
-    const plan = readUpgradePlan(root, options.planId);
-    planContext = ` Java ${plan.project.javaVersion ?? '未知'} / 框架 ${plan.project.frameworkVersion ?? '未知'} → ${plan.project.frameworkTarget ?? '未声明'}`;
-  } catch {
-    // 没有计划时，启动前确认里只用通用说法
-  }
+  const facts = readPromptFacts(root, options);
 
   if (autopilot) {
     lines.push(
       '启动前只做一次「目标确认」，一次问清下面 3 项，不要拆成多轮、不要逐项追问：',
       '1. 目标范围：本次是否处理“静态代码 + 确定性修复 + 依赖/CVE 升级 + 依赖收敛”的全部可修复项（默认是），还是只修高危/CVE？',
-      '2. 版本边界：源码保持 Java 8 / Spring Boot 2.7.18；遇到必须升 JDK 11/17/21 或 Spring Boot 3.x 的项，是本次处理、跳过，还是先停下问用户（默认停下询问）？',
-      '3. 门禁与权限：buildGate=package、不跳测试、不改测试；允许项目属性覆盖和“删无用 import / 调整修饰符顺序 / 简化布尔比较”等最小代码修复；安全设计、密钥轮换、架构重构只报告不擅自改。是否接受？',
+      `2. 版本边界：当前项目事实是 ${boundaryLine(facts)}；遇到必须升 JDK ${higherJavaLines(facts.javaSource)} 或 Spring Boot 3.x 的项，是本次处理、跳过，还是先停下问用户（默认停下询问）？`,
+      `3. 门禁与权限：${gateLabel(facts)}、不改测试；允许项目属性覆盖和“删无用 import / 调整修饰符顺序 / 简化布尔比较”等最小代码修复；安全设计、密钥轮换、架构重构只报告不擅自改。是否接受？`,
       '用户确认后：按下面默认参数连续执行到收尾，不再每一步征求同意，也不要在完成一个组后停下等用户再发起。',
       '只有出现硬阻塞时才再次询问；用户回答后继续剩余项，不要从头重来。',
       '',
       '确认后的默认参数：',
-      '1. JDK：源码保持当前 Java 版本（' + (planContext || '以 pom 为准') + '）；只允许运行时是更高 JDK，不允许擅自改 source/target。',
-      '2. 门禁：沿用 upgrade-policy.json 的 buildGate（默认 package），不跳过测试、不改测试、不降低门禁。',
-      '3. 跨大版本：默认不写；只有某个 CVE 在当前 Java 8 下没有兼容修复版本时，才把它列为“需要升级 JDK/框架”的阻塞项，不得自行 apply。',
+      `1. JDK：${
+        facts.javaTarget && facts.javaSource && facts.javaTarget !== facts.javaSource
+          ? `源码按策略迁移到 Java ${facts.javaTarget}（source/target 会一起改）`
+          : '源码保持当前 Java 版本'
+      }（${boundaryLine(facts)}）；只允许运行时是更高 JDK，不允许擅自改 source/target。`,
+      `2. 门禁：沿用 upgrade-policy.json 的 ${gateLabel(facts)}；不通过跳过测试、改测试或降低门禁来换通过。`,
+      `3. 跨大版本：默认不写；只有某个 CVE 在当前 ${facts.javaSource ? `Java ${facts.javaSource}` : 'Java 级别'} 下没有兼容修复版本时，才把它列为“需要升级 JDK/框架”的阻塞项，不得自行 apply。`,
       '4. 属性覆盖与最小代码修复：允许；允许删除无用 import、调整修饰符顺序、简化布尔比较等可逆小改；不允许大范围重构。',
       '5. 静态问题：按下面阶段批量修，不要一条一条问用户。',
       ''
@@ -255,13 +376,17 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
     lines.push(
       '启动前确认（第 0 步，必须先问用户并等待回答；未回答不得执行 apply）：',
       '先发一条简短的「开始前确认」，一次问清下面 4 项，不要逐项反复追问：',
-      '1. JDK：计划按' + (planContext || '当前计划的 Java 版本') + '。生产/目标运行环境是否也是这个 JDK？若不是，按第 4 条冲突处理，不要直接停：先区分“只换运行 JDK”与“源码也升 JDK”。',
-      '2. 门禁：是否接受策略里的 buildGate（默认 package，会跑测试）？是否允许跳过测试？默认不允许。',
+      `1. JDK：计划按 ${boundaryLine(facts)}。生产/目标运行环境是否也是这个 JDK？若不是，按第 4 条冲突处理，不要直接停：先区分“只换运行 JDK”与“源码也升 JDK”。`,
+      `2. 门禁：是否接受策略里的 ${gateLabel(facts)}？是否允许跳过测试？默认不允许。`,
       '3. 跨大版本：计划里的 cross-line 项是否本次处理？默认先不动，推进到该组再人工确认。',
-      '4. 属性与代码修复：mysql、okhttp 等项目属性是否允许随框架 BOM 对齐？是否允许按 explain 做最小编译修复（例如删除无用 import）？',
+      `4. 属性与代码修复：${
+        facts.properties.length
+          ? `计划涉及的属性（${facts.properties.slice(0, 4).join('、')}）`
+          : '计划里的项目属性（以 plan.json 的 property 字段为准）'
+      }是否允许随框架 BOM 对齐？是否允许按 explain 做最小编译修复（例如删除无用 import）？`,
       '若用户没有回答：停在 plan，不落盘，等用户补充。',
       '若用户回答与当前计划冲突：不要执行旧计划，也不要只回一句“冲突”；按下面的方式调整并给出新计划：',
-      '   - JDK：先区分“运行环境换 JDK，但源码仍按 Java 8 编”与“源码也升到新 JDK/Boot 3.x”。前者确认 Boot 2.7.18 可在该 JDK 运行即可，计划不变；后者必须改策略并重新生成计划。',
+      `   - JDK：先区分“运行环境换 JDK，但源码仍按 ${facts.javaSource ? `Java ${facts.javaSource}` : '当前级别'} 编”与“源码也升到新 JDK/Boot 3.x”。前者确认 ${facts.frameworkTarget ?? '当前框架目标'} 可在该 JDK 运行即可，计划不变；后者必须改策略并重新生成计划。`,
       '   - 源码升 JDK：在 `.quality-center/upgrade-policy.json` 写 `targetJavaVersion`（如 "17"），并在 `frameworkTargets` 里给同一 key 设目标框架（如 "17": "3.2.12"）；明确要 Boot 3.x 时同时设 `allowNextFrameworkLine=true`。',
       '   - 门禁：按用户回答改 `buildGate`（compile / package / test），不要用命令行临时绕过。',
       '   - 框架目标：按用户目标改 `frameworkTargets`；只有明确要跨到 Boot 3.x 时才设 `allowNextFrameworkLine=true`。',
@@ -285,20 +410,19 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
     '- .quality-center/handoff.md（一页交接：做到哪、下一步、阻塞与规则）',
     '- .quality-center/issues.json / report.md（或 MCP: quality_report format=json）',
     '- .quality-center/upgrade-policy.json（框架上限、禁用依赖、构建门禁）',
-    '- .quality-center/skills/quality-center-java-upgrade/SKILL.md（判断类知识）'
+    '- .quality-center/skills/quality-center-java-upgrade/SKILL.md（判断类知识）',
+    `- 本次边界（来源：plan.json 与 upgrade-policy.json）：${boundaryLine(facts)}；${gateLabel(facts)}`,
+    '- 上面这行边界若与 `qc next` / handoff.md 冲突，一律以 next 为准：状态机是唯一事实，不要用本段覆盖它。'
   );
 
   let planLine = '';
-  try {
-    const plan = readUpgradePlan(root, options.planId);
-    const groupSummary = plan.groups
-      .map((group) => `${group.name}(${PLAN_GROUP_LABEL[group.name]} ${group.candidates.length} 项)`)
-      .join(' → ');
+  if (facts.plan) {
+    const plan = facts.plan;
     planLine = [
       '',
       `当前计划：${plan.planId}`,
-      `- 框架：${plan.project.frameworkVersion ?? '未知'} → ${plan.project.frameworkTarget ?? '未声明'}（Java ${plan.project.javaVersion ?? '未知'}）`,
-      `- 分组顺序：${groupSummary || '无候选'}`,
+      `- 边界：${boundaryLine(facts)}`,
+      `- 分组顺序：${groupSequence(facts) || '无候选'}`,
       `- 补丁预览：${path.join('.quality-center', 'upgrade', plan.planId, 'pom.diff')}`
     ].join('\n');
     const pomFile = path.join(root, 'pom.xml');
@@ -307,7 +431,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
       planLine += `\n- 当前 pomHash：${hash}（apply 时 --hash 用它，落盘后换新的）`;
     }
     lines.push(planLine);
-  } catch {
+  } else {
     lines.push('', '还没有升级计划：先执行 `qc upgrade plan . --reuse`（或 MCP quality_upgrade_plan）。');
   }
 
@@ -315,7 +439,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
     '',
     '硬性规则：',
     '1. 只通过 `node .quality-center/bin/qc.cjs upgrade apply`（或 MCP quality_upgrade_apply）写 pom；禁止手改、禁止 sed/批量替换版本号。',
-    '2. 一次只推进一组：framework → family → independent → cross-line；这组构建没过，不开下一组。',
+    `2. 一次只推进一组：${groupSequence(facts)}；这组构建没过，不开下一组。`,
     '3. 每组之后：`node .quality-center/bin/qc.cjs build`（按策略 buildGate，失败先跑 `qc explain`）→ `qc upgrade check`；组后应为 partial 且 appliedCount 增加，全部组完成才是 applied。',
     '4. 构建失败先 `node .quality-center/bin/qc.cjs explain .`（MCP quality_explain）：按原因/影响/建议处理；不要在失败上继续 apply 或换版本碰运气。',
     '5. 跨大版本默认不写；要用户确认后才加 `--allow-cross-line`。',
@@ -358,7 +482,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
       '一次性执行流程（优先 MCP，工具不存在才用 CLI；不要每步问用户）：',
       '阶段 1 基线：先 `quality_build` 建立 target（失败也记录，用 quality_explain 判断）→ `quality_scan`（全量）→ `quality_report format=summary` 记录修复前的总数、按来源/严重度计数。没有 target 时 trivy 只按源码解析、SpotBugs 为 0，基线与最终不可比。',
       '阶段 2 确定性修复：`quality_fix write=true`；然后 `quality_build` 确认没有引入编译失败。',
-      '阶段 3 依赖升级：`quality_upgrade_plan`（必须先有当前 pom 的成功构建记录）→ 按 framework/family/independent 顺序逐组 `quality_upgrade_apply write=true` → 每组 `quality_build` → 失败先 `quality_explain`，同组两次失败 `quality_upgrade_revert` 并把该组列为阻塞。',
+      `阶段 3 依赖升级：\`quality_upgrade_plan\`（必须先有当前 pom 的成功构建记录）→ 按 ${groupSequence(facts, { excludeCrossLine: true })} 逐组 \`quality_upgrade_apply write=true\` → 每组 \`quality_build\` → 失败先 \`quality_explain\`，同组两次失败 \`quality_upgrade_revert\` 并把该组列为阻塞。`,
       '只允许一个升级计划：阶段 3 生成的计划必须一直用到收尾；阶段 5/6 不得再执行 `quality_upgrade_plan` 生成第二个计划。剩余 CVE 若需要新增 `<dependencyManagement>`，先看策略 `dependencyManagementAllowlist` 是否包含该 artifact；不在白名单就列为阻塞，提示用户在面板「查看未处理项」里按项授权，不要建议打开全局 `allowDependencyManagement`，不要手改 pom。',
       'apply 一组后若 `quality_upgrade_check` 显示该组只落盘了一部分候选，视为不完整：立即 `quality_upgrade_revert` 该组并列为阻塞，不能把半组状态当作完成。',
       '阶段 3.5 依赖收敛：读 `issues.json` 的 suggestions，只取 category=duplicate；先列每个能力类别的重复库、引用文件和迁移顺序，再按“先改代码、编译通过、最后删依赖”的顺序小步处理。不要自动删依赖，不要为了统一 JSON 重写业务序列化协议；BOM 项删除显式 version 后必须提示用 mvn dependency:tree 复核。每一类完成后 quality_build + quality_scan。',
@@ -369,8 +493,8 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
       '构建结果必须看 `tests`：`skipped` 时不能说“测试通过”；`drift=true` 时不能说“构建成功可验收”。',
       '',
       '硬阻塞（命中就停这一类，不要停整个流程）：',
-      '- 需要把源码 Java 升到 11/17/21，或需要 Spring Boot 3.x / javax→jakarta；',
-      '- 某 CVE 在 Java 8 下无兼容修复版本，或 cross-line 依赖只能靠大版本解决；',
+      `- 需要把源码 ${facts.javaSource ? `Java ${facts.javaSource}` : 'Java 级别'} 升到 ${higherJavaLines(facts.javaSource)}，或需要 Spring Boot 3.x / javax→jakarta；`,
+      `- 某 CVE 在当前 ${facts.javaSource ? `Java ${facts.javaSource}` : 'Java'} 下无兼容修复版本，或 cross-line 依赖只能靠大版本解决；`,
       '- 构建失败无法用 quality_explain 归因，或测试失败是代码语义变化导致；',
       '- 密钥/凭证泄露需要轮换、权限模型需要产品决策、需要大范围重构。',
       '命中硬阻塞时：先问用户“这一项本次处理 / 跳过 / 先记录”，不要强行改 source/target、不要跳测试、不要 --allow-cross-line；用户回答后继续其他可修项，最后统一汇总。用户不回答则跳过该项并在最终汇总里列出。',
