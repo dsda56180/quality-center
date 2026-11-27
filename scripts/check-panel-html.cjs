@@ -120,7 +120,7 @@ const checks = {
   finalResultCard: h.includes('本次修复结果') && h.includes('wz-result') &&
     h.includes('state.final') && h.includes('bySource'),
   finalResultExplainsLimits: h.includes('待授权 · ') && h.includes('跨大版本 · ') &&
-    h.includes('只报告 · ') && h.includes('超出可逆小改'),
+    h.includes('剩余 · ') && h.includes('可 AI 尝试'),
   finalResultDecisionActions: h.includes("data-wz=\"openPolicy\"") &&
     h.includes("data-wz=\"openHandoff\"") && h.includes("data-wz=\"copyRemaining\"") &&
     h.includes("data-wz=\"openFinalReport\"") && h.includes("data-wz=\"focusIssues\""),
@@ -138,8 +138,12 @@ const checks = {
     h.includes('重扫中') && extension.includes('agentRunActive') &&
     provider.includes('agentRunActive(): boolean'),
   finalHistoryCollapsed: h.includes('wz-result-history') && h.includes('已生效，非当前') &&
-    h.includes('不是从零重来') && !h.includes('🧾 上一轮验收'),
-  finalHistoryAiStatus: h.includes('上一轮验收已归档') && h.includes('历史明细在下方折叠'),
+    h.includes('historyBlock') && !h.includes('🧾 上一轮验收') &&
+    !h.includes('上一轮验收已归档'),
+  finalHistoryAtBottom: h.includes('+ historyBlock') && h.includes('当前计划 · ') && h.includes('待执行'),
+  staticAiAttempt: h.includes('AI 可试') && h.includes('scopeStats.static.ai') &&
+    h.includes('totals.ai') && h.includes('AI 先给 diff') &&
+    h.includes('copyStaticScopes') && h.includes("scopes: ['static']"),
   finalResultPlanScoped: h.includes('f.planSkipped') && h.includes('f.planCrossLine') &&
     provider.includes('planSkipped') && provider.includes('planCrossLine') &&
     provider.includes("'plan.json'"),

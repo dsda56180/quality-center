@@ -39,7 +39,7 @@ const checks = {
   secretsOnly: texts.secrets.includes('绝不打印') &&
     texts.secrets.includes('轮换'),
   staticOnly: texts.static.includes('SpotBugs') &&
-    texts.static.includes('每修 20 条'),
+    texts.static.includes('每批最多 5 条') && texts.static.includes('先给文件:行 + diff'),
   noUpgradeFlowInScoped: ['consolidation', 'code', 'secrets', 'static'].every(
     (key) => !texts[key].includes('阶段 2 确定性修复') && !texts[key].includes('quality_upgrade_apply')
   ),

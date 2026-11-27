@@ -1481,10 +1481,7 @@ export function getHtml(nonce: string): string {
     if (done) {
       var last = run.lastScan;
       var final = state.final;
-      if (final && final.stale) {
-        // 上一轮结果已折叠归档，这里不能再把旧数字顶在 AI 状态卡上
-        warnings += '<div class="ai-meta">上一轮验收已归档；当前以最新扫描 / 新计划为准，历史明细在下方折叠。</div>';
-      } else if (final) {
+      if (final && !final.stale) {
         warnings += '<div class="ai-meta">最终验收：' + final.baselineTotal + ' → ' + final.currentTotal +
           ' 项（' + (final.totalChange >= 0 ? '+' : '') + final.totalChange +
           '，新增 ' + final.added + ' / 消失 ' + final.removed + '）' +
@@ -1663,9 +1660,10 @@ export function getHtml(nonce: string): string {
     if (upgradeFlow) {
       routePick = 'upgrade';
     }
-    var showChoices = hasData &&
-      (n.action === 'plan' || ((n.action === 'apply' || n.action === 'confirm') && appliedCount === 0)) &&
-      (depCount > 0 || (n.plan && totalCount > 0) || fixableCount > 0);
+    // 已有计划就只展示当前计划，不再让用户先选一遍“处理路线”；
+    // 路线选择只用于“还没有计划”的首屏
+    var showChoices = hasData && n.action === 'plan' && !n.plan &&
+      (depCount > 0 || fixableCount > 0);
     var hubMode = showChoices && !upgradeFlow;
     if (blankState === 'clean') {
       title = '修复工作台 · 当前无问题';
@@ -1689,7 +1687,7 @@ export function getHtml(nonce: string): string {
       if (state.final && !state.final.stale) {
         title = n.plan.state === 'partial' ? '本次修复已收尾 · 剩余组需人工确认' : '本次修复已收尾';
       } else if (state.final && state.final.stale) {
-        title = '修复工作台 · 上一轮已收尾，当前按新计划继续';
+        title = n.plan && n.plan.state === 'partial' ? '当前计划 · 执行中' : '当前计划 · 待执行';
       }
       meta = hubMode
         ? ''
@@ -1708,11 +1706,8 @@ export function getHtml(nonce: string): string {
       // 最终验收的明细由下方结果卡展示，这里不再重复一遍数字
       purpose = '';
     } else if (state.final && state.final.stale && (n.action === 'apply' || n.action === 'confirm')) {
-      purpose = '上一轮已落盘 ' + (state.final.planApplied ?? 0) + ' 项仍计入当前 ' + state.final.currentTotal +
-        ' 项；' + (n.plan
-          ? '当前新计划 ' + (n.plan.appliedCount || 0) + '/' + (n.plan.total || 0) + ' 是下一步待执行，不是从零重来。'
-          : '当前按下方主按钮继续。') +
-        '上一轮明细已折叠，需要时再展开。';
+      // 上一轮已折叠为历史，首屏不再解释两轮关系，避免重复
+      purpose = '';
     } else if (n.action === 'plan') {
       purpose = upgradeFlow
         ? '只显示依赖升级相关内容；先看提醒和待决定项，再生成计划。'
@@ -1785,6 +1780,7 @@ export function getHtml(nonce: string): string {
       ? n.plan.candidates.filter(function (item) { return item.group === 'cross-line'; })
       : [];
     var finalBlock = '';
+    var historyBlock = '';
     if (state.final) {
       var f = state.final;
       // 结果卡只描述 final-report 自己的计划；新计划已生成时不能拿当前计划的 skipped 来凑
@@ -1835,7 +1831,7 @@ export function getHtml(nonce: string): string {
           '<span class="ver">' + esc(item.from || '?') + ' → ' + esc(item.to) + '</span></div>';
       }).join('');
       var reportRows = [];
-      if (spotbugsCount) reportRows.push('SpotBugs ' + spotbugsCount + '：防御性拷贝、构造器注入、业务语义判断，超出可逆小改');
+      if (spotbugsCount) reportRows.push('SpotBugs ' + spotbugsCount + '：多数是编码/防御性规范，不是业务语义；可让 AI 逐条给 diff，确认后再改');
       if (qcsecCount) reportRows.push('配置安全 ' + qcsecCount + '：暴露面与凭证策略要按部署环境决定');
       if (astgrepCount) reportRows.push('AST ' + astgrepCount + '：权限模型、输入校验、安全设计要业务判断');
       if (secretCount) reportRows.push('密钥 ' + secretCount + '：AI 不读原值，先轮换再改配置引用');
@@ -1887,8 +1883,9 @@ export function getHtml(nonce: string): string {
       }
       if (reportOnly) {
         resultRows += '<div class="wz-result-row"><div class="wz-result-row-head">' +
-          '<strong>只报告 · ' + reportOnly + ' 项需人工判断</strong><span class="wz-result-tag info">按边界保留</span></div>' +
-          '<div class="wz-result-why">这些不是“漏修”，是 AI 按可逆小改边界主动留下的；强行改会引入业务语义或安全风险。手动：按来源筛选问题，打开文件行修改；密钥先轮换再改引用。</div>' +
+          '<strong>剩余 · ' + reportOnly + ' 项（' + spotbugsCount + ' 可 AI 尝试，' +
+          Math.max(0, reportOnly - spotbugsCount) + ' 需人工）</strong><span class="wz-result-tag info">按边界保留</span></div>' +
+          '<div class="wz-result-why">这些不是“漏修”，是 AI 按可逆小改边界主动留下的；SpotBugs 多数是编码/防御性规范，不是业务语义，可让 AI 逐条给 diff。配置安全、AST 与密钥仍需人工判断。手动：按来源筛选问题，打开文件行修改；密钥先轮换再改引用。</div>' +
           '<div class="wz-result-list">' + reportRows.map(function (line) {
             return '<div class="wz-result-why">· ' + esc(line) + '</div>';
           }).join('') + '</div></div>';
@@ -1921,14 +1918,15 @@ export function getHtml(nonce: string): string {
         '</div>' +
         '<div class="wz-result-actions">' + resultActions + '</div>' +
         '</div>';
-      // 上一轮结果默认折叠：当前只展示本轮扫描/计划，历史明细需要时再展开
+      // 上一轮结果默认折叠并沉到底部：当前计划占首屏，历史只在需要时展开
       if (f.stale) {
-        finalBlock = '<details class="wz-result-history">' +
+        historyBlock = '<details class="wz-result-history">' +
           '<summary><span>上一轮修复结果 · ' + f.baselineTotal + ' → ' + f.currentTotal +
           (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
           '</span><span class="wz-history-note">已生效，非当前' +
           (state.scanning ? ' · 重扫中' : '') + '</span></summary>' +
           finalBlock + '</details>';
+        finalBlock = '';
       }
     }
     var overview = '';
@@ -2059,7 +2057,8 @@ export function getHtml(nonce: string): string {
           count: staticCount,
           auto: staticAutoCount,
           confirm: 0,
-          report: Math.max(0, staticCount - staticAutoCount),
+          ai: spotbugsCount,
+          report: qcsecCount,
           auth: 0
         }
       };
@@ -2072,7 +2071,9 @@ export function getHtml(nonce: string): string {
         { key: 'consolidation', label: '依赖收敛', detail: '需确认 ' + scopeStats.consolidation.confirm },
         { key: 'code', label: '代码质量', detail: '可自动 ' + scopeStats.code.auto + ' · 只报告 ' + scopeStats.code.report },
         { key: 'secrets', label: '密钥', detail: '只报告 ' + scopeStats.secrets.report + '（先轮换）' },
-        { key: 'static', label: '静态缺陷', detail: '可自动 ' + scopeStats.static.auto + ' · 只报告 ' + scopeStats.static.report }
+        { key: 'static', label: '静态缺陷', detail:
+          (scopeStats.static.auto ? '可自动 ' + scopeStats.static.auto + ' · ' : '') +
+          'AI 可试 ' + scopeStats.static.ai + ' · 人工 ' + scopeStats.static.report }
       ];
       var validPick = scopeOptions.filter(function (o) { return scopeStats[o.key].count > 0 && scopePick.indexOf(o.key) >= 0; });
       var availableCount = scopeOptions.filter(function (o) { return scopeStats[o.key].count > 0; }).length;
@@ -2102,9 +2103,12 @@ export function getHtml(nonce: string): string {
         '</select></label>';
       scopeBar = '<div class="wz-ai"><div class="wz-scope-row">' +
         '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
-        (validPick.length && initialTotals.auto ? '' : ' disabled') +
-        ' title="' + esc(initialTotals.auto
-          ? '按当前范围给 AI：预计自动写入 ' + initialTotals.auto + ' 项；' + initialTotals.confirm + ' 项需确认，' + initialTotals.report + ' 项只报告' + (initialTotals.auth ? '，另有 ' + initialTotals.auth + ' 项待授权' : '')
+        (validPick.length && (initialTotals.auto || initialTotals.ai) ? '' : ' disabled') +
+        ' title="' + esc(initialTotals.auto || initialTotals.ai
+          ? '按当前范围给 AI：' + (initialTotals.auto ? '预计自动写入 ' + initialTotals.auto + ' 项；' : '') +
+            (initialTotals.ai ? '静态缺陷可逐条尝试，AI 先给 diff，确认后才写入；' : '') +
+            initialTotals.confirm + ' 项需确认，' + initialTotals.report + ' 项只报告' +
+            (initialTotals.auth ? '，另有 ' + initialTotals.auth + ' 项待授权' : '')
           : '当前范围没有可自动写入项；密钥只能报告位置，需先人工轮换') + '">AI 修复<span class="wz-star" title="首选" aria-label="首选">★</span></button>' +
         '<details class="wz-scope-picker"><summary><span class="pick-label">范围</span>' +
         '<span id="scopePickSummary">' + pickText + '</span>' +
@@ -2245,6 +2249,10 @@ export function getHtml(nonce: string): string {
         (appliedCount === 0 ? btn('showRoutes', '更换处理方式', false, 'wz-route-back') : '') +
         '</div>';
     }
+    // 静态缺陷不等同“业务语义”：当前计划页也保留逐条 AI 尝试入口
+    if (spotbugsCount && n.action !== 'scan' && !state.scanning) {
+      secondary.push(btn('copyStaticScopes', 'AI 修静态缺陷 ' + spotbugsCount + ' 项', false));
+    }
     var primaryRow = primary
       ? '<div class="wz-primary-row">' + primary +
         (primaryHint ? '<div class="wz-primary-hint">' + esc(primaryHint) + '</div>' : '') + '</div>'
@@ -2287,7 +2295,8 @@ export function getHtml(nonce: string): string {
       + routeHead + gate + emptyBody + lockNote
       + (hubMode ? choiceHub : primaryRow + secondaryRow)
       + (upgradeFlow ? fixPlan : '')
-      + deepBlock;
+      + deepBlock
+      + historyBlock;
     var severitySelectEl = el.querySelector('#sevPick');
     if (severitySelectEl) {
       severitySelectEl.addEventListener('change', function () {
@@ -2313,13 +2322,14 @@ export function getHtml(nonce: string): string {
 
   /** 按当前范围汇总真实可执行量：自动写入 / 需确认 / 只报告 / 待授权 */
   function scopeTotals(picked) {
-    var out = { count: 0, auto: 0, confirm: 0, report: 0, auth: 0 };
+    var out = { count: 0, auto: 0, confirm: 0, ai: 0, report: 0, auth: 0 };
     (picked || []).forEach(function (key) {
       var item = scopeStats[key];
       if (!item) return;
       out.count += Number(item.count || 0);
       out.auto += Number(item.auto || 0);
       out.confirm += Number(item.confirm || 0);
+      out.ai += Number(item.ai || 0);
       out.report += Number(item.report || 0);
       out.auth += Number(item.auth || 0);
     });
@@ -2331,6 +2341,7 @@ export function getHtml(nonce: string): string {
     if (!picked || !picked.length) return '未选择类别';
     return '已选 <strong>' + t.count + '</strong> 项：自动 <strong>' + t.auto + '</strong>' +
       ' · 需确认 <strong>' + t.confirm + '</strong>' +
+      (t.ai ? ' · AI 可试 <strong>' + t.ai + '</strong>' : '') +
       ' · 只报告 <strong>' + t.report + '</strong>' +
       (t.auth ? ' · 另有 <strong>' + t.auth + '</strong> 项待授权' : '');
   }
@@ -2355,9 +2366,12 @@ export function getHtml(nonce: string): string {
     if (truth) truth.innerHTML = scopeTruthText(picked);
     var copyBtn = document.getElementById('scopeCopyBtn');
     if (copyBtn) {
-      copyBtn.disabled = picked.length === 0 || totals.auto === 0;
-      copyBtn.title = totals.auto
-        ? '按当前范围给 AI：预计自动写入 ' + totals.auto + ' 项；' + totals.confirm + ' 项需确认，' + totals.report + ' 项只报告' + (totals.auth ? '，另有 ' + totals.auth + ' 项待授权' : '')
+      copyBtn.disabled = picked.length === 0 || (totals.auto === 0 && totals.ai === 0);
+      copyBtn.title = (totals.auto || totals.ai)
+        ? '按当前范围给 AI：' + (totals.auto ? '预计自动写入 ' + totals.auto + ' 项；' : '') +
+          (totals.ai ? '静态缺陷可逐条尝试，AI 先给 diff，确认后才写入；' : '') +
+          totals.confirm + ' 项需确认，' + totals.report + ' 项只报告' +
+          (totals.auth ? '，另有 ' + totals.auth + ' 项待授权' : '')
         : '当前范围没有可自动写入项；密钥只能报告位置，需先人工轮换';
     }
   }
@@ -2379,6 +2393,8 @@ export function getHtml(nonce: string): string {
       vscode.postMessage({ type: 'copyScopes', scopes: scopePick.slice(), minSeverity: severityPick });
     } else if (key === 'copyReportOnly') {
       vscode.postMessage({ type: 'copyReportOnly' });
+    } else if (key === 'copyStaticScopes') {
+      vscode.postMessage({ type: 'copyScopes', scopes: ['static'], minSeverity: severityPick });
     } else if (key.indexOf('copyScope:') === 0) {
       vscode.postMessage({ type: 'copyScope', scope: key.slice('copyScope:'.length) });
     } else if (key === 'fixAll') {

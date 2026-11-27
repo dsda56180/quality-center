@@ -231,7 +231,7 @@ export function finalizeRun(root: string): FinalizeResult {
         reportOnly.push({ source, label, count, reason });
       }
     };
-    addReport('spotbugs', 'SpotBugs 静态缺陷', '防御性拷贝、构造器注入、业务语义判断，超出可逆小改');
+    addReport('spotbugs', 'SpotBugs 静态缺陷', '多数是编码/防御性规范（如序列化、编码、空值、资源），不是业务语义；可让 AI 逐条给 diff，确认后改');
     addReport('qcsec', '配置安全', '暴露面、权限模型与凭证策略要按部署环境决定');
     addReport('astgrep', 'AST 语义规则', '权限模型、输入校验、安全设计需要业务判断');
     addReport('checkstyle', '代码质量', '未命中确定性修复清单，需人工复核');

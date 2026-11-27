@@ -367,9 +367,9 @@ function buildScopedAgentPrompt(root: string, scope: Exclude<AgentScope, 'all'>,
     lines.push(
       '只处理 SpotBugs / qcsec 静态缺陷。',
       '1. quality_report format=json 取剩余项，按严重度排序，先 critical/high。',
-      '2. 每条修复必须说明规则、调用上下文和影响范围；只做局部、可编译验证的改动。',
-      '3. 每修 20 条或每 10 分钟 quality_build；最后 quality_scan 复核。',
-      '边界：安全设计、权限模型、架构重构只报告；不改依赖、不改测试。'
+      '2. 每条修复必须说明规则、调用上下文和影响范围；先给文件:行 + diff + 风险，用户确认后才写入。',
+      '3. 每批最多 5 条；每批后 quality_build；最后 quality_scan 复核。',
+      '边界：安全设计、权限模型、架构重构只报告；不改依赖、不改测试；不猜业务语义。'
     );
   }
 
