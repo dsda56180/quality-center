@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.28.20
+
+- 上一轮复盘未回答时不默认执行 A，只做只读复盘与候选验证，不落盘；用户明确选择后再继续
+
 ## 0.28.19
 
 - `quality_finalize` 新增 `carryover` 参数：AI 收尾时把「失败未落盘 / 已隔离 / 未完成 / 待人工」按类登记，写入 final-report.json 与 final-report.md 的「中途失败与待处置」段
