@@ -843,18 +843,29 @@ export function getHtml(nonce: string): string {
   .wz-scope-caret::before { content: '▾'; }
   .wz-scope-picker[open] .wz-scope-caret::before { content: '▴'; }
   .wz-scope-menu {
-    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30;
+    position: absolute; left: 0; right: auto; top: calc(100% + 4px); z-index: 30;
+    width: max-content; min-width: 262px; max-width: calc(100vw - 24px);
     margin-top: 0; padding: 5px 6px; border-radius: 5px;
     border: 1px solid var(--vscode-panel-border);
     background: var(--vscode-editor-background, #1f1f1f);
     box-shadow: 0 6px 16px rgba(0, 0, 0, .35);
-    max-height: 210px; overflow-y: auto;
+    max-height: 260px; overflow-y: auto;
   }
   .wz-scope-option {
-    display: flex; align-items: center; gap: 4px; line-height: 1.8;
-    font-size: 10px; cursor: pointer; white-space: nowrap;
+    display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center;
+    column-gap: 4px; row-gap: 1px; line-height: 1.5;
+    font-size: 10px; cursor: pointer; white-space: normal;
   }
-  .wz-scope-option input { margin: 0; width: 12px; height: 12px; }
+  .wz-scope-option input { margin: 0; width: 12px; height: 12px; align-self: start; margin-top: 3px; }
+  .wz-scope-detail {
+    grid-column: 2 / 4; font-size: 9px; line-height: 1.35;
+    color: var(--vscode-descriptionForeground); white-space: normal;
+  }
+  .wz-scope-truth {
+    margin-top: 5px; font-size: 9px; line-height: 1.45;
+    color: var(--vscode-descriptionForeground);
+  }
+  .wz-scope-truth strong { color: var(--vscode-foreground); font-weight: 600; }
   .wz-scope-run {
     flex: none; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 10px;
     white-space: nowrap;
@@ -1061,6 +1072,8 @@ export function getHtml(nonce: string): string {
   let activeTab = 'all';
   /** 修复范围多选；跨渲染保留，默认全选（等同于“全面修复”） */
   let scopePick = ['upgrade', 'consolidation', 'code', 'secrets', 'static'];
+  /** 每个范围的“可自动 / 需确认 / 只报告 / 待授权”真实口径，避免全选被误读为全修 */
+  let scopeStats = {};
   /** AI 修复的严重度下限；info 表示全部 */
   let severityPick = 'info';
   let routePick = '';
@@ -1983,23 +1996,56 @@ export function getHtml(nonce: string): string {
     }
     var scopeBar = '';
     if (hasData) {
+      // 范围选择决定“允许 AI 碰哪些类别”；这里再把类别里的真实可执行量拆开，避免全选被当成全修
+      var staticAutoCount = (state.issues || []).filter(function (item) {
+        return (item.source === 'spotbugs' || item.source === 'qcsec') && item.fixable;
+      }).length;
+      var upgradeAutoCount = n.plan
+        ? Math.max(0, totalCount - crossLineItems.length)
+        : (depCount ? 1 : 0);
+      scopeStats = {
+        upgrade: {
+          count: n.plan ? totalCount : (depCount ? 1 : 0),
+          auto: upgradeAutoCount,
+          confirm: crossLineItems.length,
+          report: 0,
+          auth: policySkipped.length
+        },
+        consolidation: { count: dupSuggestions.length, auto: 0, confirm: dupSuggestions.length, report: 0, auth: 0 },
+        code: { count: checkstyleCount + astgrepCount, auto: checkstyleCount, confirm: 0, report: astgrepCount, auth: 0 },
+        secrets: { count: secretCount, auto: 0, confirm: 0, report: secretCount, auth: 0 },
+        static: {
+          count: staticCount,
+          auto: staticAutoCount,
+          confirm: 0,
+          report: Math.max(0, staticCount - staticAutoCount),
+          auth: 0
+        }
+      };
       var scopeOptions = [
-        { key: 'upgrade', label: '依赖升级', count: n.plan ? n.plan.total : (depCount ? 1 : 0), note: n.plan ? n.plan.total : '计划' },
-        { key: 'consolidation', label: '依赖收敛', count: dupSuggestions.length, note: dupSuggestions.length },
-        { key: 'code', label: '代码质量', count: checkstyleCount + astgrepCount, note: checkstyleCount + astgrepCount },
-        { key: 'secrets', label: '密钥', count: secretCount, note: secretCount },
-        { key: 'static', label: '静态缺陷', count: staticCount, note: staticCount }
+        {
+          key: 'upgrade', label: '依赖升级',
+          detail: '可自动 ' + scopeStats.upgrade.auto + ' · 跨版本 ' + scopeStats.upgrade.confirm +
+            (scopeStats.upgrade.auth ? ' · 待授权 ' + scopeStats.upgrade.auth : '')
+        },
+        { key: 'consolidation', label: '依赖收敛', detail: '需确认 ' + scopeStats.consolidation.confirm },
+        { key: 'code', label: '代码质量', detail: '可自动 ' + scopeStats.code.auto + ' · 只报告 ' + scopeStats.code.report },
+        { key: 'secrets', label: '密钥', detail: '只报告 ' + scopeStats.secrets.report + '（先轮换）' },
+        { key: 'static', label: '静态缺陷', detail: '可自动 ' + scopeStats.static.auto + ' · 只报告 ' + scopeStats.static.report }
       ];
-      var validPick = scopeOptions.filter(function (o) { return o.count > 0 && scopePick.indexOf(o.key) >= 0; });
-      var availableCount = scopeOptions.filter(function (o) { return o.count > 0; }).length;
+      var validPick = scopeOptions.filter(function (o) { return scopeStats[o.key].count > 0 && scopePick.indexOf(o.key) >= 0; });
+      var availableCount = scopeOptions.filter(function (o) { return scopeStats[o.key].count > 0; }).length;
+      var initialTotals = scopeTotals(validPick.map(function (o) { return o.key; }));
       var pickText = validPick.length === availableCount
         ? '全部 ' + availableCount + ' 类'
         : validPick.length ? '已选 ' + validPick.length + ' 类' : '未选择';
       var checks = scopeOptions.map(function (o) {
+        var count = scopeStats[o.key].count;
         return '<label class="wz-scope-option"><input type="checkbox" data-scope-pick="' + o.key + '"' +
-          (scopePick.indexOf(o.key) >= 0 && o.count > 0 ? ' checked' : '') +
-          (o.count ? '' : ' disabled') + '>' +
-          esc(o.label) + '<span class="fix-impact">' + esc(String(o.note || '0')) + '</span></label>';
+          (scopePick.indexOf(o.key) >= 0 && count > 0 ? ' checked' : '') +
+          (count ? '' : ' disabled') + '>' +
+          esc(o.label) + '<span class="fix-impact">' + count + '</span>' +
+          '<span class="wz-scope-detail">' + esc(o.detail) + '</span></label>';
       }).join('');
       var severityOptions = [
         { key: 'info', label: '全部' },
@@ -2015,13 +2061,18 @@ export function getHtml(nonce: string): string {
         '</select></label>';
       scopeBar = '<div class="wz-ai"><div class="wz-scope-row">' +
         '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
-        (validPick.length ? '' : ' disabled') + '>AI 修复<span class="wz-star" title="首选" aria-label="首选">★</span></button>' +
+        (validPick.length && initialTotals.auto ? '' : ' disabled') +
+        ' title="' + esc(initialTotals.auto
+          ? '按当前范围给 AI：预计自动写入 ' + initialTotals.auto + ' 项；' + initialTotals.confirm + ' 项需确认，' + initialTotals.report + ' 项只报告' + (initialTotals.auth ? '，另有 ' + initialTotals.auth + ' 项待授权' : '')
+          : '当前范围没有可自动写入项；密钥只能报告位置，需先人工轮换') + '">AI 修复<span class="wz-star" title="首选" aria-label="首选">★</span></button>' +
         '<details class="wz-scope-picker"><summary><span class="pick-label">范围</span>' +
         '<span id="scopePickSummary">' + pickText + '</span>' +
         '<span class="wz-scope-caret" aria-hidden="true"></span></summary>' +
         '<div class="wz-scope-menu">' + checks + '</div></details>' +
         severitySelect +
-        '</div></div>';
+        '</div>' +
+        '<div class="wz-scope-truth" id="scopeTruth">' +
+        scopeTruthText(validPick.map(function (o) { return o.key; })) + '</div></div>';
     }
     var primary = '';
     var primaryHint = '';
@@ -2219,6 +2270,30 @@ export function getHtml(nonce: string): string {
     });
   }
 
+  /** 按当前范围汇总真实可执行量：自动写入 / 需确认 / 只报告 / 待授权 */
+  function scopeTotals(picked) {
+    var out = { count: 0, auto: 0, confirm: 0, report: 0, auth: 0 };
+    (picked || []).forEach(function (key) {
+      var item = scopeStats[key];
+      if (!item) return;
+      out.count += Number(item.count || 0);
+      out.auto += Number(item.auto || 0);
+      out.confirm += Number(item.confirm || 0);
+      out.report += Number(item.report || 0);
+      out.auth += Number(item.auth || 0);
+    });
+    return out;
+  }
+
+  function scopeTruthText(picked) {
+    var t = scopeTotals(picked);
+    if (!picked || !picked.length) return '未选择类别';
+    return '已选 <strong>' + t.count + '</strong> 项：自动 <strong>' + t.auto + '</strong>' +
+      ' · 需确认 <strong>' + t.confirm + '</strong>' +
+      ' · 只报告 <strong>' + t.report + '</strong>' +
+      (t.auth ? ' · 另有 <strong>' + t.auth + '</strong> 项待授权' : '');
+  }
+
   function updateScopePickerUI() {
     var el = document.getElementById('wizard');
     if (!el) return;
@@ -2228,14 +2303,22 @@ export function getHtml(nonce: string): string {
       return box.getAttribute('data-scope-pick');
     });
     scopePick = picked;
+    var totals = scopeTotals(picked);
     var summary = document.getElementById('scopePickSummary');
     if (summary) {
       summary.textContent = picked.length === available.length
         ? '全部 ' + available.length + ' 类'
         : picked.length ? '已选 ' + picked.length + ' 类' : '未选择';
     }
+    var truth = document.getElementById('scopeTruth');
+    if (truth) truth.innerHTML = scopeTruthText(picked);
     var copyBtn = document.getElementById('scopeCopyBtn');
-    if (copyBtn) copyBtn.disabled = picked.length === 0;
+    if (copyBtn) {
+      copyBtn.disabled = picked.length === 0 || totals.auto === 0;
+      copyBtn.title = totals.auto
+        ? '按当前范围给 AI：预计自动写入 ' + totals.auto + ' 项；' + totals.confirm + ' 项需确认，' + totals.report + ' 项只报告' + (totals.auth ? '，另有 ' + totals.auth + ' 项待授权' : '')
+        : '当前范围没有可自动写入项；密钥只能报告位置，需先人工轮换';
+    }
   }
 
   function handleWizardAction(key) {

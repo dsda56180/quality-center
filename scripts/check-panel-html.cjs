@@ -80,7 +80,8 @@ const checks = {
   aiFirstInPlanCard: h.includes('data-wz="copyScopes"') && h.includes('AI 修复'),
   scopeChooser: h.includes('wz-scope-picker') && h.includes('scopePickSummary') && h.includes('data-scope-pick="'),
   scopePlanInMenu: !h.includes('scopePlanBtn') && !h.includes('wz-scope-menu-foot'),
-  scopeMenuOverlay: h.includes('position: absolute; left: 0; right: 0; top: calc(100% + 4px)'),
+  scopeMenuOverlay: h.includes('position: absolute; left: 0; right: auto; top: calc(100% + 4px)') &&
+    h.includes('min-width: 262px'),
   autoFixInPlan: h.includes("btn('fixAll', '安全自动修复 ") && h.includes("type: 'fixAll'"),
   singlePrimaryAction: h.includes('wz-primary-row') && h.includes('wz-primary') &&
     !h.includes('wz-actions'),
@@ -134,6 +135,12 @@ const checks = {
   finalResultPlanScoped: h.includes('f.planSkipped') && h.includes('f.planCrossLine') &&
     provider.includes('planSkipped') && provider.includes('planCrossLine') &&
     provider.includes("'plan.json'"),
+  scopeTruthTotals: h.includes('scopeStats') && h.includes('scopeTotals') &&
+    h.includes('scopeTruthText') && h.includes('需确认') && h.includes('只报告'),
+  scopeTruthMenu: h.includes('wz-scope-detail') && h.includes('待授权') &&
+    h.includes('可自动 '),
+  scopeTruthGate: h.includes('当前范围没有可自动写入项') &&
+    h.includes('密钥只能报告位置'),
   finalResultNotDuplicated: !h.includes('本次 AI 修复已生成最终验收（') &&
     h.includes('最终验收的明细由下方结果卡展示')
 };
