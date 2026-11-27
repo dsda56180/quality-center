@@ -570,6 +570,9 @@ export function getHtml(nonce: string): string {
   .wz-result-history[open] > summary::before { content: '▾'; }
   .wz-result-history > summary .wz-history-note { flex: none; color: var(--vscode-descriptionForeground); }
   .wz-result-history .wz-result { margin: 0; border: 0; border-top: 1px solid var(--vscode-panel-border); border-radius: 0 0 6px 6px; }
+  /* 历史只用于回看：不保留“下一步”和旧计划按钮，避免与当前计划争主操作 */
+  .wz-result-history .wz-result-actions,
+  .wz-result-history .wz-result-row { display: none; }
   .wz-result-list { margin-top: 3px; }
   .wz-result-item { display: flex; gap: 4px; min-width: 0; }
   .wz-result-item .pkg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -141,6 +141,8 @@ const checks = {
     h.includes('historyBlock') && !h.includes('🧾 上一轮验收') &&
     !h.includes('上一轮验收已归档'),
   finalHistoryAtBottom: h.includes('+ historyBlock') && h.includes('当前计划 · ') && h.includes('待执行'),
+  finalHistoryNoActions: h.includes('.wz-result-history .wz-result-actions') &&
+    h.includes('.wz-result-history .wz-result-row'),
   staticAiAttempt: h.includes('AI 可试') && h.includes('scopeStats.static.ai') &&
     h.includes('totals.ai') && h.includes('AI 先给 diff') &&
     h.includes('copyStaticScopes') && h.includes("scopes: ['static']"),
