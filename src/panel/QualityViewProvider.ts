@@ -251,6 +251,38 @@ function readFinalSummary(
     const plan = (raw.plan as Record<string, any> | undefined) ?? {};
     const build = (raw.build as Record<string, any> | undefined) ?? {};
     const tests = build.tests as { state?: string } | string | undefined;
+    const planId = plan.planId ? String(plan.planId) : undefined;
+    // 结果卡必须用报告自己那份计划的剩余项；当前工作台可能已经换成新计划
+    let planSkipped: NonNullable<Snapshot['final']>['planSkipped'] = [];
+    let planCrossLine: NonNullable<Snapshot['final']>['planCrossLine'] = [];
+    if (planId) {
+      try {
+        const planFile = path.join(root, '.quality-center', 'upgrade', planId, 'plan.json');
+        const planRaw = JSON.parse(fs.readFileSync(planFile, 'utf8')) as Record<string, any>;
+        planSkipped = Array.isArray(planRaw.skipped)
+          ? planRaw.skipped.map((item: Record<string, any>) => ({
+              packageName: String(item.packageName ?? ''),
+              installedVersion: item.installedVersion ? String(item.installedVersion) : undefined,
+              fixedVersion: item.fixedVersion ? String(item.fixedVersion) : undefined,
+              cveCount: item.cveCount !== undefined ? Number(item.cveCount) : undefined,
+              reason: item.reason ? String(item.reason) : undefined,
+              decision: item.decision ? String(item.decision) : undefined
+            }))
+          : [];
+        planCrossLine = Array.isArray(planRaw.candidates)
+          ? planRaw.candidates
+              .filter((item: Record<string, any>) => item.crossLine === true)
+              .map((item: Record<string, any>) => ({
+                packageName: String(item.packageName ?? ''),
+                from: item.from ? String(item.from) : undefined,
+                to: String(item.to ?? '')
+              }))
+          : [];
+      } catch {
+        planSkipped = [];
+        planCrossLine = [];
+      }
+    }
     let issuesAt = '';
     try {
       const issues = JSON.parse(
@@ -260,10 +292,11 @@ function readFinalSummary(
     } catch {
       issuesAt = '';
     }
-    // 收尾后又手动扫了一次：旧报告不再代表当前账本，面板不展示过期验收
-    if (issuesAt && String(current.at ?? '') && Date.parse(issuesAt) > Date.parse(String(current.at ?? '')) + 2000) {
-      return undefined;
-    }
+    // 收尾后又手动扫了一次：旧报告不再代表当前账本；仍然展示，但标成上一轮
+    const staleReason =
+      issuesAt && String(current.at ?? '') && Date.parse(issuesAt) > Date.parse(String(current.at ?? '')) + 2000
+        ? 'newer-scan'
+        : undefined;
     return {
       baselineTotal: Number(baseline.total ?? 0),
       currentTotal: Number(current.total ?? 0),
@@ -272,7 +305,7 @@ function readFinalSummary(
       added: Number(delta.added ?? 0),
       removed: Number(delta.removed ?? 0),
       totalChange: Number(delta.totalChange ?? Number(current.total ?? 0) - Number(baseline.total ?? 0)),
-      planId: plan.planId ? String(plan.planId) : undefined,
+      planId,
       planApplied: plan.applied !== undefined ? Number(plan.applied) : undefined,
       planTotal: plan.total !== undefined ? Number(plan.total) : undefined,
       buildOk: build.ok === undefined ? undefined : build.ok === true,
@@ -283,7 +316,11 @@ function readFinalSummary(
           ? (delta.bySource as Record<string, { before: number; after: number; change: number }>)
           : undefined,
       newlyVisible: Array.isArray(delta.newlyVisible) ? delta.newlyVisible.map((item: unknown) => String(item)) : [],
-      blocked: Array.isArray(raw.blocked) ? raw.blocked.map((item: unknown) => String(item)) : []
+      blocked: Array.isArray(raw.blocked) ? raw.blocked.map((item: unknown) => String(item)) : [],
+      planSkipped,
+      planCrossLine,
+      stale: staleReason ? true : undefined,
+      staleReason
     };
   } catch {
     return undefined;
@@ -3623,11 +3660,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
     const run = root ? runSnapshot(root) : undefined;
     const finalRaw = root ? readFinalSummary(root, run) : undefined;
-    // 收尾后又生成了新计划：旧验收不再代表当前计划，避免结果卡和下一步混用两套数字
-    const final =
-      finalRaw && next?.plan?.planId && finalRaw.planId && finalRaw.planId !== next.plan.planId
-        ? undefined
-        : finalRaw;
+    // 收尾后又生成了新计划：旧验收不能代表当前计划，但仍然要能看到上一轮修了什么
+    const final = finalRaw
+      ? finalRaw.planId && next?.plan?.planId && finalRaw.planId !== next.plan.planId
+        ? { ...finalRaw, stale: true as const, staleReason: 'new-plan' as const, currentPlanId: next.plan.planId }
+        : finalRaw
+      : undefined;
     const activeProject = this.projects.find((project) => project.id === this.activeProjectId);
     const projectSummaries = this.projects.map((project) => {
       const summary = this.readProjectSummary(project);

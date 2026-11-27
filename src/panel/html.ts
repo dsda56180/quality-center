@@ -136,6 +136,20 @@ export interface Snapshot {
     bySource?: Record<string, { before: number; after: number; change: number }>;
     newlyVisible?: string[];
     blocked?: string[];
+    /** 报告里那份计划的剩余项：必须跟着 final.planId 走，不能被当前新计划覆盖 */
+    planSkipped?: {
+      packageName: string;
+      installedVersion?: string;
+      fixedVersion?: string;
+      cveCount?: number;
+      reason?: string;
+      decision?: string;
+    }[];
+    planCrossLine?: { packageName: string; from?: string; to: string }[];
+    /** 收尾后又生成了新计划 / 又扫了一次：数字仍可看，但只代表上一轮 */
+    stale?: boolean;
+    staleReason?: 'new-plan' | 'newer-scan' | 'newer-run';
+    currentPlanId?: string;
   };
   /** 唯一状态机：现在到哪、下一步只做什么 */
   next?: SnapshotNext;
@@ -545,6 +559,7 @@ export function getHtml(nonce: string): string {
   .wz-result-tag { padding: 0 4px; border-radius: 3px; background: rgba(210,153,34,.14); color: var(--vscode-editorWarning-foreground, #d29922); font-size: 9px; }
   .wz-result-tag.info { background: rgba(56,139,253,.14); color: var(--vscode-textLink-foreground, #3794ff); }
   .wz-result-why { margin-top: 2px; color: var(--vscode-descriptionForeground); }
+  .wz-result-stale { margin-top: 3px; padding: 3px 5px; border-radius: 3px; background: rgba(210,153,34,.12); color: var(--vscode-editorWarning-foreground, #d29922); }
   .wz-result-list { margin-top: 3px; }
   .wz-result-item { display: flex; gap: 4px; min-width: 0; }
   .wz-result-item .pkg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1537,8 +1552,11 @@ export function getHtml(nonce: string): string {
 
     if (state.final) {
       var f = state.final;
-      var finalPending = state.next && state.next.plan ? Number(state.next.plan.skippedCount || 0) : 0;
-      add('info', '🧾 最终验收：' + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
+      var finalPending = n.plan ? Number(n.plan.skippedCount || 0) : 0;
+      if (f.stale && f.planSkipped) {
+        finalPending = f.planSkipped.length;
+      }
+      add('info', (f.stale ? '🧾 上一轮验收：' : '🧾 最终验收：') + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
         (f.totalChange >= 0 ? '+' : '') + f.totalChange + '，新增 ' + f.added + ' / 消失 ' + f.removed + '）' +
         (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
         (finalPending ? ' · ' + finalPending + ' 项未自动处理' : '') +
@@ -1638,8 +1656,10 @@ export function getHtml(nonce: string): string {
       title = hubMode
         ? '修复工作台 · 先选处理路线'
         : (n.plan.state === 'partial' ? '修复工作台 · 计划执行中' : '修复工作台 · 计划已生成');
-      if (state.final) {
+      if (state.final && !state.final.stale) {
         title = n.plan.state === 'partial' ? '本次修复已收尾 · 剩余组需人工确认' : '本次修复已收尾';
+      } else if (state.final && state.final.stale) {
+        title = '修复工作台 · 上一轮已收尾，当前按新计划继续';
       }
       meta = hubMode
         ? ''
@@ -1654,9 +1674,11 @@ export function getHtml(nonce: string): string {
         : '扫描只读，不改代码；之后的计划与写入都会先预览、再确认。';
     } else if (blankState === 'clean') {
       purpose = '最近一次扫描没有发现问题；改过 pom 或代码后再复扫确认。';
-    } else if (state.final && (n.action === 'apply' || n.action === 'confirm')) {
+    } else if (state.final && !state.final.stale && (n.action === 'apply' || n.action === 'confirm')) {
       // 最终验收的明细由下方结果卡展示，这里不再重复一遍数字
       purpose = '';
+    } else if (state.final && state.final.stale && (n.action === 'apply' || n.action === 'confirm')) {
+      purpose = '上一轮结果只作参考；当前新计划按下面的主按钮继续，不要把两轮数字混在一起看。';
     } else if (n.action === 'plan') {
       purpose = upgradeFlow
         ? '只显示依赖升级相关内容；先看提醒和待决定项，再生成计划。'
@@ -1731,6 +1753,16 @@ export function getHtml(nonce: string): string {
     var finalBlock = '';
     if (state.final) {
       var f = state.final;
+      // 结果卡只描述 final-report 自己的计划；新计划已生成时不能拿当前计划的 skipped 来凑
+      var finalPolicy = (f.planSkipped && f.planSkipped.length
+        ? f.planSkipped
+        : skippedItems
+      ).filter(function (item) {
+        return item.decision === 'policy-denied' || /dependencyManagement|策略未授权/.test(item.reason || '');
+      });
+      var finalCross = f.planCrossLine && f.planCrossLine.length
+        ? f.planCrossLine
+        : crossLineItems;
       var bySource = f.bySource || {};
       var sourceOrder = [
         { key: 'trivy', label: '依赖漏洞' },
@@ -1762,7 +1794,7 @@ export function getHtml(nonce: string): string {
         return '<div class="wz-result-item"><span class="pkg">' + esc(item.packageName) + '</span>' +
           '<span class="ver">' + esc(item.installedVersion || '?') + ' → ' + esc(item.fixedVersion || '?') + '</span></div>';
       }).join('');
-      var crossRows = crossLineItems.slice(0, 4).map(function (item) {
+      var crossRows = finalCross.slice(0, 4).map(function (item) {
         return '<div class="wz-result-item"><span class="pkg">' + esc(item.packageName) + '</span>' +
           '<span class="ver">' + esc(item.from || '?') + ' → ' + esc(item.to) + '</span></div>';
       }).join('');
@@ -1773,42 +1805,45 @@ export function getHtml(nonce: string): string {
       if (secretCount) reportRows.push('密钥 ' + secretCount + '：AI 不读原值，先轮换再改配置引用');
       if (checkstyleCount) reportRows.push('代码质量 ' + checkstyleCount + '：未命中确定性修复清单，需人工复核');
       var nextText = '';
-      if (policySkipped.length && crossLineItems.length) {
+      if (finalPolicy.length && finalCross.length) {
         nextText = '先按项授权间接依赖，再确认跨大版本；两步都不跳过。';
-      } else if (policySkipped.length) {
+      } else if (finalPolicy.length) {
         nextText = '先处理待授权间接依赖；授权后重新生成计划，不手改 pom。';
-      } else if (crossLineItems.length) {
+      } else if (finalCross.length) {
         nextText = '只剩跨大版本：确认兼容后显式允许写入，或把它留到下一轮。';
       } else if (reportOnly) {
         nextText = '剩余是需人工判断的静态/安全项：可复制给 AI 按范围修，或手动逐项处理。';
       } else {
         nextText = '已无自动写入项；复扫验收后即可收尾。';
       }
-      var resultActions = '';
-      if (policySkipped.length) {
-        resultActions += '<button class="wz-result-btn" data-wz="openPolicy">处理待授权 ' + policySkipped.length + ' 项</button>';
+      if (f.stale) {
+        nextText = '这是上一轮结果；当前已有新计划，请按下方工作台继续。上一轮剩余项仍可复制给 AI 或手动处理。';
       }
-      if (crossLineItems.length) {
+      var resultActions = '';
+      if (finalPolicy.length && !f.stale) {
+        resultActions += '<button class="wz-result-btn" data-wz="openPolicy">处理待授权 ' + finalPolicy.length + ' 项</button>';
+      }
+      if (finalCross.length && !f.stale) {
         resultActions += '<button class="wz-result-btn" data-wz="openHandoff">查看跨大版本说明</button>';
       }
       resultActions += '<button class="wz-result-btn" data-wz="copyRemaining">复制剩余项给 AI</button>' +
         '<button class="wz-result-btn" data-wz="openFinalReport">查看最终报告</button>' +
         '<button class="wz-result-btn" data-wz="focusIssues">手动逐项处理</button>';
       var resultRows = '';
-      if (policySkipped.length) {
+      if (finalPolicy.length) {
         resultRows += '<div class="wz-result-row"><div class="wz-result-row-head">' +
-          '<strong>待授权 · ' + policySkipped.length + ' 项间接依赖</strong><span class="wz-result-tag">不会自动改</span></div>' +
+          '<strong>待授权 · ' + finalPolicy.length + ' 项间接依赖</strong><span class="wz-result-tag">不会自动改</span></div>' +
           '<div class="wz-result-why">由其他依赖带入，当前策略未授权写 dependencyManagement；不授权就只能保留这些 CVE。授权只写版本锁定，不改业务代码。手动：打开升级预览逐项勾选，授权后重新生成计划。</div>' +
           '<div class="wz-result-list">' + policyRows + '</div>' +
-          (policySkipped.length > 4 ? '<div class="wz-result-more">另有 ' + (policySkipped.length - 4) + ' 项在授权预览里逐项勾选。</div>' : '') +
+          (finalPolicy.length > 4 ? '<div class="wz-result-more">另有 ' + (finalPolicy.length - 4) + ' 项在授权预览里逐项勾选。</div>' : '') +
           '</div>';
       }
-      if (crossLineItems.length) {
+      if (finalCross.length) {
         resultRows += '<div class="wz-result-row"><div class="wz-result-row-head">' +
-          '<strong>跨大版本 · ' + crossLineItems.length + ' 项</strong><span class="wz-result-tag">需你确认</span></div>' +
+          '<strong>跨大版本 · ' + finalCross.length + ' 项</strong><span class="wz-result-tag">需你确认</span></div>' +
           '<div class="wz-result-why">升级会改变 API、驱动协议或依赖基线；插件默认不写，避免一升就炸。先确认 JDK / 框架兼容性，再显式允许。手动：在交接文件确认兼容性后，单独执行这一组并显式允许跨版本。</div>' +
           '<div class="wz-result-list">' + crossRows + '</div>' +
-          (crossLineItems.length > 4 ? '<div class="wz-result-more">另有 ' + (crossLineItems.length - 4) + ' 项，见升级计划明细。</div>' : '') +
+          (finalCross.length > 4 ? '<div class="wz-result-more">另有 ' + (finalCross.length - 4) + ' 项，见升级计划明细。</div>' : '') +
           '</div>';
       }
       if (reportOnly) {
@@ -1819,10 +1854,16 @@ export function getHtml(nonce: string): string {
             return '<div class="wz-result-why">· ' + esc(line) + '</div>';
           }).join('') + '</div></div>';
       }
+      var staleNote = f.stale
+        ? (f.staleReason === 'new-plan'
+            ? '这是计划 ' + esc(f.planId || '—') + ' 的收尾结果；当前已生成新计划 ' + esc(f.currentPlanId || '—') + '，下面数字只代表上一轮。'
+            : '这是上一轮收尾结果；之后又扫过一次，当前账本已更新，下面数字只代表上一轮。')
+        : '';
       finalBlock = '<div class="wz-result">' +
-        '<div class="wz-result-head"><strong>本次修复结果</strong>' +
+        '<div class="wz-result-head"><strong>' + (f.stale ? '上一轮修复结果' : '本次修复结果') + '</strong>' +
         '<span class="wz-result-sum">' + f.baselineTotal + ' → ' + f.currentTotal + ' · ' +
         (f.totalChange >= 0 ? '+' : '') + f.totalChange + '</span></div>' +
+        (staleNote ? '<div class="wz-result-stale">' + staleNote + '</div>' : '') +
         '<div class="wz-result-why">消失 ' + f.removed + ' / 新增 ' + f.added +
         (planLine ? ' · ' + planLine : '') + (buildLine ? ' · ' + buildLine : '') + '</div>' +
         (resultCells ? '<div class="wz-result-grid">' + resultCells + '</div>' : '') +
@@ -2011,7 +2052,7 @@ export function getHtml(nonce: string): string {
         break;
       case 'apply':
       case 'confirm':
-        if (state.final) {
+        if (state.final && !state.final.stale) {
           if (decisionCount) {
             primary = btn('openPolicy', '先处理待授权 ' + decisionCount + ' 项', true);
             primaryHint = '这些间接依赖不会自动写；按项授权后才重新生成计划。跨大版本留到下一步确认。';

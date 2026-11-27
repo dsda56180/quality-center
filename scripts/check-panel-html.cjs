@@ -128,6 +128,12 @@ const checks = {
     h.includes('手动：按来源筛选问题') && h.includes('手动：在交接文件确认兼容性'),
   finalResultEntry: h.includes("focus('查看结果', 'wizard')") &&
     h.includes('项未自动处理'),
+  finalResultStaleVisible: h.includes('上一轮修复结果') && h.includes('wz-result-stale') &&
+    h.includes('currentPlanId') && provider.includes("staleReason: 'new-plan'") &&
+    provider.includes("'newer-scan'"),
+  finalResultPlanScoped: h.includes('f.planSkipped') && h.includes('f.planCrossLine') &&
+    provider.includes('planSkipped') && provider.includes('planCrossLine') &&
+    provider.includes("'plan.json'"),
   finalResultNotDuplicated: !h.includes('本次 AI 修复已生成最终验收（') &&
     h.includes('最终验收的明细由下方结果卡展示')
 };
