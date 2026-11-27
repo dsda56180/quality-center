@@ -851,6 +851,7 @@ export function getHtml(nonce: string): string {
     border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
     border-radius: 4px;
   }
+  .wz-mode select { max-width: 96px; }
   .wz-scope-picker {
     position: relative; flex: 1 1 110px; width: auto; max-width: none; min-width: 0;
   }
@@ -1110,6 +1111,8 @@ export function getHtml(nonce: string): string {
   let scopeStats = {};
   /** AI 修复的严重度下限；info 表示全部 */
   let severityPick = 'info';
+  /** AI 修复策略：safe 只做可逆小改；consult 可提语义重构但逐项确认；deep 可纳入跨版本/架构方案 */
+  let repairMode = 'consult';
   let routePick = '';
   let routeScanKey = '';
   /** 各来源分组的折叠状态，跨渲染保留 */
@@ -2143,6 +2146,17 @@ export function getHtml(nonce: string): string {
           return '<option value="' + o.key + '"' + (severityPick === o.key ? ' selected' : '') + '>' + esc(o.label) + '</option>';
         }).join('') +
         '</select></label>';
+      var modeOptions = [
+        { key: 'safe', label: '只做可逆' },
+        { key: 'consult', label: '语义改动确认' },
+        { key: 'deep', label: '含跨版本确认' }
+      ];
+      var modeSelect = '<label class="wz-sev wz-mode" title="策略只决定 AI 能提出到什么程度；非可逆项仍然先确认，不会直接写盘">' +
+        '<span>策略</span><select id="modePick">' +
+        modeOptions.map(function (o) {
+          return '<option value="' + o.key + '"' + (repairMode === o.key ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+        }).join('') +
+        '</select></label>';
       scopeBar = '<div class="wz-ai"><div class="wz-scope-row">' +
         '<button id="scopeCopyBtn" class="wz-scope-run" data-wz="copyScopes"' +
         (validPick.length && (initialTotals.auto || initialTotals.ai) ? '' : ' disabled') +
@@ -2157,6 +2171,7 @@ export function getHtml(nonce: string): string {
         '<span class="wz-scope-caret" aria-hidden="true"></span></summary>' +
         '<div class="wz-scope-menu">' + checks + '</div></details>' +
         severitySelect +
+        modeSelect +
         '</div>' +
         '<div class="wz-scope-truth" id="scopeTruth">' +
         scopeTruthText(validPick.map(function (o) { return o.key; })) + '</div>' +
@@ -2366,6 +2381,12 @@ export function getHtml(nonce: string): string {
         severityPick = severitySelectEl.value;
       });
     }
+    var modeSelectEl = el.querySelector('#modePick');
+    if (modeSelectEl) {
+      modeSelectEl.addEventListener('change', function () {
+        repairMode = modeSelectEl.value;
+      });
+    }
     var reportLinkEl = el.querySelector('[data-msg="openReport"]');
     if (reportLinkEl) {
       reportLinkEl.addEventListener('click', function () {
@@ -2453,7 +2474,7 @@ export function getHtml(nonce: string): string {
       vscode.postMessage({ type: 'scan' });
     } else if (key === 'copyScopes') {
       updateScopePickerUI();
-      vscode.postMessage({ type: 'copyScopes', scopes: scopePick.slice(), minSeverity: severityPick });
+      vscode.postMessage({ type: 'copyScopes', scopes: scopePick.slice(), minSeverity: severityPick, repairMode: repairMode });
     } else if (key === 'copyReportOnly') {
       vscode.postMessage({ type: 'copyReportOnly' });
     } else if (key.indexOf('copyScope:') === 0) {

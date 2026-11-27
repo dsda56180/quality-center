@@ -740,6 +740,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     scope?: string;
     scopes?: string[];
     minSeverity?: string;
+    repairMode?: string;
     options?: ScanSettingsInput;
     projectId?: string;
   }): Promise<void> {
@@ -847,7 +848,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
         await this.copyScopePrompt(message.scope);
         break;
       case 'copyScopes':
-        await this.copyScopePrompt(undefined, message.scopes, message.minSeverity);
+        await this.copyScopePrompt(undefined, message.scopes, message.minSeverity, message.repairMode);
         break;
       case 'checkMcp':
         await this.refreshMcpStatus();
@@ -2718,7 +2719,12 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   /** 按范围复制给 AI：全面 / 只升级 / 收敛 / 代码 / 密钥 / 静态；scopes 支持多选组合 */
-  private async copyScopePrompt(rawScope: unknown, rawScopes?: unknown, rawMinSeverity?: unknown): Promise<void> {
+  private async copyScopePrompt(
+    rawScope: unknown,
+    rawScopes?: unknown,
+    rawMinSeverity?: unknown,
+    rawMode?: unknown
+  ): Promise<void> {
     const root = this.runner.root();
     if (!root) {
       void vscode.window.showInformationMessage('还没有打开项目。');
@@ -2737,6 +2743,15 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const minSeverity: Severity = severityValues.includes(rawMinSeverity as Severity)
       ? rawMinSeverity as Severity
       : 'info';
+    const modes = ['safe', 'consult', 'deep'] as const;
+    const repairMode = modes.includes(rawMode as (typeof modes)[number])
+      ? (rawMode as (typeof modes)[number])
+      : 'consult';
+    const modeLabel: Record<(typeof modes)[number], string> = {
+      safe: '只做可逆小改',
+      consult: '语义改动先确认',
+      deep: '含跨版本/架构方案，逐组确认'
+    };
     const label: Record<AgentScope, string> = {
       all: '全面修复',
       upgrade: '仅升级依赖',
@@ -2779,6 +2794,11 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
     const previousBlock = previousLines.length
       ? `\n上一轮扫描留给用户确认的问题（历史参考，不要自行扩大授权）：\n${previousLines.join('\n')}\n`
       : '';
+    const modeRule: Record<(typeof modes)[number], string> = {
+      safe: '只自动写确定性/可逆小改；语义重构、依赖收敛、静态人工项只报告，不主动改。',
+      consult: '允许 AI 提出语义重构、依赖收敛、静态人工项的改法；每项先给 diff/风险/回滚，用户确认后才执行。',
+      deep: '允许 AI 把跨大版本、架构调整纳入方案；先给计划、兼容性、回滚路径，用户逐组确认后才执行。'
+    };
     const confirmBlock = [
       '',
       '需确认项的交互规则：',
@@ -2786,15 +2806,17 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       '- 这些项必须分两阶段：第一阶段只输出确认清单，然后停下来等用户回答；不得在同一轮直接调用 quality_* 写盘。',
       '- 用户明确回复「确认 / 继续」后，才立即继续调用 quality_* 执行；不要要求用户重新复制指令或重新选择范围。',
       '- 依赖项确认清单必须多一列「引入路径 + 代码是否仍使用 + 动作」：动作只能是升级 / 锁定 / 排除 / 移除 / 迁移，不能默认全部升级。',
-      '- 只有可逆的编码/防御性规范项才执行；安全设计、权限模型、架构重构只报告。密钥只报位置，不读原值。'
+      '- 安全设计、权限模型、数据迁移、外部副作用只报告或只给方案；密钥只报位置，不读原值。',
+      `- 当前修复策略：${modeLabel[repairMode]}。${modeRule[repairMode]}`,
+      '- git 只能回滚代码，不能回滚已经发生的运行时故障、数据写入、缓存格式变化或外部调用；所以“语义不可逆”项必须先确认，不能拿 git 当免责理由。'
     ].join('\n');
     await vscode.env.clipboard.writeText(
-      buildAgentPrompt(root, { mode: 'autopilot', scopes, minSeverity }) + previousBlock + confirmBlock
+      buildAgentPrompt(root, { mode: 'autopilot', scopes, minSeverity, repairMode }) + previousBlock + confirmBlock
     );
     const labelText = scopes.map((scope) => label[scope]).join(' + ');
     const severityText = minSeverity === 'info' ? '全部严重度' : `${severityLabel[minSeverity]}及以上`;
     void vscode.window.showInformationMessage(
-      `已复制「${labelText} · ${severityText}」指令：AI 只会改所选范围和严重度，其他只报告。`
+      `已复制「${labelText} · ${severityText} · ${modeLabel[repairMode]}」指令：AI 只改所选范围和严重度，非可逆项先确认。`
     );
   }
 

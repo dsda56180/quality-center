@@ -36,6 +36,18 @@ export interface AgentPromptOptions {
   scopes?: AgentScope[];
   /** 严重度下限；缺省 info（全部）。低于该等级的只报告，不改代码 */
   minSeverity?: Severity;
+  /** AI 修复策略：只做可逆 / 允许提语义重构但确认 / 允许纳入跨版本与架构方案 */
+  repairMode?: 'safe' | 'consult' | 'deep';
+}
+
+function repairModeBoundary(mode: AgentPromptOptions['repairMode']): string {
+  if (mode === 'deep') {
+    return '修复策略：可把跨大版本、架构调整纳入方案；先给计划、兼容性、回滚路径，用户逐组确认后才写，未确认前禁止写盘。';
+  }
+  if (mode === 'safe') {
+    return '修复策略：只自动写确定性/可逆小改；语义重构、依赖收敛、静态人工项只报告，不主动改。';
+  }
+  return '修复策略：可提出语义重构、依赖收敛、静态人工项的改法；每项先给 diff/风险/回滚，用户确认后才写，未确认前禁止写盘。';
 }
 
 const SCOPE_LABEL: Record<Exclude<AgentScope, 'all'>, string> = {
@@ -277,12 +289,15 @@ function buildCombinedAgentPrompt(root: string, scopes: Exclude<AgentScope, 'all
     secrets:
       '密钥：绝不打印原值；先让用户轮换，再迁移环境变量/配置中心；不能确认轮换时只报告。',
     static:
-      '静态缺陷：只处理 SpotBugs/qcsec；局部改动，每 20 条或每 10 分钟 build；安全设计/架构问题只报告。'
+      options.repairMode === 'safe'
+        ? '静态缺陷：只处理 SpotBugs/qcsec；局部改动，每 20 条或每 10 分钟 build；安全设计/架构问题只报告。'
+        : '静态缺陷：可提出语义重构/防御性改造方案；每项先给文件:行 + diff + 风险，用户确认后才写；安全设计/数据迁移只报告。'
   };
   const sevLine = severityBoundary(options.minSeverity);
   const lines = [
     `你本次处理以下范围：${labels}。未列出的类别只报告、不修改；不要用“全面修复”默认扩大授权。`,
     ...(sevLine ? [sevLine] : []),
+    repairModeBoundary(options.repairMode),
     `处理顺序：${ordered.map((scope) => SCOPE_LABEL[scope]).join(' → ')}。`,
     '每个范围完成后执行 quality_build + quality_scan；失败先 quality_explain，同一类连续两次失败就停手。',
     '',
@@ -318,6 +333,7 @@ function buildScopedAgentPrompt(root: string, scope: Exclude<AgentScope, 'all'>,
   const lines: string[] = [
     `你本次只处理「${label}」，其他类别只报告、不修改；不要因为“顺手”去改 pom、依赖、测试、配置或无关代码。`,
     ...(sevLine ? [sevLine] : []),
+    repairModeBoundary(options.repairMode),
     '事实源仍然是 .quality-center/issues.json / suggestions / report.md；不要凭聊天记忆推断问题数量。',
     '编辑器内优先用 quality_* MCP；没有 MCP 时用 .quality-center/bin/qc.cjs。',
     ''
@@ -369,7 +385,9 @@ function buildScopedAgentPrompt(root: string, scope: Exclude<AgentScope, 'all'>,
       '1. quality_report format=json 取剩余项，按严重度排序，先 critical/high。',
       '2. 每条修复必须说明规则、调用上下文和影响范围；先给文件:行 + diff + 风险，用户确认后才写入。',
       '3. 每批最多 5 条；每批后 quality_build；最后 quality_scan 复核。',
-      '边界：安全设计、权限模型、架构重构只报告；不改依赖、不改测试；不猜业务语义。'
+      options.repairMode === 'safe'
+        ? '边界：安全设计、权限模型、架构重构只报告；不改依赖、不改测试；不猜业务语义。'
+        : '边界：可提出语义重构/防御性改造方案，但必须逐项给 diff 并等用户确认；安全设计、权限模型、数据迁移只报告方案；不改依赖、不改测试。'
     );
   }
 
@@ -412,6 +430,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
   if (baseSevLine) {
     lines.push(baseSevLine, '');
   }
+  lines.push(repairModeBoundary(options.repairMode), '');
 
   const facts = readPromptFacts(root, options);
 
@@ -430,7 +449,12 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
       }（${boundaryLine(facts)}）；只允许运行时是更高 JDK，不允许擅自改 source/target。`,
       `2. 门禁：沿用 upgrade-policy.json 的 ${gateLabel(facts)}；不通过跳过测试、改测试或降低门禁来换通过。`,
       `3. 跨大版本：默认不写；只有某个 CVE 在当前 ${facts.javaSource ? `Java ${facts.javaSource}` : 'Java 级别'} 下没有兼容修复版本时，才把它列为“需要升级 JDK/框架”的阻塞项，不得自行 apply。`,
-      '4. 属性覆盖与最小代码修复：允许；允许删除无用 import、调整修饰符顺序、简化布尔比较等可逆小改；不允许大范围重构。',
+      '4. 属性覆盖与最小代码修复：允许；允许删除无用 import、调整修饰符顺序、简化布尔比较等可逆小改；' +
+        (options.repairMode === 'deep'
+          ? '也允许把跨大版本/架构调整纳入方案，但必须先给计划/兼容性/回滚，用户逐组确认后才能写。'
+          : options.repairMode === 'safe'
+            ? '不允许大范围重构；语义重构只报告。'
+            : '语义重构/依赖收敛/静态人工项可以先给 diff/风险/回滚，用户逐项确认后再写，不允许未确认直接写。'),
       '5. 静态问题：按下面阶段批量修，不要一条一条问用户。',
       ''
     );
