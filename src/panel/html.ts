@@ -1896,6 +1896,9 @@ export function getHtml(nonce: string): string {
       resultActions += '<button class="wz-result-btn" data-wz="openFinalReport">查看最终报告</button>' +
         '<button class="wz-result-btn" data-wz="focusIssues">手动逐项处理</button>';
       var resultRows = '';
+      // 上一轮结果只保留数字与报告入口；旧计划里的“待授权/跨版本/剩余项”不再提供操作按钮，
+      // 否则会和当前计划的事实混在一起（例如历史 1 项、当前 2 项）。
+      if (!f.stale) {
       if (finalPolicy.length) {
         resultRows += '<div class="wz-result-row"><div class="wz-result-row-head">' +
           '<strong>待授权 · ' + finalPolicy.length + ' 项间接依赖</strong><span class="wz-result-tag">不会自动改</span></div>' +
@@ -1924,6 +1927,7 @@ export function getHtml(nonce: string): string {
             return '<div class="wz-result-why">· ' + esc(line) + '</div>';
           }).join('') + '</div></div>';
       }
+      }
       var staleNote = f.stale
         ? (f.staleReason === 'new-plan'
             ? '这是计划 ' + esc(f.planId || '—') + ' 的收尾结果；当前已生成新计划 ' + esc(f.currentPlanId || '—') + '，下面数字只代表上一轮。'
@@ -1945,12 +1949,12 @@ export function getHtml(nonce: string): string {
         (resultCells ? '<div class="wz-result-grid">' + resultCells + '</div>' : '') +
         (f.newlyVisible && f.newlyVisible.length ? '<div class="wz-result-why">首次可见（不是回归）：' + esc(f.newlyVisible.join(', ')) + '</div>' : '') +
         resultRows +
-        '<div class="wz-result-row wz-result-next"><div class="wz-result-row-head"><strong>下一步怎么做</strong></div>' +
+        (f.stale ? '' : '<div class="wz-result-row wz-result-next"><div class="wz-result-row-head"><strong>下一步怎么做</strong></div>' +
         '<div class="wz-result-why">' + esc(nextText) + '</div>' +
-        '<div class="wz-result-why">AI 继续修：点「复制剩余项给 AI」，提示里已带上可写范围、构建门禁和不可越过的阻塞。</div>' +
+        '<div class="wz-result-why">AI 继续修：点「AI 修复剩余项」，提示里已带上可写范围、构建门禁和不可越过的阻塞。</div>' +
         '<div class="wz-result-why">手动修复：点「手动逐项处理」按来源筛选，代码/配置问题直接打开文件和行；密钥先轮换再改引用。</div>' +
-        '</div>' +
-        '<div class="wz-result-actions">' + resultActions + '</div>' +
+        '</div>') +
+        (f.stale ? '' : '<div class="wz-result-actions">' + resultActions + '</div>') +
         '</div>';
       // 上一轮结果默认折叠并沉到底部：当前计划占首屏，历史只在需要时展开
       if (f.stale) {
@@ -2048,7 +2052,8 @@ export function getHtml(nonce: string): string {
       if (includeDependency && decisionCount && !policyBlocked) {
         out += '<div class="wz-gate warn"><div class="wz-gate-head">需要你决定 · ' + decisionCount + ' 项间接依赖</div>' +
           '<div class="wz-gate-msg">这些包由其他依赖间接带入；当前策略只允许直接依赖升级。</div>' +
-          '<div class="wz-gate-tip">打开预览后可逐项授权，只写版本锁定，不手改 pom。</div></div>';
+          '<div class="wz-gate-tip">打开预览后可逐项授权，只写版本锁定，不手改 pom。' +
+          '<button class="wz-result-btn wz-result-inline" data-wz="openPolicy">逐项授权</button></div></div>';
       }
       return out;
     }
@@ -2110,7 +2115,7 @@ export function getHtml(nonce: string): string {
         { key: 'secrets', label: '密钥', detail: '只报告 ' + scopeStats.secrets.report + '（先轮换）' },
         { key: 'static', label: '静态缺陷', detail:
           (scopeStats.static.auto ? '可自动 ' + scopeStats.static.auto + ' · ' : '') +
-          'AI 可试 ' + scopeStats.static.ai + ' · 待确认 ' + scopeStats.static.confirm }
+          '可逐条尝试 ' + scopeStats.static.ai + ' · 仅可逆小改' }
       ];
       var validPick = scopeOptions.filter(function (o) { return scopeStats[o.key].count > 0 && scopePick.indexOf(o.key) >= 0; });
       var availableCount = scopeOptions.filter(function (o) { return scopeStats[o.key].count > 0; }).length;
@@ -2292,11 +2297,13 @@ export function getHtml(nonce: string): string {
     }
     // 当前计划把 AI 范围处理作为主入口；手动写入降为“其他操作”，不再抢蓝色主按钮
     var manualHint = '';
-    if ((n.action === 'apply' || n.action === 'confirm') && n.plan) {
+    if ((n.action === 'apply' || n.action === 'confirm' || n.action === 'plan') && n.plan) {
       manualHint = primaryHint;
-      var manualKey = decisionCount ? 'openPolicy'
+      var manualKey = n.action === 'plan' ? 'createPlan'
+        : decisionCount ? 'openPolicy'
         : (n.plan.nextGroup === 'cross-line' ? 'openHandoff' : 'upgradeNext');
-      var manualText = decisionCount ? '手动处理待授权 ' + decisionCount + ' 项'
+      var manualText = n.action === 'plan' ? '重新生成计划（只生成计划）'
+        : decisionCount ? '手动处理待授权 ' + decisionCount + ' 项'
         : (n.plan.nextGroup === 'cross-line' ? '手动确认跨大版本方案'
           : '手动继续升级' + (label ? '：' + label : '') + (nextCount ? ' ' + nextCount + ' 项' : ''));
       secondary.unshift(btn(manualKey, manualText, false));

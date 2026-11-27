@@ -180,6 +180,45 @@ export function isCrossLine(from: string, to: string): boolean {
   return a !== b;
 }
 
+/**
+ * 目标版本自身要求的 JDK 下限。计划只应给出“当前 JDK 能落地”的候选；
+ * 需要更高 JDK 的版本应进 skipped，而不是混在 cross-line 里等 AI 跳过。
+ */
+function requiredJavaFor(packageName: string, to: string): number | undefined {
+  const major = Number(majorOf(to)) || 0;
+  if (packageName.startsWith('org.springframework.boot:') && major >= 3) {
+    return 17;
+  }
+  if (
+    packageName.startsWith('org.springframework:spring-') &&
+    major >= 6
+  ) {
+    return 17;
+  }
+  if (packageName.startsWith('org.springframework.security:') && major >= 6) {
+    return 17;
+  }
+  if (packageName.startsWith('org.springframework.data:') && major >= 3) {
+    return 17;
+  }
+  if (packageName.startsWith('org.springframework.kafka:') && major >= 4) {
+    return 17;
+  }
+  if (packageName.startsWith('org.springframework.amqp:') && major >= 3) {
+    return 17;
+  }
+  if (packageName.startsWith('org.springframework.retry:') && major >= 2) {
+    return 17;
+  }
+  if (packageName === 'com.microsoft.sqlserver:mssql-jdbc') {
+    const match = /jre(\d+)/i.exec(to);
+    if (match) {
+      return Number(match[1]);
+    }
+  }
+  return undefined;
+}
+
 /** 候选分组：框架先走，框架族跟着 BOM 对齐，独立依赖其次，跨大版本最后且需人工确认 */
 function groupOf(candidate: UpgradeCandidate, crossLine: boolean): PlanGroup {
   // Java 源码级别是框架升级的前置条件，必须和 parent/BOM 同组落盘
@@ -475,8 +514,23 @@ export function createUpgradePlan(
     ...issueSummary(item.packageName)
   }));
 
+  const currentJava = Number(loaded.targetJavaVersion ?? loaded.javaVersion ?? 0);
+  const compatibleCandidates = raw.candidates.filter((candidate: UpgradeCandidate) => {
+    const requiredJava = requiredJavaFor(candidate.packageName, candidate.to);
+    if (requiredJava && currentJava < requiredJava) {
+      skipped.push({
+        packageName: candidate.packageName,
+        reason: `目标版本 ${candidate.to} 需要 Java ${requiredJava}，当前 Java ${currentJava}；先完成 JDK 升级再升这个依赖`,
+        decision: 'manual',
+        ...issueSummary(candidate.packageName)
+      });
+      return false;
+    }
+    return true;
+  });
+
   let text = original;
-  raw.candidates.forEach((candidate: UpgradeCandidate) => {
+  compatibleCandidates.forEach((candidate: UpgradeCandidate) => {
     if (forbidden.has(candidate.packageName)) {
       blockedByPolicy.push(candidate.packageName);
       skipped.push({
