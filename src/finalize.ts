@@ -43,9 +43,61 @@ export interface FinalizeResult {
     reportOnly: { source: string; label: string; count: number; reason: string }[];
     secrets: number;
   };
+  /** AI 收尾时登记的失败/隔离/未完成/人工项，供下一轮复盘 */
+  carryover?: CarryoverItem[];
   evidence?: string[];
   reportFile?: string;
   markdownFile?: string;
+}
+
+export type CarryoverKind = 'failed' | 'quarantined' | 'unfinished' | 'manual';
+
+export interface CarryoverItem {
+  kind: CarryoverKind;
+  target: string;
+  reason: string;
+  action?: string;
+  evidence?: string;
+}
+
+export interface FinalizeOptions {
+  carryover?: CarryoverItem[];
+}
+
+const CARRYOVER_KINDS: CarryoverKind[] = ['failed', 'quarantined', 'unfinished', 'manual'];
+
+function cleanText(value: unknown, max: number): string {
+  return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+/** 收尾登记的条目要能跨会话复用，限制长度并拒绝空目标/空原因 */
+function sanitizeCarryover(input: unknown): CarryoverItem[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const result: CarryoverItem[] = [];
+  for (const raw of input.slice(0, 100)) {
+    if (!raw || typeof raw !== 'object') {
+      continue;
+    }
+    const item = raw as Record<string, unknown>;
+    const target = cleanText(item.target, 200);
+    const reason = cleanText(item.reason, 600);
+    if (!target || !reason) {
+      continue;
+    }
+    const kind = CARRYOVER_KINDS.includes(item.kind as CarryoverKind)
+      ? (item.kind as CarryoverKind)
+      : 'unfinished';
+    result.push({
+      kind,
+      target,
+      reason,
+      action: cleanText(item.action, 300) || undefined,
+      evidence: cleanText(item.evidence, 200) || undefined
+    });
+  }
+  return result;
 }
 
 const SOURCES = ['checkstyle', 'gitleaks', 'trivy', 'spotbugs', 'qcsec', 'astgrep'];
@@ -106,7 +158,7 @@ function latestSourceMtime(root: string): number {
   return latest;
 }
 
-export function finalizeRun(root: string): FinalizeResult {
+export function finalizeRun(root: string, options: FinalizeOptions = {}): FinalizeResult {
   const issuesFile = path.join(root, '.quality-center', 'issues.json');
   const currentRaw = readJson<{
     generatedAt?: string;
@@ -264,6 +316,7 @@ export function finalizeRun(root: string): FinalizeResult {
     build,
     blocked,
     remaining,
+    carryover: sanitizeCarryover(options.carryover),
     evidence: [
       '.quality-center/issues.json',
       '.quality-center/scan-baseline.json',
@@ -328,6 +381,27 @@ function renderMarkdown(result: FinalizeResult): string {
       for (const group of groups) {
         lines.push(`- ${group.label}：${group.applied}/${group.total} 已落盘`);
       }
+    }
+  }
+  if (result.carryover && result.carryover.length > 0) {
+    const kindLabel: Record<CarryoverKind, string> = {
+      failed: '失败未落盘',
+      quarantined: '已隔离（禁止原样重试）',
+      unfinished: '未完成',
+      manual: '待人工决策'
+    };
+    lines.push('', '## 中途失败与待处置', '');
+    lines.push('> 由 AI 在收尾时登记；下一轮启动会先复盘这里，不依赖聊天记录。', '');
+    for (const kind of CARRYOVER_KINDS) {
+      const items = result.carryover.filter((item) => item.kind === kind);
+      if (items.length === 0) {
+        continue;
+      }
+      lines.push(`### ${kindLabel[kind]}（${items.length} 项）`, '');
+      for (const item of items) {
+        lines.push(`- \`${item.target}\`：${item.reason}${item.action ? `；处置：${item.action}` : ''}${item.evidence ? `（证据：${item.evidence}）` : ''}`);
+      }
+      lines.push('');
     }
   }
   if (result.remaining) {

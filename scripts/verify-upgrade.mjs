@@ -463,13 +463,24 @@ async function main() {
   );
   const finalizeCall = await client.request('tools/call', {
     name: 'quality_finalize',
-    arguments: { path: dir }
+    arguments: {
+      path: dir,
+      carryover: [
+        { kind: 'failed', target: 'demo:missing-version', reason: '中央仓库不存在，已回滚', action: 'quarantine' },
+        { kind: 'manual', target: 'spring-webmvc 6.x', reason: '需要 JDK 17', action: '待用户决定' }
+      ]
+    }
   });
   const finalized = JSON.parse(finalizeCall.result?.content?.[0]?.text ?? '{}');
   check(
     'finalize 由插件算基线/最终计数',
     finalized.ok === true && finalized.baseline?.total === 3 && finalized.current?.total === 3,
     JSON.stringify({ ok: finalized.ok, baseline: finalized.baseline?.total, current: finalized.current?.total, reason: finalized.reason })
+  );
+  check(
+    'finalize 落盘 carryover 供下一轮复盘',
+    finalized.carryover?.length === 2 &&
+      fs.readFileSync(path.join(dir, '.quality-center', 'final-report.md'), 'utf8').includes('## 中途失败与待处置')
   );
   check(
     'finalize 落盘 final-report.json / md',

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.19
+
+- `quality_finalize` 新增 `carryover` 参数：AI 收尾时把「失败未落盘 / 已隔离 / 未完成 / 待人工」按类登记，写入 final-report.json 与 final-report.md 的「中途失败与待处置」段
+- 下一轮启动的复盘段直接读取这些登记项，不再依赖聊天记录；failed/quarantined 项禁止原样重试
+- 没登记时不推断“全部处理过”，仍按计划进度与 pomHash 重新核对
+
 ## 0.28.18
 
 - 每轮启动前增加「上一轮复盘」：读取 final-report.json，对比 pomHash 判断报告是否 stale，列清失败未落盘、未完成、已失效项，并把失败版本坐标标为 quarantine，禁止原样重试

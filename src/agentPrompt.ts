@@ -93,6 +93,13 @@ function readPreviousRoundSection(root: string): string[] {
   const crossLine = Array.isArray(remaining.crossLine) ? remaining.crossLine : [];
   const reportOnly = Array.isArray(remaining.reportOnly) ? remaining.reportOnly : [];
   const blocked = Array.isArray(report?.blocked) ? report.blocked : [];
+  const carryItems: any[] = Array.isArray(report?.carryover) ? report.carryover : [];
+  const carryByKind = (kind: string): any[] => carryItems.filter((item) => item?.kind === kind);
+  const carryPreview = carryItems
+    .slice(0, 5)
+    .map((item) => item?.target)
+    .filter(Boolean)
+    .join('、');
   const reportHash = report?.build?.pomHash as string | undefined;
   let currentHash = '';
   try {
@@ -119,6 +126,11 @@ function readPreviousRoundSection(root: string): string[] {
     '上一轮结果复盘（启动第 0 步；事实源是 .quality-center/final-report.json，不是聊天记忆）：',
     `- 报告计划：${plan.planId ?? '无'}；计划步进 ${plan.applied ?? 0}/${plan.total ?? 0}；报告 pomHash 与当前 pom ${hashState}。计划步进只统计 quality_upgrade_apply 的落盘，手改 pom 不计入；进度与 pom 变更不一致时，报告只能当遗留清单，不能当完成证明。`,
     `- 上轮遗留：策略拒绝 ${policyDenied.length} 项${deniedNames ? `（${deniedNames} 等）` : ''}；跨大版本 ${crossLine.length} 项；只报告 ${reportOnly.length} 类；密钥 ${remaining.secrets ?? 0} 处；阻塞 ${blocked.length} 项。`,
+    ...(carryItems.length > 0
+      ? [
+          `- 上轮 AI 登记：失败未落盘 ${carryByKind('failed').length} 项；已隔离 ${carryByKind('quarantined').length} 项；未完成 ${carryByKind('unfinished').length} 项；待人工 ${carryByKind('manual').length} 项${carryPreview ? `（${carryPreview} 等）` : ''}。`
+        ]
+      : ['- 上轮 AI 没有登记失败/隔离项：不能因此认定“全部处理过”，按报告进度与 pomHash 重新核。']),
     '- 本轮先复盘，再动手：逐项归入「已落盘有 step 证据 / 已改但无 step 证据 / 失败未落盘 / 未开始 / 已 stale」；失败未落盘的版本坐标标记 quarantine，不得原样重试，必须先验证仓库是否存在或换兼容版本。',
     '- 复盘后一次问清处置方式，不要逐项追问：A 复核后继续（默认，先验证可重试项，不能落盘就隔离）；B 只做未完成/待决策项；C 从当前 pom 重新评估并作废旧计划。已有目标确认时，把 A/B/C 并入同一条消息，不额外增加一轮。',
     '- 用户不回答时按 A 执行；quarantine 项只验证、不落盘。最终汇总必须分开列出「本轮实际落盘 / 已改未验证 / 仍被隔离 / 未开始」，不能把扫描下降等同全部修完，也不能只报修复数。'
@@ -402,7 +414,7 @@ function buildScopedAgentPrompt(root: string, scope: Exclude<AgentScope, 'all'>,
       '1. 没有计划：quality_upgrade_plan（或 `qc upgrade plan . --reuse`）生成；只生成计划，不改 pom。',
       `2. 按 ${groupSequence(facts, { excludeCrossLine: true })} 逐组 quality_upgrade_apply write=true；每组后 quality_build；失败先 quality_explain，同组两次失败 quality_upgrade_revert 并列为阻塞。`,
       '3. cross-line 默认不动；需要跨大版本时停下等用户确认，不得自行 --allow-cross-line。',
-      '4. 每轮用 quality_next 重新取状态，不要沿用上一轮判断；最后 quality_scan + quality_finalize。',
+      '4. 每轮用 quality_next 重新取状态，不要沿用上一轮判断；最后 quality_scan + quality_finalize。调用 quality_finalize 时把失败未落盘/已隔离/未完成/待人工项放进 carryover，否则下一轮看不到失败现场。',
       '边界：不得调用 quality_fix，不得改静态代码、密钥、依赖收敛项；不得手改 pom 或跳测试。'
     );
   } else if (scope === 'consolidation') {
@@ -581,6 +593,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
       '9. 不得为了通过构建删依赖、跳过测试、改测试、降低 buildGate，也不得把失败版本换一个再碰运气。',
       '10. 不读、不打印、不提交任何密钥原值；密钥问题只报位置与处置建议。',
       '11. 如果你既不能执行终端、也没有 quality_* MCP 工具：不要假装执行；只输出第一条命令并说明需要用户执行。',
+      '12. 收尾 quality_finalize 必须带 carryover：失败未落盘、已隔离、未完成、待人工各归其类；不登记等于没复盘，下一轮会当未完成处理。',
       '',
       '执行循环（最多 10 轮，每轮都重新 qc next，不要沿用上一轮判断）：',
       '1. `node .quality-center/bin/qc.cjs next . --json`。',
@@ -605,7 +618,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
   if (autopilot) {
     lines.push(
       '',
-      '一次性执行流程（阶段流程；详细命令与判定见 handoff.md「执行流程」；以 `qc next` 的 action 为准）：quality_build 建基线 → quality_scan → quality_fix → quality_upgrade_plan/apply（逐组 build/check）→ 阶段 3.5 依赖收敛 → quality_phase(static_fix) → quality_scan 复核 → quality_finalize 收尾。',
+      '一次性执行流程（阶段流程；详细命令与判定见 handoff.md「执行流程」；以 `qc next` 的 action 为准）：quality_build 建基线 → quality_scan → quality_fix → quality_upgrade_plan/apply（逐组 build/check）→ 阶段 3.5 依赖收敛 → quality_phase(static_fix) → quality_scan 复核 → quality_finalize 收尾（收尾时用 carryover 登记失败未落盘/已隔离/未完成/待人工项）。',
       '关键约束：只允许一个升级计划；需要新增 `<dependencyManagement>` 时先看策略白名单，不在白名单就列为阻塞；计数按来源分别说明；`tests=skipped` 不能说“测试通过”，`drift=true` 不能说“可验收”。',
       '',
       '硬阻塞（命中就停这一类，不要停整个流程）：',

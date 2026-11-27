@@ -35,7 +35,7 @@ import { defaultPolicyDocument } from './upgradePolicy';
 import { buildNextAction } from './nextAction';
 import { buildAgentFacts, buildAgentPrompt, type AgentScope } from './agentPrompt';
 import { explainBuildFailure } from './explain';
-import { finalizeRun } from './finalize';
+import { finalizeRun, type CarryoverItem } from './finalize';
 import {
   beginRun,
   beginTool,
@@ -432,11 +432,29 @@ const TOOLS: ToolDef[] = [
   {
     name: 'quality_finalize',
     description:
-      '收尾验收：插件从固定的基线快照、当前 issues.json、计划 steps、build-result 计算修复前/后与按来源变化，写入 .quality-center/final-report.json / final-report.md。AI 直接转述，不要自己数。',
+      '收尾验收：插件从固定的基线快照、当前 issues.json、计划 steps、build-result 计算修复前/后与按来源变化，写入 .quality-center/final-report.json / final-report.md。AI 直接转述，不要自己数。收尾时把本轮失败/隔离/未完成/人工项通过 carryover 登记，下一轮会先复盘。',
     inputSchema: {
       type: 'object',
       properties: {
-        path: PATH_PROP
+        path: PATH_PROP,
+        carryover: {
+          type: 'array',
+          description: '本轮未正常完成的项；下一轮启动时按 kind 复盘，failed/quarantined 禁止原样重试',
+          items: {
+            type: 'object',
+            properties: {
+              kind: {
+                type: 'string',
+                enum: ['failed', 'quarantined', 'unfinished', 'manual']
+              },
+              target: { type: 'string', description: '包坐标、规则、文件:行或待决策项' },
+              reason: { type: 'string', description: '为什么没完成，必须写事实，不写猜测' },
+              action: { type: 'string', description: '已做的处置：回滚/排除/保留/待确认' },
+              evidence: { type: 'string', description: '证据文件或命令输出位置' }
+            },
+            required: ['kind', 'target', 'reason']
+          }
+        }
       }
     }
   }
@@ -989,7 +1007,9 @@ async function callTool(name: string, params: Record<string, unknown>): Promise<
       return asText({ ok: true, phase, runId: state?.runId, nextStep: '继续执行该阶段动作，不要只改状态不干活' });
     }
     case 'quality_finalize': {
-      const result = finalizeRun(root);
+      const result = finalizeRun(root, {
+        carryover: params.carryover as CarryoverItem[] | undefined
+      });
       return asText(result, !result.ok);
     }
     default:
