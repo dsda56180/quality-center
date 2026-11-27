@@ -75,6 +75,56 @@ function severityBoundary(minSeverity?: Severity): string {
   return `严重度过滤：只处理 ${SEVERITY_LABEL[minSeverity]} 及以上；低于该等级的问题只报告，不改代码。`;
 }
 
+/** 上一轮报告的 pomHash 与当前 pom 是否一致；不一致说明报告已 stale */
+function readPreviousRoundSection(root: string): string[] {
+  const reportFile = path.join(root, '.quality-center', 'final-report.json');
+  if (!fs.existsSync(reportFile)) {
+    return [];
+  }
+  let report: any;
+  try {
+    report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+  } catch {
+    return [];
+  }
+  const plan = report?.plan ?? {};
+  const remaining = report?.remaining ?? {};
+  const policyDenied = Array.isArray(remaining.policyDenied) ? remaining.policyDenied : [];
+  const crossLine = Array.isArray(remaining.crossLine) ? remaining.crossLine : [];
+  const reportOnly = Array.isArray(remaining.reportOnly) ? remaining.reportOnly : [];
+  const blocked = Array.isArray(report?.blocked) ? report.blocked : [];
+  const reportHash = report?.build?.pomHash as string | undefined;
+  let currentHash = '';
+  try {
+    const pomFile = path.join(root, 'pom.xml');
+    if (fs.existsSync(pomFile)) {
+      currentHash = `sha256:${createHash('sha256').update(fs.readFileSync(pomFile, 'utf8')).digest('hex')}`;
+    }
+  } catch {
+    currentHash = '';
+  }
+  const stale = Boolean(reportHash && currentHash && reportHash !== currentHash);
+  const hashState = reportHash && currentHash
+    ? (stale
+      ? '不一致 → 报告已 stale，不能把上轮数量当本轮基线，也不能声称“已全部生效”'
+      : '一致')
+    : '缺少可核对的 pomHash，不能把上轮数量当本轮基线';
+  const deniedNames = policyDenied
+    .slice(0, 3)
+    .map((item: any) => item.packageName)
+    .filter(Boolean)
+    .join('、');
+  return [
+    '',
+    '上一轮结果复盘（启动第 0 步；事实源是 .quality-center/final-report.json，不是聊天记忆）：',
+    `- 报告计划：${plan.planId ?? '无'}；计划步进 ${plan.applied ?? 0}/${plan.total ?? 0}；报告 pomHash 与当前 pom ${hashState}。计划步进只统计 quality_upgrade_apply 的落盘，手改 pom 不计入；进度与 pom 变更不一致时，报告只能当遗留清单，不能当完成证明。`,
+    `- 上轮遗留：策略拒绝 ${policyDenied.length} 项${deniedNames ? `（${deniedNames} 等）` : ''}；跨大版本 ${crossLine.length} 项；只报告 ${reportOnly.length} 类；密钥 ${remaining.secrets ?? 0} 处；阻塞 ${blocked.length} 项。`,
+    '- 本轮先复盘，再动手：逐项归入「已落盘有 step 证据 / 已改但无 step 证据 / 失败未落盘 / 未开始 / 已 stale」；失败未落盘的版本坐标标记 quarantine，不得原样重试，必须先验证仓库是否存在或换兼容版本。',
+    '- 复盘后一次问清处置方式，不要逐项追问：A 复核后继续（默认，先验证可重试项，不能落盘就隔离）；B 只做未完成/待决策项；C 从当前 pom 重新评估并作废旧计划。已有目标确认时，把 A/B/C 并入同一条消息，不额外增加一轮。',
+    '- 用户不回答时按 A 执行；quarantine 项只验证、不落盘。最终汇总必须分开列出「本轮实际落盘 / 已改未验证 / 仍被隔离 / 未开始」，不能把扫描下降等同全部修完，也不能只报修复数。'
+  ];
+}
+
 /**
  * prompt 里出现的“项目事实”只允许来自 plan.json / upgrade-policy.json / pom。
  * Java 级别、框架目标、buildGate、分组顺序都不写死在文案里：
@@ -303,6 +353,7 @@ function buildCombinedAgentPrompt(root: string, scopes: Exclude<AgentScope, 'all
     '',
     '范围边界：'
   ];
+  lines.push(...readPreviousRoundSection(root));
   for (const scope of ordered) {
     lines.push(`- ${boundaries[scope]}`);
   }
@@ -338,6 +389,7 @@ function buildScopedAgentPrompt(root: string, scope: Exclude<AgentScope, 'all'>,
     '编辑器内优先用 quality_* MCP；没有 MCP 时用 .quality-center/bin/qc.cjs。',
     ''
   ];
+  lines.push(...readPreviousRoundSection(root));
 
   if (scope === 'upgrade') {
     const facts = readPromptFacts(root, options);
@@ -433,6 +485,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
   lines.push(repairModeBoundary(options.repairMode), '');
 
   const facts = readPromptFacts(root, options);
+  lines.push(...readPreviousRoundSection(root));
 
   if (autopilot) {
     lines.push(
@@ -565,7 +618,7 @@ export function buildAgentPrompt(root: string, options: AgentPromptOptions = {})
       '用户沟通规则：',
       '- 除目标确认与硬阻塞外不提问；每个阶段只报一行：阶段、已修数、构建结果。',
       '- 不要每完成一组就停下来等用户再次发起；确认后一次执行到底。',
-      '- 最终汇总：修复前 → 修复后（按来源）、剩余与阻塞、改动文件、复验命令；不要只说“已完成”。'
+      '- 最终汇总：修复前 → 修复后（按来源）、本轮实际落盘数、已改未验证、仍隔离/未开始、剩余与阻塞、改动文件、证据文件。不要在末尾追加「复验命令：…」或命令代码块；quality_build / quality_scan 已在本轮执行，报告里已有 exit code、pomHash 与 tests 状态。只有规则 11 的无 MCP 场景才输出一条命令。'
     );
   }
 
