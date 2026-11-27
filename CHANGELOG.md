@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.28.1
+
+- AI 交接 prompt 的版本边界、框架目标、buildGate、分组顺序改为从 `plan.json` / `upgrade-policy.json` / `pom.xml` 推导，不再写死 Java 8 / 2.7.18 / package
+- 启动前确认项与默认参数共用同一份边界事实；两者冲突时以 `qc next` 状态机为准
+- `quality_agent_brief` 与 `qc prompt --json` 新增结构化 `facts`（boundary / 门禁 / 分组 / 确认项），面板与外部 Agent 不必解析 prompt 文本
+- 详细阶段流程移入 `handoff.md` 的「执行流程」，prompt 从约 80 行压到 51 行，锚点与硬约束保留
+- 新增 `verify:prompt`：用 Java 8 / Java 11 / 已授权 Java 17 三种项目校验边界与门禁，并禁止源码回写版本或门禁字面量
+- 修复面板「复制给 AI」在 drive 模式只给固定短文案、不含项目边界的问题；`suggest` / `projectProfile` 的升级目标同样改由策略与版本表推导
+
 ## 0.28.0
 
 - 多项目工作区：顶部「项目」下拉切换当前项目，扫描、修复、升级、构建、报告只作用于当前项目
