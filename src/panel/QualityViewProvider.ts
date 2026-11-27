@@ -3911,7 +3911,7 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       const build = raw.build as { ok?: boolean; tests?: { state?: string } } | undefined;
       if (baseline && current) {
         finalText =
-          `- 收尾口径：${baseline.total ?? 0} → ${current.total ?? 0} 项（` +
+          `- 上一轮收尾（仅历史参考，不代表当前计划）：${baseline.total ?? 0} → ${current.total ?? 0} 项（` +
           `${(delta?.totalChange ?? 0) >= 0 ? '+' : ''}${delta?.totalChange ?? 0}；` +
           `消失 ${delta?.removed ?? 0} / 新增 ${delta?.added ?? 0}）\n` +
           `- 构建：${build?.ok === true ? '通过' : '未通过或未记录'}；测试：${build?.tests?.state ?? 'unknown'}\n`;
@@ -3920,10 +3920,14 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       finalText = '- 收尾报告尚未生成；先调用 quality_finalize，不要自己数。\n';
     }
 
+    const planLine = next.plan
+      ? `- 当前计划：${next.plan.planId}（已落盘 ${next.plan.appliedCount ?? 0}/${next.plan.total ?? 0}，下一组 ${next.plan.nextGroup ?? '—'}）`
+      : '- 当前没有升级计划；按 quality_next 的 action 继续。';
     const lines = [
-      '质量中心本轮 AI 收尾结果如下，请继续处理剩余项；不要重新全量扫描，不要手改 pom，不要跳过测试。',
+      '质量中心当前状态如下，请继续处理剩余项；上一轮收尾只作历史参考，不要把它当成当前计划。不要重新全量扫描，不要手改 pom，不要跳过测试。',
       finalText.trimEnd(),
       `- 唯一状态机：${next.title}（action=${next.action}）`,
+      planLine,
       next.command ? `- 当前唯一命令：${next.command}` : '- 当前无需自动写入；剩余项按下面分类处理。',
       '',
       '剩余项与边界：',

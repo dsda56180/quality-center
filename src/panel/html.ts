@@ -572,7 +572,8 @@ export function getHtml(nonce: string): string {
   .wz-result-history .wz-result { margin: 0; border: 0; border-top: 1px solid var(--vscode-panel-border); border-radius: 0 0 6px 6px; }
   /* 历史只用于回看：不保留“下一步”和旧计划按钮，避免与当前计划争主操作 */
   .wz-result-history .wz-result-actions,
-  .wz-result-history .wz-result-row { display: none; }
+  .wz-result-history .wz-result-next { display: none; }
+  .wz-result-history-tools { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 8px 0; }
   .wz-result-list { margin-top: 3px; }
   .wz-result-item { display: flex; gap: 4px; min-width: 0; }
   .wz-result-item .pkg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1762,6 +1763,13 @@ export function getHtml(nonce: string): string {
         depBody += '<div class="wz-plan-note">另有 ' + n.plan.skippedCount +
           ' 项未纳入：没有同线修复版本或需人工判断，已记录在计划文件。</div>';
       }
+      var crossLineCount = n.plan
+        ? (n.plan.candidates || []).filter(function (c) { return c.group === 'cross-line'; }).length
+        : 0;
+      if (n.plan && crossLineCount && n.plan.nextGroup !== 'cross-line') {
+        depBody += '<div class="wz-plan-note">另有 ' + crossLineCount +
+          ' 项跨大版本待确认：执行到该组前会停下，先确认 JDK / 框架兼容性。</div>';
+      }
       // 依赖升级路线只展开依赖计划；代码、密钥、静态留给自动修复 / AI 路线，避免越权混排
       fixPlan = '<details class="wz-fixplan"><summary class="wz-fixplan-head">' +
         '<span class="wz-fixplan-caret" aria-hidden="true"></span><strong>升级计划明细</strong>' +
@@ -1914,7 +1922,7 @@ export function getHtml(nonce: string): string {
         (resultCells ? '<div class="wz-result-grid">' + resultCells + '</div>' : '') +
         (f.newlyVisible && f.newlyVisible.length ? '<div class="wz-result-why">首次可见（不是回归）：' + esc(f.newlyVisible.join(', ')) + '</div>' : '') +
         resultRows +
-        '<div class="wz-result-row"><div class="wz-result-row-head"><strong>下一步怎么做</strong></div>' +
+        '<div class="wz-result-row wz-result-next"><div class="wz-result-row-head"><strong>下一步怎么做</strong></div>' +
         '<div class="wz-result-why">' + esc(nextText) + '</div>' +
         '<div class="wz-result-why">AI 继续修：点「复制剩余项给 AI」，提示里已带上可写范围、构建门禁和不可越过的阻塞。</div>' +
         '<div class="wz-result-why">手动修复：点「手动逐项处理」按来源筛选，代码/配置问题直接打开文件和行；密钥先轮换再改引用。</div>' +
@@ -1928,6 +1936,9 @@ export function getHtml(nonce: string): string {
           (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
           '</span><span class="wz-history-note">已生效，非当前' +
           (state.scanning ? ' · 重扫中' : '') + '</span></summary>' +
+          '<div class="wz-result-history-tools">' +
+          btn('openFinalReport', '查看修复报告', false, 'wz-result-btn') +
+          '</div>' +
           finalBlock + '</details>';
         finalBlock = '';
       }
@@ -2252,9 +2263,16 @@ export function getHtml(nonce: string): string {
         (appliedCount === 0 ? btn('showRoutes', '更换处理方式', false, 'wz-route-back') : '') +
         '</div>';
     }
+    // 当前计划只给一条主操作；AI 续修是同一计划的另一种执行方式，放在其他操作里
+    if (hasData && n.action !== 'scan' && !state.scanning) {
+      secondary.push(btn('copyRemaining', 'AI 继续修剩余项', false));
+    }
     // 静态缺陷不等同“业务语义”：当前计划页也保留逐条 AI 尝试入口
     if (spotbugsCount && n.action !== 'scan' && !state.scanning) {
-      secondary.push(btn('copyStaticScopes', 'AI 修静态缺陷 ' + spotbugsCount + ' 项', false));
+      secondary.push(btn('copyStaticScopes', '只修静态缺陷 ' + spotbugsCount + ' 项', false));
+    }
+    if (crossLineCount && n.plan && n.plan.nextGroup !== 'cross-line' && primaryHint) {
+      primaryHint += ' 另有 ' + crossLineCount + ' 项跨大版本待确认，执行到该组前会停。';
     }
     var primaryRow = primary
       ? '<div class="wz-primary-row">' + primary +

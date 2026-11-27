@@ -142,7 +142,10 @@ const checks = {
     !h.includes('上一轮验收已归档'),
   finalHistoryAtBottom: h.includes('+ historyBlock') && h.includes('当前计划 · ') && h.includes('待执行'),
   finalHistoryNoActions: h.includes('.wz-result-history .wz-result-actions') &&
-    h.includes('.wz-result-history .wz-result-row'),
+    h.includes('.wz-result-history .wz-result-next'),
+  historyReportButton: h.includes("btn('openFinalReport', '查看修复报告'"),
+  aiContinueRemaining: h.includes("btn('copyRemaining', 'AI 继续修剩余项'"),
+  currentPlanCrossLineConfirm: h.includes('项跨大版本待确认'),
   staticAiAttempt: h.includes('AI 可试') && h.includes('scopeStats.static.ai') &&
     h.includes('totals.ai') && h.includes('AI 先给 diff') &&
     h.includes('copyStaticScopes') && h.includes("scopes: ['static']"),
