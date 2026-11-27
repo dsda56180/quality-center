@@ -2744,8 +2744,35 @@ export class QualityViewProvider implements vscode.WebviewViewProvider, vscode.D
       low: '低危',
       info: '全部'
     };
+    const final = readFinalSummary(root);
+    const previousLines: string[] = [];
+    if (final) {
+      previousLines.push(
+        `- 上一轮收尾：${final.baselineTotal} → ${final.currentTotal} 项（` +
+        `${final.totalChange >= 0 ? '+' : ''}${final.totalChange}；消失 ${final.removed} / 新增 ${final.added}）` +
+        `${final.stale ? '（历史结果，不代表当前计划）' : ''}`
+      );
+      if (final.planSkipped?.length) {
+        previousLines.push(`- 上一轮待授权间接依赖 ${final.planSkipped.length} 项：`);
+        final.planSkipped.slice(0, 8).forEach((item) => {
+          previousLines.push(
+            `  · ${item.packageName} ${item.installedVersion ?? '?'} → ${item.fixedVersion ?? '?'}` +
+            `${item.cveCount ? `（${item.cveCount} CVE）` : ''}`
+          );
+        });
+      }
+      if (final.planCrossLine?.length) {
+        previousLines.push(`- 上一轮跨大版本待确认 ${final.planCrossLine.length} 项：`);
+        final.planCrossLine.slice(0, 8).forEach((item) => {
+          previousLines.push(`  · ${item.packageName} ${item.from ?? '?'} → ${item.to}`);
+        });
+      }
+    }
+    const previousBlock = previousLines.length
+      ? `\n上一轮扫描留给用户确认的问题（历史参考，不要自行扩大授权）：\n${previousLines.join('\n')}\n`
+      : '';
     await vscode.env.clipboard.writeText(
-      buildAgentPrompt(root, { mode: 'autopilot', scopes, minSeverity })
+      buildAgentPrompt(root, { mode: 'autopilot', scopes, minSeverity }) + previousBlock
     );
     const labelText = scopes.map((scope) => label[scope]).join(' + ');
     const severityText = minSeverity === 'info' ? '全部严重度' : `${severityLabel[minSeverity]}及以上`;

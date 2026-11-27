@@ -294,6 +294,16 @@ export function getHtml(nonce: string): string {
   #scan:hover,
   .wz-ai-first .wz-scope-run:hover { background: #1177bb; border-color: #1177bb; }
   .icon-btn svg { display: block; }
+  /* 有数据时扫描只是“重新扫描”，不再抢当前计划的主操作 */
+  #scan.secondary {
+    background: transparent;
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    border-color: var(--vscode-panel-border);
+  }
+  #scan.secondary:hover {
+    background: var(--vscode-button-secondaryHoverBackground, rgba(90, 93, 94, .45));
+    border-color: var(--vscode-focusBorder, #007acc);
+  }
   button {
     flex: 1 1 auto;
     padding: 5px 8px;
@@ -1695,7 +1705,8 @@ export function getHtml(nonce: string): string {
       }
       meta = hubMode
         ? ''
-        : '已落盘 ' + n.plan.appliedCount + '/' + n.plan.total +
+        : '升级计划 ' + n.plan.appliedCount + '/' + n.plan.total +
+          (issueTotal ? ' · 当前问题 ' + issueTotal : '') +
           (decisionCount ? ' · ' + decisionCount + ' 项待决定' : '');
     }
     if (hubMode) title = '';
@@ -2123,7 +2134,7 @@ export function getHtml(nonce: string): string {
             (initialTotals.ai ? '静态缺陷可逐条尝试，AI 先给 diff，确认后才写入；' : '') +
             initialTotals.confirm + ' 项需确认，' + initialTotals.report + ' 项只报告' +
             (initialTotals.auth ? '，另有 ' + initialTotals.auth + ' 项待授权' : '')
-          : '当前范围没有可自动写入项；密钥只能报告位置，需先人工轮换') + '">AI 修复<span class="wz-star" title="首选" aria-label="首选">★</span></button>' +
+          : '当前范围没有可自动写入项；密钥只能报告位置，需先人工轮换') + '">AI 处理已选范围</button>' +
         '<details class="wz-scope-picker"><summary><span class="pick-label">范围</span>' +
         '<span id="scopePickSummary">' + pickText + '</span>' +
         '<span class="wz-scope-caret" aria-hidden="true"></span></summary>' +
@@ -2263,14 +2274,6 @@ export function getHtml(nonce: string): string {
         (appliedCount === 0 ? btn('showRoutes', '更换处理方式', false, 'wz-route-back') : '') +
         '</div>';
     }
-    // 当前计划只给一条主操作；AI 续修是同一计划的另一种执行方式，放在其他操作里
-    if (hasData && n.action !== 'scan' && !state.scanning) {
-      secondary.push(btn('copyRemaining', 'AI 继续修剩余项', false));
-    }
-    // 静态缺陷不等同“业务语义”：当前计划页也保留逐条 AI 尝试入口
-    if (spotbugsCount && n.action !== 'scan' && !state.scanning) {
-      secondary.push(btn('copyStaticScopes', '只修静态缺陷 ' + spotbugsCount + ' 项', false));
-    }
     if (crossLineCount && n.plan && n.plan.nextGroup !== 'cross-line' && primaryHint) {
       primaryHint += ' 另有 ' + crossLineCount + ' 项跨大版本待确认，执行到该组前会停。';
     }
@@ -2283,6 +2286,9 @@ export function getHtml(nonce: string): string {
       ? '<div class="wz-section-label">' + (upgradeFlow ? '当前计划的其他操作' : '其他操作') +
         '</div><div class="wz-secondary">' + secondary.join('') + '</div>' +
         (hasWriteSecondary ? '<div class="wz-secondary-hint">修改类操作会先打开预览，确认后才写入；失败可回滚。</div>' : '')
+      : '';
+    var aiScopeBlock = !hubMode && hasData && scopeBar
+      ? '<div class="wz-section-label">AI 处理 · 先选范围</div>' + scopeBar
       : '';
     var deep = state.deepScan;
     var deepHint = '';
@@ -2314,7 +2320,7 @@ export function getHtml(nonce: string): string {
       + (purpose ? '<div class="wz-purpose">' + esc(purpose) + '</div>' : '')
       + finalBlock
       + routeHead + gate + emptyBody + lockNote
-      + (hubMode ? choiceHub : primaryRow + secondaryRow)
+      + (hubMode ? choiceHub : primaryRow + aiScopeBlock + secondaryRow)
       + (upgradeFlow ? fixPlan : '')
       + deepBlock
       + historyBlock;
@@ -2414,8 +2420,6 @@ export function getHtml(nonce: string): string {
       vscode.postMessage({ type: 'copyScopes', scopes: scopePick.slice(), minSeverity: severityPick });
     } else if (key === 'copyReportOnly') {
       vscode.postMessage({ type: 'copyReportOnly' });
-    } else if (key === 'copyStaticScopes') {
-      vscode.postMessage({ type: 'copyScopes', scopes: ['static'], minSeverity: severityPick });
     } else if (key.indexOf('copyScope:') === 0) {
       vscode.postMessage({ type: 'copyScope', scope: key.slice('copyScope:'.length) });
     } else if (key === 'fixAll') {
@@ -2558,6 +2562,15 @@ export function getHtml(nonce: string): string {
     document.getElementById('cattip').textContent = catTipText();
     var scanning = !!state.scanning;
     var paused = !!state.paused;
+    var scanBtn = document.getElementById('scan');
+    var hasResult = (state.issues && state.issues.length) || (state.next && (state.next.plan || state.next.action !== 'scan'));
+    if (scanBtn) {
+      scanBtn.classList.toggle('secondary', Boolean(hasResult));
+      scanBtn.title = hasResult
+        ? '重新扫描：刷新问题结果，不推进当前计划'
+        : '开始扫描';
+      scanBtn.setAttribute('aria-label', hasResult ? '重新扫描' : '开始扫描');
+    }
     document.getElementById('scan').style.display = scanning || paused ? 'none' : '';
     document.getElementById('resume').style.display = paused ? '' : 'none';
     document.getElementById('pause').style.display = scanning && !paused ? '' : 'none';

@@ -57,7 +57,7 @@ const checks = {
     h.includes('buildGate(false)') === false,
   routeBack: h.includes("btn('showRoutes'") && h.includes('wz-route-head') &&
     h.includes('升级计划明细'),
-  aiFirstHub: h.includes('wz-ai-first') && h.includes('wz-star') && h.includes('★') &&
+  aiFirstHub: h.includes('wz-ai-first') && h.includes('AI 处理已选范围') &&
     !h.includes('为什么 AI 优先') && !h.includes('建议先交给 AI') && !h.includes('AI 负责编排'),
   aiFirstGreen: h.includes('border: 2px solid #3fb950'),
   primaryButtonsBlue: h.includes('#scan,') &&
@@ -144,11 +144,13 @@ const checks = {
   finalHistoryNoActions: h.includes('.wz-result-history .wz-result-actions') &&
     h.includes('.wz-result-history .wz-result-next'),
   historyReportButton: h.includes("btn('openFinalReport', '查看修复报告'"),
-  aiContinueRemaining: h.includes("btn('copyRemaining', 'AI 继续修剩余项'"),
+  currentPlanAiScope: h.includes('AI 处理已选范围') && h.includes('+ aiScopeBlock') &&
+    h.includes('wz-scope-picker'),
   currentPlanCrossLineConfirm: h.includes('项跨大版本待确认'),
+  planMetaDistinctUnits: h.includes('升级计划 ') && h.includes('当前问题 '),
+  scanSecondaryWhenResult: h.includes('#scan.secondary') && h.includes('重新扫描：刷新问题结果'),
   staticAiAttempt: h.includes('AI 可试') && h.includes('scopeStats.static.ai') &&
-    h.includes('totals.ai') && h.includes('AI 先给 diff') &&
-    h.includes('copyStaticScopes') && h.includes("scopes: ['static']"),
+    h.includes('totals.ai') && h.includes('AI 先给 diff'),
   finalResultPlanScoped: h.includes('f.planSkipped') && h.includes('f.planCrossLine') &&
     provider.includes('planSkipped') && provider.includes('planCrossLine') &&
     provider.includes("'plan.json'"),
