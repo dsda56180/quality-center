@@ -137,6 +137,9 @@ const checks = {
   finalScanNotice: h.includes('正在重新扫描') && h.includes('扫描完成后刷新') &&
     h.includes('重扫中') && extension.includes('agentRunActive') &&
     provider.includes('agentRunActive(): boolean'),
+  finalHistoryCollapsed: h.includes('wz-result-history') && h.includes('已生效，非当前') &&
+    h.includes('不是从零重来') && !h.includes('🧾 上一轮验收'),
+  finalHistoryAiStatus: h.includes('上一轮验收已归档') && h.includes('历史明细在下方折叠'),
   finalResultPlanScoped: h.includes('f.planSkipped') && h.includes('f.planCrossLine') &&
     provider.includes('planSkipped') && provider.includes('planCrossLine') &&
     provider.includes("'plan.json'"),

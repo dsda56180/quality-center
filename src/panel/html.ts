@@ -560,6 +560,16 @@ export function getHtml(nonce: string): string {
   .wz-result-tag.info { background: rgba(56,139,253,.14); color: var(--vscode-textLink-foreground, #3794ff); }
   .wz-result-why { margin-top: 2px; color: var(--vscode-descriptionForeground); }
   .wz-result-stale { margin-top: 3px; padding: 3px 5px; border-radius: 3px; background: rgba(210,153,34,.12); color: var(--vscode-editorWarning-foreground, #d29922); }
+  .wz-result-history { margin-top: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: rgba(128,128,128,.04); }
+  .wz-result-history > summary {
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 6px;
+    padding: 6px 8px; cursor: pointer; list-style: none; font-size: 10px; color: var(--vscode-descriptionForeground);
+  }
+  .wz-result-history > summary::-webkit-details-marker { display: none; }
+  .wz-result-history > summary::before { content: '▸'; margin-right: 5px; color: var(--vscode-descriptionForeground); }
+  .wz-result-history[open] > summary::before { content: '▾'; }
+  .wz-result-history > summary .wz-history-note { flex: none; color: var(--vscode-descriptionForeground); }
+  .wz-result-history .wz-result { margin: 0; border: 0; border-top: 1px solid var(--vscode-panel-border); border-radius: 0 0 6px 6px; }
   .wz-result-list { margin-top: 3px; }
   .wz-result-item { display: flex; gap: 4px; min-width: 0; }
   .wz-result-item .pkg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1471,7 +1481,10 @@ export function getHtml(nonce: string): string {
     if (done) {
       var last = run.lastScan;
       var final = state.final;
-      if (final) {
+      if (final && final.stale) {
+        // 上一轮结果已折叠归档，这里不能再把旧数字顶在 AI 状态卡上
+        warnings += '<div class="ai-meta">上一轮验收已归档；当前以最新扫描 / 新计划为准，历史明细在下方折叠。</div>';
+      } else if (final) {
         warnings += '<div class="ai-meta">最终验收：' + final.baselineTotal + ' → ' + final.currentTotal +
           ' 项（' + (final.totalChange >= 0 ? '+' : '') + final.totalChange +
           '，新增 ' + final.added + ' / 消失 ' + final.removed + '）' +
@@ -1569,15 +1582,16 @@ export function getHtml(nonce: string): string {
       if (f.stale && f.planSkipped) {
         finalPending = f.planSkipped.length;
       }
-      add('info', (f.stale
-          ? (state.scanning ? '🧾 上一轮验收（正在重新扫描）：' : '🧾 上一轮验收：')
-          : (state.scanning ? '🧾 最终验收（正在重新扫描）：' : '🧾 最终验收：')) + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
-        (f.totalChange >= 0 ? '+' : '') + f.totalChange + '，新增 ' + f.added + ' / 消失 ' + f.removed + '）' +
-        (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
-        (finalPending ? ' · ' + finalPending + ' 项未自动处理' : '') +
-        (f.tests === 'skipped' ? ' · ⚠ 构建跳过测试' : '') +
-        (state.scanning ? ' · 扫描完成后刷新' : ''),
-        focus('查看结果', 'wizard'));
+      // 上一轮验收默认不在消息栏重复；历史明细已折叠在结果区，避免和本轮扫描混淆
+      if (!f.stale) {
+        add('info', (state.scanning ? '🧾 最终验收（正在重新扫描）：' : '🧾 最终验收：') + f.baselineTotal + ' → ' + f.currentTotal + ' 项（' +
+          (f.totalChange >= 0 ? '+' : '') + f.totalChange + '，新增 ' + f.added + ' / 消失 ' + f.removed + '）' +
+          (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
+          (finalPending ? ' · ' + finalPending + ' 项未自动处理' : '') +
+          (f.tests === 'skipped' ? ' · ⚠ 构建跳过测试' : '') +
+          (state.scanning ? ' · 扫描完成后刷新' : ''),
+          focus('查看结果', 'wizard'));
+      }
     }
     (state.errors || []).forEach(function (e) {
       add('warn', '⚠ ' + (SRC_LABEL[e.source] || e.source) + ' 扫描异常：' + esc(e.message));
@@ -1694,7 +1708,11 @@ export function getHtml(nonce: string): string {
       // 最终验收的明细由下方结果卡展示，这里不再重复一遍数字
       purpose = '';
     } else if (state.final && state.final.stale && (n.action === 'apply' || n.action === 'confirm')) {
-      purpose = '上一轮结果只作参考；当前新计划按下面的主按钮继续，不要把两轮数字混在一起看。';
+      purpose = '上一轮已落盘 ' + (state.final.planApplied ?? 0) + ' 项仍计入当前 ' + state.final.currentTotal +
+        ' 项；' + (n.plan
+          ? '当前新计划 ' + (n.plan.appliedCount || 0) + '/' + (n.plan.total || 0) + ' 是下一步待执行，不是从零重来。'
+          : '当前按下方主按钮继续。') +
+        '上一轮明细已折叠，需要时再展开。';
     } else if (n.action === 'plan') {
       purpose = upgradeFlow
         ? '只显示依赖升级相关内容；先看提醒和待决定项，再生成计划。'
@@ -1903,6 +1921,15 @@ export function getHtml(nonce: string): string {
         '</div>' +
         '<div class="wz-result-actions">' + resultActions + '</div>' +
         '</div>';
+      // 上一轮结果默认折叠：当前只展示本轮扫描/计划，历史明细需要时再展开
+      if (f.stale) {
+        finalBlock = '<details class="wz-result-history">' +
+          '<summary><span>上一轮修复结果 · ' + f.baselineTotal + ' → ' + f.currentTotal +
+          (f.planId ? ' · 计划 ' + (f.planApplied ?? 0) + '/' + (f.planTotal ?? 0) : '') +
+          '</span><span class="wz-history-note">已生效，非当前' +
+          (state.scanning ? ' · 重扫中' : '') + '</span></summary>' +
+          finalBlock + '</details>';
+      }
     }
     var overview = '';
     if (hasData) {
